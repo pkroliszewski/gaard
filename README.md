@@ -21,7 +21,16 @@ cd gaard
 If you already have the project locally, go to the repository root before
 running the next commands.
 
-### 2. Create the local demo database
+### 2. Install local dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements-dev.txt
+```
+
+### 3. Create the local demo database
 
 From the repository root:
 
@@ -34,26 +43,7 @@ This recreates `examples/medical-poc/demo.db` from:
 - `examples/medical-poc/schema.sql`
 - `examples/medical-poc/seed.sql`
 
-### 3. Configure from the admin UI
-
-GAARD does not read `.env` for API runtime configuration. On first start it
-creates `metadata.db`, seeds default prompts, runtime settings, and the bundled
-demo datasource, then lets the admin UI become the source of truth.
-
-After the API starts, log in to `/admin` with `admin` / `admin`, change the
-password, and configure the datasource, LLM connection, runtime modes, prompt
-templates, audit retention, and schema cache settings there.
-
-### 4. Install local dependencies
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements-dev.txt
-```
-
-### 5. Start the API with Uvicorn
+### 4. Start the API and the Admin Panel with Uvicorn
 
 Run this from the repository root:
 
@@ -66,6 +56,22 @@ The API should be available at:
 ```text
 http://localhost:8000
 ```
+
+The Admin Panel will be available at:
+```text
+http://localhost:8000/admin
+```
+
+### 5. Configure from the API and the admin UI
+
+GAARD does not read `.env` for API runtime configuration. On first start it
+creates `metadata.db`, seeds default prompts, runtime settings, and the bundled
+demo datasource, then lets the admin UI become the source of truth.
+
+After the API starts, log in to `/admin` with `admin` / `admin`, change the
+password, and configure the datasource, LLM connection, runtime modes, prompt
+templates, audit retention, and schema cache settings there.
+
 
 ### 6. Start the community client
 
