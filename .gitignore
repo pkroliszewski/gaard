@@ -1,0 +1,6 @@
+# Runtime databases
+metadata.db
+*.db
+*.sqlite
+*.sqlite3
+
