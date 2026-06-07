@@ -72,6 +72,14 @@ After the API starts, log in to `/admin` with `admin` / `admin`, change the
 password, and configure the datasource, LLM connection, runtime modes, prompt
 templates, audit retention, and schema cache settings there.
 
+**Most important**
+
+Put your LLM settings here:
+
+![admin_llm_settings](docs/images/admin_llm_settings.png)
+
+
+
 
 ### 6. Start the community client
 
