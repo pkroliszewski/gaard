@@ -100,6 +100,12 @@ value. It points the client to the GAARD API backend.
 
 ### 7. Ask a question
 
+Use the shipped simple client UI:
+
+![example_ask_a_question](docs/images/example_ask_a_question.png)
+
+or use the API:
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/query \
   -H "Content-Type: application/json" \
