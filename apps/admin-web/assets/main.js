@@ -633,6 +633,8 @@ function getBusinessLogicEditorSuggestion() {
 }
 function renderLlmConfig() {
     const config = state.llmConfig || {};
+    const apiKeyStatus = config.api_key_configured ? `Configured (${escapeHtml(config.api_key_preview || "hidden")})` : "Not configured";
+    const apiKeyPlaceholder = config.api_key_configured ? "Leave blank to keep current key" : "Enter API key";
     return `
     <section class="panel">
       <div class="panel-header"><h2>LLM configuration</h2></div>
@@ -640,7 +642,8 @@ function renderLlmConfig() {
         <form id="llm-config-form" class="form-grid">
           <label>Provider<input name="provider" value="${escapeHtml(config.provider || "openai-compatible")}" /></label>
           <label>Base URL<input name="base_url" value="${escapeHtml(config.base_url || "")}" /></label>
-          <label>API key<input name="api_key" type="password" value="${escapeHtml(config.api_key || "")}" /></label>
+          <label>API key <span class="muted">${apiKeyStatus}</span><input name="api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>
+          <label class="checkbox-row"><input name="clear_api_key" type="checkbox" /> Clear API key</label>
           <label>Model<input name="model" value="${escapeHtml(config.model || "")}" /></label>
           <label>LLM timeout seconds<input name="timeout_seconds" type="number" min="1" max="600" value="${escapeHtml(config.timeout_seconds || 60)}" /></label>
           <div class="subgrid">
@@ -938,6 +941,7 @@ async function saveLlmConfig(event) {
                 provider: form.get("provider"),
                 base_url: form.get("base_url"),
                 api_key: form.get("api_key"),
+                clear_api_key: form.get("clear_api_key") === "on",
                 model: form.get("model"),
                 timeout_seconds: Number(form.get("timeout_seconds") || 60),
                 intent_classification_mode: form.get("intent_classification_mode"),

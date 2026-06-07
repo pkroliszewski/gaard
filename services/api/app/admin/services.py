@@ -807,7 +807,7 @@ def set_llm_runtime_config(
     session: Session,
     provider: str,
     base_url: str,
-    api_key: str,
+    api_key: str | None,
     model: str,
     timeout_seconds: int,
     extra_body: dict[str, Any],
@@ -815,7 +815,8 @@ def set_llm_runtime_config(
 ) -> LlmRuntimeConfig:
     set_setting(session, LLM_SETTING_PROVIDER, provider, actor)
     set_setting(session, LLM_SETTING_BASE_URL, base_url, actor)
-    set_setting(session, LLM_SETTING_API_KEY, api_key, actor)
+    if api_key is not None:
+        set_setting(session, LLM_SETTING_API_KEY, api_key, actor)
     set_setting(session, LLM_SETTING_MODEL, model, actor)
     set_setting(session, LLM_SETTING_TIMEOUT_SECONDS, str(timeout_seconds), actor)
     set_setting(session, LLM_SETTING_EXTRA_BODY, json_dumps(extra_body), actor)

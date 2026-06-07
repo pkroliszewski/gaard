@@ -130,7 +130,8 @@ class SchemaCacheSettingsRequest(BaseModel):
 class LlmConfigRequest(BaseModel):
     provider: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    api_key: str = Field(min_length=1)
+    api_key: str | None = None
+    clear_api_key: bool = False
     model: str = Field(min_length=1)
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
     extra_body: dict[str, Any] = Field(default_factory=dict)
@@ -264,11 +265,13 @@ def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
 def serialize_llm_config(session: Session) -> dict[str, Any]:
     llm_config = get_llm_runtime_config(session)
     query_config = get_query_runtime_config(session)
+    api_key_configured = bool(llm_config.api_key and llm_config.api_key != "change-me")
 
     return {
         "provider": llm_config.provider,
         "base_url": llm_config.base_url,
-        "api_key": llm_config.api_key,
+        "api_key_configured": api_key_configured,
+        "api_key_preview": mask_secret(llm_config.api_key) if api_key_configured else None,
         "model": llm_config.model,
         "timeout_seconds": llm_config.timeout_seconds,
         "extra_body": llm_config.extra_body,
@@ -283,6 +286,12 @@ def serialize_llm_config(session: Session) -> dict[str, Any]:
         "query_timeout_seconds": query_config.query_timeout_seconds,
         "sources": get_llm_config_sources(session),
     }
+
+
+def mask_secret(value: str) -> str:
+    if len(value) <= 4:
+        return "****"
+    return f"****{value[-4:]}"
 
 
 def serialize_governance_policy(session: Session) -> dict[str, Any]:
@@ -1500,12 +1509,17 @@ def update_llm_config(
         request.query_timeout_seconds
         or current_query_config.query_timeout_seconds
     )
+    api_key = None
+    if request.clear_api_key:
+        api_key = "change-me"
+    elif request.api_key is not None and request.api_key.strip():
+        api_key = request.api_key.strip()
 
     set_llm_runtime_config(
         session=session,
         provider=request.provider,
         base_url=request.base_url,
-        api_key=request.api_key,
+        api_key=api_key,
         model=request.model,
         timeout_seconds=timeout_seconds,
         extra_body=request.extra_body,

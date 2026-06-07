@@ -295,7 +295,9 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
     item = get_response.json()["item"]
     assert item["provider"] == "openai-compatible"
     assert item["base_url"] == "https://api.openai.com/v1"
-    assert item["api_key"] == "change-me"
+    assert "api_key" not in item
+    assert item["api_key_configured"] is False
+    assert item["api_key_preview"] is None
     assert item["model"] == "gpt-4.1-mini"
     assert item["timeout_seconds"] == 60
     assert item["extra_body"] == {}
@@ -330,7 +332,9 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
     assert update_response.status_code == 200
     updated_item = update_response.json()["item"]
     assert updated_item["base_url"] == "http://metadata-llm.test/v1"
-    assert updated_item["api_key"] == "metadata-secret"
+    assert "api_key" not in updated_item
+    assert updated_item["api_key_configured"] is True
+    assert updated_item["api_key_preview"] == "****cret"
     assert updated_item["model"] == "metadata-model"
     assert updated_item["timeout_seconds"] == 45
     assert updated_item["intent_classification_mode"] == "llm"
@@ -367,6 +371,54 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
     )
     assert audit_item["details"]["model"] == "metadata-model"
     assert "api_key" not in audit_item["details"]
+
+    preserve_response = admin_client.put(
+        "/api/v1/admin/llm-config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "http://metadata-llm-2.test/v1",
+            "api_key": "",
+            "model": "metadata-model-2",
+            "timeout_seconds": 30,
+            "extra_body": {},
+        },
+    )
+
+    assert preserve_response.status_code == 200
+    preserved_item = preserve_response.json()["item"]
+    assert "api_key" not in preserved_item
+    assert preserved_item["api_key_configured"] is True
+    assert preserved_item["api_key_preview"] == "****cret"
+
+    runtime_config = get_llm_runtime_config_safe()
+    assert runtime_config.base_url == "http://metadata-llm-2.test/v1"
+    assert runtime_config.api_key == "metadata-secret"
+    assert runtime_config.model == "metadata-model-2"
+
+    clear_response = admin_client.put(
+        "/api/v1/admin/llm-config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "http://metadata-llm-3.test/v1",
+            "clear_api_key": True,
+            "model": "metadata-model-3",
+            "timeout_seconds": 30,
+            "extra_body": {},
+        },
+    )
+
+    assert clear_response.status_code == 200
+    cleared_item = clear_response.json()["item"]
+    assert "api_key" not in cleared_item
+    assert cleared_item["api_key_configured"] is False
+    assert cleared_item["api_key_preview"] is None
+
+    runtime_config = get_llm_runtime_config_safe()
+    assert runtime_config.base_url == "http://metadata-llm-3.test/v1"
+    assert runtime_config.api_key == "change-me"
+    assert runtime_config.model == "metadata-model-3"
 
 
 def test_governance_policy_defaults_to_metadata_and_can_be_overridden(
