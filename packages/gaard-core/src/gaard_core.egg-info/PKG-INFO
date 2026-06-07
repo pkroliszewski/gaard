@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: gaard-core
+Version: 0.1.0
+Summary: Core GAARD query pipeline, prompt compiler, policies and SQL validation
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2.7.0
+Requires-Dist: sqlglot>=25.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: ruff>=0.5.0; extra == "dev"
+Requires-Dist: mypy>=1.10.0; extra == "dev"

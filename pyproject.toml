@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+testpaths = [
+    "packages/gaard-core/tests",
+    "packages/gaard-connectors/tests",
+    "packages/gaard-llm/tests",
+    "services/api/tests"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

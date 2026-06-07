@@ -1,0 +1,57 @@
+from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class OutputClassification(StrEnum):
+    PERSONAL_DATA = "personal_data"
+    SENSITIVE_DATA = "sensitive_data"
+    TECHNICAL_DATA = "technical_data"
+    NEUTRAL_DATA = "neutral_data"
+    UNKNOWN = "unknown"
+
+
+class QueryIntentDecision(StrEnum):
+    READ_ONLY_DATA_QUESTION = "read_only_data_question"
+    WRITE_OR_MUTATION_REQUEST = "write_or_mutation_request"
+    NON_DATA_REQUEST = "non_data_request"
+    AMBIGUOUS = "ambiguous"
+
+
+class QueryMode(StrEnum):
+    SQL = "sql"
+    INVESTIGATION = "investigation"
+
+
+class QueryIntentClassification(BaseModel):
+    decision: QueryIntentDecision = QueryIntentDecision.AMBIGUOUS
+    confidence: float = 0.0
+    reason: str = ""
+    model_response: dict[str, Any] = Field(default_factory=dict)
+
+
+class QueryRequest(BaseModel):
+    question: str = Field(min_length=1)
+    datasource_id: str = "default"
+    user_id: str = "local-admin"
+    mode: QueryMode = QueryMode.SQL
+
+
+class GeneratedSql(BaseModel):
+    sql: str
+    confidence: float = 0.0
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class QueryResult(BaseModel):
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+
+class QueryResponse(BaseModel):
+    question: str
+    answer: str
+    sql: str
+    rows: list[dict[str, Any]]
+    metadata: dict[str, Any] = Field(default_factory=dict)
