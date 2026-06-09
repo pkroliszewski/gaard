@@ -49,6 +49,7 @@ const state = {
     token: localStorage.getItem("gaard_admin_token"),
     username: localStorage.getItem("gaard_admin_username") || "",
     mustChangePassword: localStorage.getItem("gaard_admin_must_change") === "true",
+    mobileMenuOpen: false,
     section: "overview",
     error: "",
     success: "",
@@ -254,9 +255,14 @@ function renderShell() {
     const active = sections.find((section)=>section.key === state.section);
     app.innerHTML = `
     <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand"><strong>GAARD Admin Console</strong><span>Community edition</span></div>
-        <nav class="nav">
+      <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
+        <div class="sidebar-header">
+          <div class="brand"><strong>GAARD Admin Console</strong><span>Community edition</span></div>
+          <button class="menu-toggle" id="mobile-menu-button" type="button" aria-label="${state.mobileMenuOpen ? "Close navigation" : "Open navigation"}" aria-expanded="${state.mobileMenuOpen}" aria-controls="admin-navigation">
+            <span></span><span></span><span></span>
+          </button>
+        </div>
+        <nav class="nav" id="admin-navigation">
           ${sections.map((section)=>`<button data-section="${section.key}" class="${section.key === state.section ? "active" : ""}">${section.label}</button>`).join("")}
         </nav>
         <div class="sidebar-footer"><span>${escapeHtml(state.username)}</span><button id="logout-button">Sign out</button></div>
@@ -277,11 +283,16 @@ function renderShell() {
     document.querySelectorAll("[data-section]").forEach((button)=>{
     button.addEventListener("click", async ()=>{
         state.section = button.dataset.section;
+        state.mobileMenuOpen = false;
         state.overviewEditorWidgetKey = null;
         setMessage("success", "");
             render();
             await loadCurrentSection();
         });
+    });
+    document.querySelector("#mobile-menu-button")?.addEventListener("click", ()=>{
+        state.mobileMenuOpen = !state.mobileMenuOpen;
+        render();
     });
     document.querySelector("#logout-button")?.addEventListener("click", logout);
     document.querySelector("#top-logout-button")?.addEventListener("click", logout);

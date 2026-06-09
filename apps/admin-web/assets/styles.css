@@ -215,6 +215,10 @@ label {
   gap: 14px;
 }
 
+.sidebar-header {
+  display: contents;
+}
+
 .brand {
   padding: 4px 8px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
@@ -230,6 +234,10 @@ label {
   margin-top: 2px;
   color: rgba(255, 255, 255, 0.66);
   font-size: 12px;
+}
+
+.menu-toggle {
+  display: none;
 }
 
 .nav {
@@ -625,10 +633,65 @@ code {
     position: sticky;
     top: 0;
     z-index: 3;
+    padding: 12px 14px;
+    gap: 10px;
+    box-shadow: var(--shadow);
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .brand {
+    min-width: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .brand strong {
+    font-size: 16px;
+  }
+
+  .menu-toggle {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    display: inline-grid;
+    place-items: center;
+    gap: 4px;
+    padding: 9px;
+    border-color: rgba(255, 255, 255, 0.24);
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+  }
+
+  .menu-toggle:hover {
+    border-color: rgba(255, 255, 255, 0.46);
+  }
+
+  .menu-toggle span {
+    width: 18px;
+    height: 2px;
+    display: block;
+    border-radius: 999px;
+    background: currentColor;
   }
 
   .nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: none;
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar.menu-open .nav {
+    display: grid;
   }
 
   .sidebar-footer {
