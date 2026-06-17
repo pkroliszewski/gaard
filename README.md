@@ -115,51 +115,29 @@ curl -X POST http://localhost:8000/api/v1/query \
 The response includes the natural-language answer, generated SQL, returned rows,
 and request metadata.
 
-## Requirements
+## Datasource Connectors
 
-Core local development requirements:
+Datasource connectors are configured in the admin UI and persisted in the
+metadata database. For required database permissions, MySQL, PostgreSQL and
+SQLite connection examples, schema introspection, views, and business logic
+settings for tables and views, see
+[DatasourceConfiguration.md](DatasourceConfiguration.md).
 
-- Python 3.11 or newer
-- `pip`
-- Python virtual environment support, usually available through `venv`
+## How to use GAARD in your Reports
 
-Optional Docker-based runtime requirements:
+You can integrate the GAARD using the REST API. When you run the GAARD locally you will find docs here:
 
-- Docker-compatible runtime, such as Docker Engine or Docker Desktop
-- Docker Compose, either the `docker compose` plugin or standalone `docker-compose`
+```text
+http://localhost:8000/docs
+```
 
-Runtime configuration requirements:
+Community version currently doesn't have the mutli user authentication so you need to admin login by the endpoint, 
+and then get the bearer token and use it in next requests. 
+This will allow you to get widgets, and answer user queries. 
 
-- An OpenAI-compatible LLM endpoint and API key when using `llm` modes
-- A relational datasource reachable through SQLAlchemy
-- Local SQLite storage for GAARD metadata
+Details coming soon.
 
-## Technology Stack
-
-- Backend API: Python + FastAPI
-- Core engine: Python package
-- Database abstraction: SQLAlchemy
-- Metadata database: SQLite
-- Demo datasource: SQLite
-- Deployment: local Uvicorn or Docker Compose
-
-## Project Structure
-
-- `apps/` - web applications such as admin console, demo UI, and docs UI
-- `services/api/` - FastAPI HTTP API
-- `services/client/` - FastAPI-hosted community client UI
-- `services/worker/` - background worker
-- `services/scheduler/` - scheduled jobs
-- `packages/gaard-core/` - query pipeline, prompts, policies, and validation
-- `packages/gaard-connectors/` - SQLAlchemy-based database connectors
-- `packages/gaard-llm/` - LLM provider adapters
-- `config/` - prompts, policies, and semantic-layer examples
-- `infra/` - deployment assets
-- `docs/` - architecture, API, and operational documentation
-- `examples/` - demo datasets and use cases
-- `tests/` - integration, end-to-end, and prompt evaluation tests
-
-## Configuration
+## Detailed GAARD Configuration
 
 The API runtime is configured through the admin UI and persisted in the SQLite
 metadata database at `metadata.db`. The metadata database is the only source of
@@ -202,14 +180,6 @@ GAARD_SQL_GENERATION_MODE=mock GAARD_RESULT_INTERPRETATION_MODE=mock uvicorn app
 GAARD does not load `.env` files. Environment variables only affect code
 defaults and system-seeded metadata settings; admin-edited metadata settings
 remain authoritative.
-
-## konfiguracja połączeń z bazą
-
-Datasource connectors are configured in the admin UI and persisted in the
-metadata database. For required database permissions, MySQL, PostgreSQL and
-SQLite connection examples, schema introspection, views, and business logic
-settings for tables and views, see
-[DatasourceConfiguration.md](DatasourceConfiguration.md).
 
 ## Demo SQLite Database
 
@@ -312,7 +282,7 @@ Use `docker-compose down` if your environment uses standalone Docker Compose.
 To remove persisted metadata as well, delete the local SQLite metadata file or
 the mounted data volume explicitly.
 
-## Run Locally with Uvicorn
+## How to Run Locally with Uvicorn
 
 Use this path when you want to run the API directly on your machine without
 Docker.
@@ -458,6 +428,50 @@ After each question, the client shows the question, answer, processing time,
 `datasource_id`, and `output_classification`. The input stays fixed at the
 bottom while previous answers remain visible as history.
 
+## Requirements
+
+Core local development requirements:
+
+- Python 3.11 or newer
+- `pip`
+- Python virtual environment support, usually available through `venv`
+
+Optional Docker-based runtime requirements:
+
+- Docker-compatible runtime, such as Docker Engine or Docker Desktop
+- Docker Compose, either the `docker compose` plugin or standalone `docker-compose`
+
+Runtime configuration requirements:
+
+- An OpenAI-compatible LLM endpoint and API key when using `llm` modes
+- A relational datasource reachable through SQLAlchemy
+- Local SQLite storage for GAARD metadata
+
+## Technology Stack
+
+- Backend API: Python + FastAPI
+- Core engine: Python package
+- Database abstraction: SQLAlchemy
+- Metadata database: SQLite
+- Demo datasource: SQLite
+- Deployment: local Uvicorn or Docker Compose
+
+## Project Structure
+
+- `apps/` - web applications such as admin console, demo UI, and docs UI
+- `services/api/` - FastAPI HTTP API
+- `services/client/` - FastAPI-hosted community client UI
+- `services/worker/` - background worker
+- `services/scheduler/` - scheduled jobs
+- `packages/gaard-core/` - query pipeline, prompts, policies, and validation
+- `packages/gaard-connectors/` - SQLAlchemy-based database connectors
+- `packages/gaard-llm/` - LLM provider adapters
+- `config/` - prompts, policies, and semantic-layer examples
+- `infra/` - deployment assets
+- `docs/` - architecture, API, and operational documentation
+- `examples/` - demo datasets and use cases
+- `tests/` - integration, end-to-end, and prompt evaluation tests
+- 
 ## Running Tests
 
 GAARD uses `pytest` for Python tests. Because the project is organized as a
