@@ -29,3 +29,24 @@ def test_schema_prompt_formatter_formats_tables_columns_and_foreign_keys() -> No
     assert "- patient_id: INTEGER (not null)" in formatted
     assert "Foreign keys:" in formatted
     assert "- patient_id -> patients.id" in formatted
+
+
+def test_schema_prompt_formatter_formats_views() -> None:
+    schema = DatabaseSchema(
+        tables=[
+            TableInfo(
+                name="active_patients",
+                object_type="view",
+                columns=[
+                    ColumnInfo(name="id", type="INTEGER"),
+                    ColumnInfo(name="status", type="TEXT"),
+                ],
+            )
+        ]
+    )
+
+    formatted = SchemaPromptFormatter().format(schema)
+
+    assert "View: active_patients" in formatted
+    assert "Table: active_patients" not in formatted
+    assert "- status: TEXT" in formatted

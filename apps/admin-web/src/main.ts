@@ -95,6 +95,9 @@ type State = {
   datasources: DatasourceConnector[];
   selectedDatasourceId: number | "new" | null;
   datasourceSchema: any | null;
+  datasourceSchemaSelectedObjectName: string;
+  datasourceSchemaShowEnabledOnly: boolean;
+  datasourceSchemaDraftTables: Record<string, any> | null;
   license: any | null;
 };
 
@@ -141,6 +144,9 @@ const state: State = {
   datasources: [],
   selectedDatasourceId: null,
   datasourceSchema: null,
+  datasourceSchemaSelectedObjectName: "",
+  datasourceSchemaShowEnabledOnly: false,
+  datasourceSchemaDraftTables: null,
   license: null,
 };
 
@@ -693,13 +699,65 @@ function renderDatasourceSchema(): string {
   const schema = state.datasourceSchema?.item;
   const rawTables = schema?.raw_schema?.tables || [];
   const tableSettings = schema?.table_settings?.tables || {};
+  const draftTables = schema ? getDatasourceSchemaDraftTables(rawTables, tableSettings) : {};
+  const visibleTables = state.datasourceSchemaShowEnabledOnly
+    ? rawTables.filter((table: any) => draftTables[table.name]?.selected !== false)
+    : rawTables;
+  const selectedTable = schema ? getSelectedDatasourceSchemaObject(rawTables, visibleTables) : null;
+  const selectedSettings = selectedTable ? draftTables[selectedTable.name] || {} : {};
   return `
     <section class="panel">
       <div class="panel-header"><h2>Schema introspection</h2><span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span></div>
       <div class="panel-body">
-        ${schema ? `<form id="datasource-schema-form" class="form-grid">${rawTables.map((table: any) => renderDatasourceTable(table, tableSettings[table.name] || {})).join("")}<div class="form-actions"><button class="primary" type="submit">Save schema settings</button></div></form>` : `<p class="muted">Run schema introspection to cache tables, keys and relationships.</p>`}
+        ${schema ? `
+          <form id="datasource-schema-form" class="schema-editor">
+            <section class="schema-object-list">
+              <div class="schema-object-list-header">
+                <label class="inline-check"><input id="schema-show-enabled-only" type="checkbox" ${state.datasourceSchemaShowEnabledOnly ? "checked" : ""} /> Show enabled objects only</label>
+              </div>
+              <div class="schema-object-list-body">
+                ${visibleTables.length ? visibleTables.map((table: any) => renderDatasourceObjectListItem(table, draftTables[table.name] || {}, selectedTable?.name === table.name)).join("") : `<p class="muted schema-object-empty">No enabled objects.</p>`}
+              </div>
+            </section>
+            <section class="schema-object-details">
+              ${selectedTable ? renderDatasourceObjectDetails(selectedTable, selectedSettings) : `<p class="muted">Select a table or view to edit its guidance.</p>`}
+              <div class="form-actions"><button class="primary" type="submit">Save schema settings</button></div>
+            </section>
+          </form>` : `<p class="muted">Run schema introspection to cache tables, views, keys and relationships.</p>`}
       </div>
     </section>`;
+}
+
+function getDatasourceSchemaDraftTables(rawTables: any[], tableSettings: Record<string, any>): Record<string, any> {
+  if (!state.datasourceSchemaDraftTables) {
+    state.datasourceSchemaDraftTables = {};
+  }
+
+  for (const table of rawTables) {
+    if (state.datasourceSchemaDraftTables[table.name]) continue;
+
+    const settings = tableSettings[table.name] || {};
+    state.datasourceSchemaDraftTables[table.name] = {
+      selected: settings.selected !== false,
+      description: settings.description || "",
+      primary_key_prompt: settings.primary_key_prompt || "",
+      foreign_key_prompt: settings.foreign_key_prompt || "",
+      join_logic: settings.join_logic || "",
+    };
+  }
+
+  return state.datasourceSchemaDraftTables;
+}
+
+function getSelectedDatasourceSchemaObject(rawTables: any[], visibleTables: any[]): any | null {
+  const current = rawTables.find((table: any) => table.name === state.datasourceSchemaSelectedObjectName);
+  const currentIsVisible = visibleTables.some((table: any) => table.name === current?.name);
+
+  if (current && currentIsVisible) return current;
+
+  const fallback = visibleTables[0] || null;
+  state.datasourceSchemaSelectedObjectName = fallback?.name || "";
+  return fallback;
 }
 
 function renderBusinessLogicSuggestions(): string {
@@ -842,17 +900,33 @@ function renderGovernancePolicy(): string {
     </section>`;
 }
 
-function renderDatasourceTable(table: any, settings: any): string {
+function renderDatasourceObjectListItem(table: any, settings: any, active: boolean): string {
   const selected = settings.selected !== false;
+  const objectType = table.object_type || "table";
   return `
-    <section class="table-settings" data-table="${escapeHtml(table.name)}">
-      <label class="inline-check"><input name="${escapeHtml(table.name)}__selected" type="checkbox" ${selected ? "checked" : ""} /> ${escapeHtml(table.name)}</label>
-      <div class="muted">${escapeHtml((table.columns || []).map((column: any) => `${column.name}:${column.type}${column.primary_key ? " pk" : ""}`).join(", "))}</div>
-      <label>Description<input name="${escapeHtml(table.name)}__description" value="${escapeHtml(settings.description || "")}" /></label>
-      <label>Primary key guidance<input name="${escapeHtml(table.name)}__primary_key_prompt" value="${escapeHtml(settings.primary_key_prompt || "")}" /></label>
-      <label>Foreign key guidance<input name="${escapeHtml(table.name)}__foreign_key_prompt" value="${escapeHtml(settings.foreign_key_prompt || "")}" /></label>
-      <label>Join logic<textarea class="textarea-small" name="${escapeHtml(table.name)}__join_logic">${escapeHtml(settings.join_logic || "")}</textarea></label>
-    </section>`;
+    <div class="schema-object-row ${active ? "active" : ""}" data-schema-object-row="${escapeHtml(table.name)}">
+      <input name="${escapeHtml(table.name)}__selected" data-schema-object-enabled="${escapeHtml(table.name)}" aria-label="Use ${escapeHtml(table.name)}" type="checkbox" ${selected ? "checked" : ""} />
+      <button type="button" data-schema-object="${escapeHtml(table.name)}">
+        <span class="schema-object-name">${escapeHtml(table.name)}</span>
+        <span class="badge">${escapeHtml(objectType)}</span>
+      </button>
+    </div>`;
+}
+
+function renderDatasourceObjectDetails(table: any, settings: any): string {
+  const objectType = table.object_type || "table";
+  return `
+    <div class="schema-object-detail-header">
+      <div>
+        <h3>${escapeHtml(table.name)}</h3>
+        <span class="badge">${escapeHtml(objectType)}</span>
+      </div>
+    </div>
+    <div class="schema-object-columns">${escapeHtml((table.columns || []).map((column: any) => `${column.name}:${column.type}${column.primary_key ? " pk" : ""}`).join(", ") || "No columns available.")}</div>
+    <label>Description<input data-schema-detail="description" name="${escapeHtml(table.name)}__description" value="${escapeHtml(settings.description || "")}" /></label>
+    <label>Primary key guidance<input data-schema-detail="primary_key_prompt" name="${escapeHtml(table.name)}__primary_key_prompt" value="${escapeHtml(settings.primary_key_prompt || "")}" /></label>
+    <label>Foreign key guidance<input data-schema-detail="foreign_key_prompt" name="${escapeHtml(table.name)}__foreign_key_prompt" value="${escapeHtml(settings.foreign_key_prompt || "")}" /></label>
+    <label>Join logic<textarea data-schema-detail="join_logic" class="textarea-small" name="${escapeHtml(table.name)}__join_logic">${escapeHtml(settings.join_logic || "")}</textarea></label>`;
 }
 
 function renderSchemaCache(): string {
@@ -917,6 +991,26 @@ function attachSectionHandlers(): void {
   document.querySelector<HTMLFormElement>("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
   document.querySelector<HTMLFormElement>("#datasource-form")?.addEventListener("submit", saveDatasource);
   document.querySelector<HTMLFormElement>("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
+  document.querySelector<HTMLInputElement>("#schema-show-enabled-only")?.addEventListener("change", event => {
+    syncDatasourceSchemaDraftFromForm();
+    state.datasourceSchemaShowEnabledOnly = (event.currentTarget as HTMLInputElement).checked;
+    render();
+  });
+  document.querySelectorAll<HTMLInputElement>("[data-schema-object-enabled]").forEach(input => {
+    input.addEventListener("change", () => {
+      if (!state.datasourceSchemaShowEnabledOnly) return;
+
+      syncDatasourceSchemaDraftFromForm();
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-schema-object]").forEach(button => {
+    button.addEventListener("click", () => {
+      syncDatasourceSchemaDraftFromForm();
+      state.datasourceSchemaSelectedObjectName = button.dataset.schemaObject || "";
+      render();
+    });
+  });
   document.querySelector("#invalidate-schema-cache")?.addEventListener("click", invalidateSchemaCache);
   document.querySelector("#test-datasource")?.addEventListener("click", testDatasource);
   document.querySelector("#introspect-datasource")?.addEventListener("click", introspectDatasource);
@@ -958,6 +1052,8 @@ function attachSectionHandlers(): void {
   document.querySelector("#new-datasource")?.addEventListener("click", () => {
     state.selectedDatasourceId = "new";
     state.datasourceSchema = null;
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
     render();
   });
   document.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach(button => {
@@ -1238,6 +1334,8 @@ async function introspectDatasource(): Promise<void> {
   if (!selected) return;
   try {
     state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/introspect`, { method: "POST" });
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
     setMessage("success", "Schema introspection completed.");
     render();
   } catch (error) {
@@ -1259,20 +1357,50 @@ async function activateDatasource(): Promise<void> {
   }
 }
 
+function syncDatasourceSchemaDraftFromForm(): void {
+  const form = document.querySelector<HTMLFormElement>("#datasource-schema-form");
+  const rawTables = state.datasourceSchema?.item?.raw_schema?.tables || [];
+  const tableSettings = state.datasourceSchema?.item?.table_settings?.tables || {};
+
+  if (!form || !rawTables.length) return;
+
+  const draftTables = getDatasourceSchemaDraftTables(rawTables, tableSettings);
+
+  form.querySelectorAll<HTMLInputElement>("[data-schema-object-enabled]").forEach(input => {
+    const name = input.dataset.schemaObjectEnabled;
+    if (!name || !draftTables[name]) return;
+
+    draftTables[name].selected = input.checked;
+  });
+
+  const selectedName = state.datasourceSchemaSelectedObjectName;
+  const selectedSettings = selectedName ? draftTables[selectedName] : null;
+
+  if (!selectedSettings) return;
+
+  selectedSettings.description = form.querySelector<HTMLInputElement>("[data-schema-detail='description']")?.value || "";
+  selectedSettings.primary_key_prompt = form.querySelector<HTMLInputElement>("[data-schema-detail='primary_key_prompt']")?.value || "";
+  selectedSettings.foreign_key_prompt = form.querySelector<HTMLInputElement>("[data-schema-detail='foreign_key_prompt']")?.value || "";
+  selectedSettings.join_logic = form.querySelector<HTMLTextAreaElement>("[data-schema-detail='join_logic']")?.value || "";
+}
+
 async function saveDatasourceSchema(event: Event): Promise<void> {
   event.preventDefault();
   const selected = getSelectedDatasource();
   if (!selected || !state.datasourceSchema?.item) return;
-  const form = new FormData(event.currentTarget as HTMLFormElement);
   const rawTables = state.datasourceSchema.item.raw_schema.tables || [];
+  const tableSettings = state.datasourceSchema.item.table_settings?.tables || {};
+  syncDatasourceSchemaDraftFromForm();
+  const draftTables = getDatasourceSchemaDraftTables(rawTables, tableSettings);
   const tables: Record<string, any> = {};
   for (const table of rawTables) {
+    const draft = draftTables[table.name] || {};
     tables[table.name] = {
-      selected: form.get(`${table.name}__selected`) === "on",
-      description: form.get(`${table.name}__description`) || "",
-      primary_key_prompt: form.get(`${table.name}__primary_key_prompt`) || "",
-      foreign_key_prompt: form.get(`${table.name}__foreign_key_prompt`) || "",
-      join_logic: form.get(`${table.name}__join_logic`) || "",
+      selected: draft.selected !== false,
+      description: draft.description || "",
+      primary_key_prompt: draft.primary_key_prompt || "",
+      foreign_key_prompt: draft.foreign_key_prompt || "",
+      join_logic: draft.join_logic || "",
     };
   }
   try {
@@ -1281,6 +1409,8 @@ async function saveDatasourceSchema(event: Event): Promise<void> {
       body: JSON.stringify({ tables }),
     });
     setMessage("success", "Schema settings saved.");
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
     render();
   } catch (error) {
     setMessage("error", (error as Error).message);
@@ -1370,10 +1500,14 @@ async function loadDatasourceSchema(shouldRender = true): Promise<void> {
   const selected = getSelectedDatasource();
   if (!selected) {
     state.datasourceSchema = null;
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
     render();
     return;
   }
   state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema`);
+  state.datasourceSchemaSelectedObjectName = "";
+  state.datasourceSchemaDraftTables = null;
   if (shouldRender) render();
 }
 

@@ -203,6 +203,14 @@ GAARD does not load `.env` files. Environment variables only affect code
 defaults and system-seeded metadata settings; admin-edited metadata settings
 remain authoritative.
 
+## konfiguracja połączeń z bazą
+
+Datasource connectors are configured in the admin UI and persisted in the
+metadata database. For required database permissions, MySQL, PostgreSQL and
+SQLite connection examples, schema introspection, views, and business logic
+settings for tables and views, see
+[DatasourceConfiguration.md](DatasourceConfiguration.md).
+
 ## Demo SQLite Database
 
 The bundled demo datasource is stored at:

@@ -4,7 +4,7 @@ from gaard_core.schema.models import DatabaseSchema, TableInfo
 class SchemaPromptFormatter:
     def format(self, schema: DatabaseSchema) -> str:
         if not schema.tables:
-            return "No tables available."
+            return "No tables or views available."
 
         sections: list[str] = []
 
@@ -14,7 +14,8 @@ class SchemaPromptFormatter:
         return "\n\n".join(sections)
 
     def _format_table(self, table: TableInfo) -> str:
-        lines: list[str] = [f"Table: {table.name}", "Columns:"]
+        object_label = "View" if table.object_type == "view" else "Table"
+        lines: list[str] = [f"{object_label}: {table.name}", "Columns:"]
 
         if not table.columns:
             lines.append("- No columns available.")

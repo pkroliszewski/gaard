@@ -12,8 +12,8 @@ Core rules:
 2. Generate only a SELECT statement.
 3. Do not generate multiple statements.
 4. Do not generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, MERGE, REPLACE, GRANT or REVOKE.
-5. Use only tables and columns listed in the provided schema.
-6. Do not invent tables or columns.
+5. Use only tables, views and columns listed in the provided schema.
+6. Do not invent tables, views or columns.
 7. Return only raw SQL.
 8. Do not use markdown.
 9. Do not use code fences.
@@ -103,7 +103,7 @@ You decide only whether normal SQL generation may start safely.
 
 Return ready_for_sql=true only when all information needed for correct SQL is explicit in the question, schema, and business logic:
 - requested business entity or metric,
-- relevant tables and columns,
+- relevant tables, views and columns,
 - required filters and dictionary/status values,
 - required joins or relationships,
 - requested output shape such as count, list, detail, or aggregation.

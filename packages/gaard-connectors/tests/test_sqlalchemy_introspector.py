@@ -22,6 +22,11 @@ def test_sqlalchemy_introspector_reads_tables_columns_and_foreign_keys(tmp_path:
                 status TEXT NOT NULL,
                 FOREIGN KEY (patient_id) REFERENCES patients(id)
             );
+
+            CREATE VIEW active_patients AS
+            SELECT id, status
+            FROM patients
+            WHERE status = 'active';
             """
         )
         connection.commit()
@@ -38,10 +43,12 @@ def test_sqlalchemy_introspector_reads_tables_columns_and_foreign_keys(tmp_path:
 
     assert "patients" in table_names
     assert "appointments" in table_names
+    assert "active_patients" in table_names
 
     patients = next(table for table in schema.tables if table.name == "patients")
     patient_columns = {column.name for column in patients.columns}
 
+    assert patients.object_type == "table"
     assert "id" in patient_columns
     assert "status" in patient_columns
 
@@ -50,3 +57,10 @@ def test_sqlalchemy_introspector_reads_tables_columns_and_foreign_keys(tmp_path:
     assert len(appointments.foreign_keys) == 1
     assert appointments.foreign_keys[0].referred_table == "patients"
     assert appointments.foreign_keys[0].constrained_columns == ["patient_id"]
+
+    active_patients = next(table for table in schema.tables if table.name == "active_patients")
+    active_patient_columns = {column.name for column in active_patients.columns}
+
+    assert active_patients.object_type == "view"
+    assert active_patient_columns == {"id", "status"}
+    assert active_patients.foreign_keys == []

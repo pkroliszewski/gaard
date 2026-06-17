@@ -2014,13 +2014,14 @@ def format_schema_for_prompt(
         sections.append(format_table_for_prompt(table, table_config))
 
     if not sections:
-        return "No tables available."
+        return "No tables or views available."
 
     return "\n\n".join(sections)
 
 
 def format_table_for_prompt(table: TableInfo, table_config: dict[str, Any]) -> str:
-    lines: list[str] = [f"Table: {table.name}"]
+    object_label = "View" if table.object_type == "view" else "Table"
+    lines: list[str] = [f"{object_label}: {table.name}"]
 
     description = str(table_config.get("description", "")).strip()
     if description:

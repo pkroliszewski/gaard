@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +18,7 @@ class ForeignKeyInfo(BaseModel):
 
 class TableInfo(BaseModel):
     name: str
+    object_type: Literal["table", "view"] = "table"
     columns: list[ColumnInfo] = Field(default_factory=list)
     foreign_keys: list[ForeignKeyInfo] = Field(default_factory=list)
 

@@ -39,7 +39,7 @@ You decide only whether normal SQL generation may start safely.
 
 Return ready_for_sql=true only when all information needed for correct SQL is explicit in the question, schema, and business logic:
 - requested business entity or metric,
-- relevant tables and columns,
+- relevant tables, views and columns,
 - required filters and dictionary/status values,
 - required joins or relationships,
 - requested output shape such as count, list, detail, or aggregation.
