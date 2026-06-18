@@ -412,6 +412,35 @@ label {
   flex-wrap: wrap;
 }
 
+.overview-toolbar {
+  justify-content: flex-end;
+}
+
+.refresh-status {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -455,10 +484,36 @@ label {
   gap: 12px;
 }
 
+.overview-grid,
 .widget-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.overview-widget-slot {
+  min-height: 150px;
+  align-content: start;
+}
+
+.overview-loading {
+  grid-column: 1 / -1;
+  min-height: 180px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.overview-widget-table,
+.overview-widget-timeseries {
+  min-height: 280px;
 }
 
 .widget-card {
@@ -471,17 +526,140 @@ label {
   box-shadow: var(--shadow);
 }
 
+.widget-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.widget-card-header span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.widget-card-header strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 15px;
+}
+
 .widget-card-main span {
   display: block;
   color: var(--muted);
   font-size: 12px;
 }
 
-.widget-card-main strong {
+.widget-card-main .widget-card-value {
   display: block;
   margin-top: 6px;
   font-size: 24px;
+  font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.widget-card-main .widget-card-interpretation {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.widget-card-value a,
+.overview-table-wrap td a {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.widget-card-value ul,
+.overview-table-wrap td ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.widget-card-value ul {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.widget-card-value li + li,
+.overview-table-wrap td li + li {
+  margin-top: 4px;
+}
+
+.overview-empty-slot {
+  min-height: 150px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 12px;
+}
+
+.overview-empty-slot > button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.overview-placement-panel {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+}
+
+.widgets-editor {
+  align-items: start;
+}
+
+.widget-config-list {
+  gap: 8px;
+}
+
+.widget-config-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.widget-config-row > input {
+  width: auto;
+}
+
+.widget-config-select {
+  min-height: 54px;
+  text-align: left;
+}
+
+.widget-config-row.active .widget-config-select {
+  border-color: var(--accent);
+  background: var(--panel-strong);
+}
+
+.widget-config-delete {
+  align-self: stretch;
+}
+
+.widget-config-row strong,
+.widget-config-row span {
+  display: block;
+}
+
+.widget-config-row span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .widget-card-actions,
@@ -605,6 +783,29 @@ label {
 .empty-state {
   color: var(--muted);
   font-size: 12px;
+}
+
+.overview-table-widget .panel-body {
+  display: grid;
+  gap: 12px;
+}
+
+.overview-table-wrap table {
+  min-width: 640px;
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.table-pagination-info {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .stat {
@@ -795,10 +996,15 @@ code {
   }
 
   .stats,
+  .overview-grid,
   .widget-grid,
   .split,
   .schema-editor {
     grid-template-columns: 1fr;
+  }
+
+  .overview-widget-slot {
+    grid-column: span 1 !important;
   }
 
   .schema-object-list-body {

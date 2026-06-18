@@ -1,10 +1,16 @@
 import json
+import re
 from datetime import datetime
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
-from gaard_core.errors import ConfigurationError, QueryExecutionError, SqlValidationError
+from gaard_core.errors import (
+    ConfigurationError,
+    LlmProviderError,
+    QueryExecutionError,
+    SqlValidationError,
+)
 from gaard_core.query_pipeline.models import (
     OutputClassification,
     QueryRequest,
@@ -36,7 +42,10 @@ from app.admin.security import (
 from app.admin.services import (
     BUSINESS_LOGIC_STATUS_ACTIVE,
     BUSINESS_LOGIC_STATUS_PENDING,
+    OVERVIEW_WIDGET_RESULT_DATA,
+    OVERVIEW_WIDGET_RESULT_INTERPRETATION,
     OVERVIEW_WIDGET_SCALAR,
+    OVERVIEW_WIDGET_TABLE,
     OVERVIEW_WIDGET_TIMESERIES,
     apply_data_query_audit_retention,
     coerce_data_query_audit_type,
@@ -61,6 +70,7 @@ from app.admin.services import (
     is_system_datasource_connector,
     json_loads,
     list_admin_audit_logs,
+    list_all_overview_widgets,
     list_business_logic_suggestions,
     list_data_query_audit_logs,
     list_datasource_connectors,
@@ -176,9 +186,35 @@ class GovernancePolicyRequest(BaseModel):
 
 class OverviewWidgetUpdateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=255)
-    widget_type: str = Field(pattern=r"^(scalar|timeseries)$")
+    widget_type: str = Field(pattern=r"^(scalar|timeseries|table)$")
     datasource_key: str = Field(min_length=1, max_length=255)
     question: str = Field(min_length=1)
+    result_mode: str = Field(default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$")
+    position: int | None = Field(default=None, ge=10)
+    grid_width: int | None = Field(default=None, ge=1, le=4)
+    active: bool | None = None
+
+
+class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
+    widget_key: str = Field(min_length=1, max_length=255, pattern=r"^[a-zA-Z0-9_-]+$")
+    position: int = Field(default=100, ge=10)
+    grid_width: int | None = Field(default=None, ge=1, le=4)
+    active: bool = True
+
+
+class OverviewWidgetStateRequest(BaseModel):
+    active: bool
+    position: int | None = Field(default=None, ge=10)
+    grid_width: int | None = Field(default=None, ge=1, le=4)
+
+
+class OverviewWidgetFromQueryRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=255)
+    widget_type: str = Field(default=OVERVIEW_WIDGET_TABLE, pattern=r"^(scalar|timeseries|table)$")
+    datasource_key: str = Field(default="default", min_length=1, max_length=255)
+    question: str = Field(min_length=1)
+    sql: str = Field(min_length=1)
+    result_mode: str = Field(default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$")
 
 
 class DatasourceConnectorRequest(BaseModel):
@@ -312,11 +348,49 @@ def serialize_overview_widget_config(widget: OverviewWidget) -> dict[str, Any]:
         "datasource_key": widget.datasource_key,
         "question": widget.question,
         "sql": widget.sql,
+        "result_mode": normalize_overview_widget_result_mode(widget.result_mode),
         "position": widget.position,
+        "grid_width": normalize_overview_widget_grid_width(
+            widget.widget_type,
+            widget.grid_width,
+        ),
         "active": widget.active,
         "updated_by": widget.updated_by,
         "updated_at": serialize_datetime(widget.updated_at),
     }
+
+
+def normalize_overview_widget_grid_width(
+    widget_type: str,
+    grid_width: int | None,
+) -> int:
+    if grid_width is None:
+        return 4 if widget_type in {OVERVIEW_WIDGET_TABLE, OVERVIEW_WIDGET_TIMESERIES} else 1
+
+    return max(1, min(4, int(grid_width)))
+
+
+def normalize_overview_widget_result_mode(value: str | None) -> str:
+    if value == OVERVIEW_WIDGET_RESULT_INTERPRETATION:
+        return OVERVIEW_WIDGET_RESULT_INTERPRETATION
+
+    return OVERVIEW_WIDGET_RESULT_DATA
+
+
+def build_client_widget_key(session: Session, label: str, question: str) -> str:
+    seed = label.strip() or question.strip() or "query_widget"
+    normalized = re.sub(r"[^a-z0-9_-]+", "_", seed.lower()).strip("_-")
+    normalized = normalized[:48].strip("_-") or "query_widget"
+    base_key = f"client_{normalized}"
+    widget_key = base_key
+    suffix = 2
+
+    while get_overview_widget(session, widget_key) is not None:
+        suffix_text = f"_{suffix}"
+        widget_key = f"{base_key[:255 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+
+    return widget_key
 
 
 def serialize_overview_widget(
@@ -343,11 +417,47 @@ def execute_overview_widget(
 
     try:
         result = execute_overview_sql(session, connector, widget.sql)
-        return validate_overview_widget_result(widget, result)
+        payload = validate_overview_widget_result(widget, result)
+        payload["result_mode"] = normalize_overview_widget_result_mode(widget.result_mode)
+
+        if payload["result_mode"] == OVERVIEW_WIDGET_RESULT_INTERPRETATION:
+            interpretation = interpret_overview_widget_result(connector, widget, result)
+            payload["answer"] = interpretation
+            payload["interpretation"] = interpretation
+            payload["value"] = interpretation
+
+        return payload
     except QueryExecutionError as exc:
         return widget_error(exc.message, sql=exc.sql)
-    except (ConfigurationError, SQLAlchemyError, SqlValidationError, ValueError, TypeError) as exc:
+    except (
+        ConfigurationError,
+        LlmProviderError,
+        SQLAlchemyError,
+        SqlValidationError,
+        ValueError,
+        TypeError,
+    ) as exc:
         return widget_error(str(exc), sql=widget.sql)
+
+
+def interpret_overview_widget_result(
+    connector: DatasourceConnector,
+    widget: OverviewWidget,
+    result: QueryResult,
+) -> str:
+    from app.api.v1.query import create_result_interpreter
+
+    query_request = build_overview_widget_query_request(
+        connector=connector,
+        widget_key=widget.widget_key,
+        question=widget.question,
+    )
+
+    return create_result_interpreter().interpret(
+        request=query_request,
+        result=result,
+        sql=widget.sql,
+    )
 
 
 def execute_overview_sql(
@@ -410,6 +520,7 @@ def record_overview_widget_query_audit(
                 "operation": "overview_widget.update",
                 "widget_key": widget.widget_key,
                 "widget_type": widget.widget_type,
+                "result_mode": normalize_overview_widget_result_mode(widget.result_mode),
             },
         ),
     )
@@ -462,6 +573,18 @@ def validate_overview_widget_result(
     if widget.widget_type == OVERVIEW_WIDGET_TIMESERIES:
         if rows:
             validate_timeseries_rows(columns, rows)
+
+        return {
+            "status": "ok",
+            "columns": columns,
+            "rows": rows,
+            "answer": json.dumps(rows, ensure_ascii=False, default=str),
+            "sql": widget.sql,
+        }
+
+    if widget.widget_type == OVERVIEW_WIDGET_TABLE:
+        if not columns and rows:
+            raise ValueError("Table widgets must return named columns.")
 
         return {
             "status": "ok",
@@ -743,6 +866,227 @@ def get_overview(
             ),
             None,
         ),
+        "table_widgets": [
+            widget
+            for widget in widgets
+            if widget["widget_type"] == OVERVIEW_WIDGET_TABLE
+        ],
+    }
+
+
+@router.get("/overview/widgets")
+def get_overview_widget_configs(
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return {
+        "items": [
+            serialize_overview_widget_config(widget)
+            for widget in list_all_overview_widgets(session)
+        ],
+        "datasources": [
+            {
+                "connector_key": connector.connector_key,
+                "name": connector.name,
+                "database_type": connector.database_type,
+                "masked_database_url": mask_database_url(connector.database_url),
+                "active": connector.active,
+            }
+            for connector in list_datasource_connectors(session)
+        ],
+    }
+
+
+@router.post("/overview/widgets")
+def create_overview_widget(
+    request: OverviewWidgetCreateRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    if get_overview_widget(session, request.widget_key) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Overview widget already exists.",
+        )
+
+    datasource = get_datasource_connector_by_key(session, request.datasource_key)
+
+    if datasource is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Datasource does not exist.",
+        )
+
+    query_request = build_overview_widget_query_request(
+        connector=datasource,
+        widget_key=request.widget_key,
+        question=request.question,
+    )
+    generated_sql = ""
+    next_grid_width = normalize_overview_widget_grid_width(
+        request.widget_type,
+        request.grid_width,
+    )
+    next_result_mode = normalize_overview_widget_result_mode(request.result_mode)
+
+    try:
+        generated_sql = generate_overview_widget_sql(
+            session=session,
+            connector=datasource,
+            query_request=query_request,
+            actor=user.username,
+        )
+        widget = OverviewWidget(
+            widget_key=request.widget_key,
+            label=request.label,
+            widget_type=request.widget_type,
+            datasource_key=request.datasource_key,
+            question=request.question,
+            sql=generated_sql,
+            result_mode=next_result_mode,
+            position=request.position,
+            grid_width=next_grid_width,
+            active=request.active,
+            updated_by=user.username,
+        )
+        validate_overview_widget_result(
+            widget,
+            execute_overview_sql(session, datasource, generated_sql),
+        )
+    except QueryExecutionError as exc:
+        record_overview_widget_sql_error_audit(
+            query_request=query_request,
+            connector=datasource,
+            sql=exc.sql or generated_sql,
+            error_code=exc.code,
+            error_message=exc.message,
+            error_detail=exc.error_detail,
+            actor=user.username,
+        )
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc.message,
+        ) from exc
+    except (
+        ConfigurationError,
+        SQLAlchemyError,
+        SqlValidationError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    session.add(widget)
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="overview_widget.create",
+        resource_type="overview_widget",
+        resource_id=widget.widget_key,
+        details={
+            "label": widget.label,
+            "widget_type": widget.widget_type,
+            "datasource_key": widget.datasource_key,
+            "result_mode": widget.result_mode,
+            "position": widget.position,
+            "grid_width": widget.grid_width,
+            "active": widget.active,
+        },
+    )
+    session.commit()
+    record_overview_widget_query_audit(
+        query_request=query_request,
+        widget=widget,
+        generated_sql=generated_sql,
+        actor=user.username,
+    )
+
+    return {
+        "item": serialize_overview_widget(session, widget),
+    }
+
+
+@router.post("/overview/widgets/from-query")
+def create_overview_widget_from_query(
+    request: OverviewWidgetFromQueryRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    datasource = get_datasource_connector_by_key(session, request.datasource_key)
+
+    if datasource is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Datasource does not exist.",
+        )
+
+    widget_key = build_client_widget_key(session, request.label, request.question)
+    grid_width = normalize_overview_widget_grid_width(
+        request.widget_type,
+        None,
+    )
+    result_mode = normalize_overview_widget_result_mode(request.result_mode)
+    widget = OverviewWidget(
+        widget_key=widget_key,
+        label=request.label,
+        widget_type=request.widget_type,
+        datasource_key=request.datasource_key,
+        question=request.question,
+        sql=request.sql,
+        result_mode=result_mode,
+        position=100,
+        grid_width=grid_width,
+        active=False,
+        updated_by="client",
+    )
+
+    try:
+        validate_overview_widget_result(
+            widget,
+            execute_overview_sql(session, datasource, request.sql),
+        )
+    except QueryExecutionError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc.message,
+        ) from exc
+    except (
+        ConfigurationError,
+        SQLAlchemyError,
+        SqlValidationError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    session.add(widget)
+    record_admin_audit(
+        session=session,
+        actor="client",
+        action="overview_widget.create_from_query",
+        resource_type="overview_widget",
+        resource_id=widget.widget_key,
+        details={
+            "label": widget.label,
+            "widget_type": widget.widget_type,
+            "datasource_key": widget.datasource_key,
+            "result_mode": widget.result_mode,
+            "active": widget.active,
+        },
+    )
+    session.commit()
+
+    return {
+        "item": serialize_overview_widget_config(widget),
     }
 
 
@@ -775,6 +1119,13 @@ def update_overview_widget(
         question=request.question,
     )
     generated_sql = ""
+    next_position = request.position if request.position is not None else widget.position
+    next_grid_width = normalize_overview_widget_grid_width(
+        request.widget_type,
+        request.grid_width if request.grid_width is not None else widget.grid_width,
+    )
+    next_result_mode = normalize_overview_widget_result_mode(request.result_mode)
+    next_active = request.active if request.active is not None else widget.active
 
     try:
         generated_sql = generate_overview_widget_sql(
@@ -790,7 +1141,10 @@ def update_overview_widget(
             datasource_key=request.datasource_key,
             question=request.question,
             sql=generated_sql,
-            position=widget.position,
+            result_mode=next_result_mode,
+            position=next_position,
+            grid_width=next_grid_width,
+            active=next_active,
         )
         validate_overview_widget_result(
             probe_widget,
@@ -829,6 +1183,10 @@ def update_overview_widget(
     widget.datasource_key = request.datasource_key
     widget.question = request.question
     widget.sql = generated_sql
+    widget.result_mode = next_result_mode
+    widget.position = next_position
+    widget.grid_width = next_grid_width
+    widget.active = next_active
     widget.updated_by = user.username
 
     record_admin_audit(
@@ -841,6 +1199,10 @@ def update_overview_widget(
             "label": widget.label,
             "widget_type": widget.widget_type,
             "datasource_key": widget.datasource_key,
+            "result_mode": widget.result_mode,
+            "position": widget.position,
+            "grid_width": widget.grid_width,
+            "active": widget.active,
         },
     )
     session.commit()
@@ -853,6 +1215,87 @@ def update_overview_widget(
 
     return {
         "item": serialize_overview_widget(session, widget),
+    }
+
+
+@router.patch("/overview/widgets/{widget_key}/state")
+def update_overview_widget_state(
+    widget_key: str,
+    request: OverviewWidgetStateRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    widget = get_overview_widget(session, widget_key)
+
+    if widget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Overview widget not found.",
+        )
+
+    widget.active = request.active
+
+    if request.position is not None:
+        widget.position = request.position
+
+    if request.grid_width is not None:
+        widget.grid_width = normalize_overview_widget_grid_width(
+            widget.widget_type,
+            request.grid_width,
+        )
+
+    widget.updated_by = user.username
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="overview_widget.state",
+        resource_type="overview_widget",
+        resource_id=widget.widget_key,
+        details={
+            "position": widget.position,
+            "grid_width": widget.grid_width,
+            "active": widget.active,
+        },
+    )
+    session.commit()
+
+    return {
+        "item": serialize_overview_widget_config(widget),
+    }
+
+
+@router.delete("/overview/widgets/{widget_key}")
+def delete_overview_widget(
+    widget_key: str,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    widget = get_overview_widget(session, widget_key)
+
+    if widget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Overview widget not found.",
+        )
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="overview_widget.delete",
+        resource_type="overview_widget",
+        resource_id=widget.widget_key,
+        details={
+            "label": widget.label,
+            "widget_type": widget.widget_type,
+            "datasource_key": widget.datasource_key,
+        },
+    )
+    session.delete(widget)
+    session.commit()
+
+    return {
+        "status": "deleted",
+        "widget_key": widget_key,
     }
 
 

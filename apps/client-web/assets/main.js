@@ -64,6 +64,9 @@ function render(options = {}) {
     document.querySelectorAll("[data-retry-question]").forEach((button) => {
         button.addEventListener("click", retryQuestion);
     });
+    document.querySelectorAll("[data-save-widget]").forEach((button) => {
+        button.addEventListener("click", saveWidgetFromMessage);
+    });
     const input = document.querySelector("#question-input");
     input?.addEventListener("keydown", handleQuestionKeydown);
     input?.focus();
@@ -83,6 +86,7 @@ function renderMessage(message) {
             : message.response?.answer || "";
     const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
     const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
+    const saveNotice = renderSaveNotice(message);
     const progress = message.status === "pending" && message.mode === "investigation" ? renderInvestigationProgress(message) : "";
 
     return `
@@ -92,12 +96,7 @@ function renderMessage(message) {
           <span>Question · ${escapeHtml(formatMode(message.mode))}</span>
           <p>${escapeHtml(message.question)}</p>
         </div>
-        <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
-            <path d="M3 3v5h5" />
-          </svg>
-        </button>
+        ${renderMessageActions(message)}
       </div>
       <div class="answer">
         <span>Answer</span>
@@ -105,9 +104,53 @@ function renderMessage(message) {
       </div>
       ${progress}
       ${mockWarning}
+      ${saveNotice}
       ${meta}
       ${dataTable}
     </article>`;
+}
+
+function renderMessageActions(message) {
+    const saveDisabled = state.pending || message.saveStatus === "saving" || message.saveStatus === "saved";
+    const saveTitle = message.saveStatus === "saved"
+        ? "Saved as widget"
+        : message.saveStatus === "saving"
+            ? "Saving widget"
+            : "Save as widget";
+
+    return `
+    <div class="message-actions">
+      <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
+      </button>
+      ${canSaveWidget(message) ? `
+        <button class="save-widget-button" type="button" data-save-widget="${message.id}" aria-label="Save question as widget" title="${escapeHtml(saveTitle)}" ${saveDisabled ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+            <path d="M17 21v-8H7v8" />
+            <path d="M7 3v5h8" />
+          </svg>
+        </button>` : ""}
+    </div>`;
+}
+
+function canSaveWidget(message) {
+    return message.status === "ok" && Boolean(message.response?.sql?.trim());
+}
+
+function renderSaveNotice(message) {
+    if (message.saveStatus === "saved") {
+        return `<div class="save-notice success" role="status">Saved as inactive widget.</div>`;
+    }
+
+    if (message.saveStatus === "error") {
+        return `<div class="save-notice error" role="alert">${escapeHtml(message.saveError || "Widget could not be saved.")}</div>`;
+    }
+
+    return "";
 }
 
 function renderInvestigationProgress(message) {
@@ -233,6 +276,64 @@ function retryQuestion(event) {
     input.setSelectionRange(input.value.length, input.value.length);
 }
 
+async function saveWidgetFromMessage(event) {
+    const id = Number(event.currentTarget.dataset.saveWidget);
+    const message = state.messages.find((item) => item.id === id);
+    const sql = message?.response?.sql?.trim() || "";
+
+    if (!message || !sql || message.saveStatus === "saving" || message.saveStatus === "saved") {
+        return;
+    }
+
+    message.saveStatus = "saving";
+    message.saveError = "";
+    render();
+
+    try {
+        const response = await fetch("/api/widgets/from-query", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                label: buildWidgetLabel(message.question),
+                widget_type: inferWidgetType(getRows(message.response)),
+                datasource_key: message.response?.metadata?.datasource_id || "default",
+                question: message.question,
+                sql,
+                result_mode: "data",
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(extractErrorMessage(payload));
+        }
+
+        message.saveStatus = "saved";
+    } catch (error) {
+        message.saveStatus = "error";
+        message.saveError = error.message || "Widget could not be saved.";
+    } finally {
+        render();
+    }
+}
+
+function buildWidgetLabel(question) {
+    const compact = question.replace(/\s+/g, " ").trim();
+
+    return compact.length > 64 ? `${compact.slice(0, 61)}...` : compact || "Saved query";
+}
+
+function inferWidgetType(rows) {
+    if (rows.length === 1 && Object.keys(rows[0] || {}).length === 1) {
+        return "scalar";
+    }
+
+    return "table";
+}
+
 function getSelectedMode(form) {
     const value = new FormData(form).get("mode");
 
@@ -261,6 +362,8 @@ async function submitQuestion(event) {
         response: null,
         error: "",
         dataOpen: false,
+        saveStatus: "idle",
+        saveError: "",
         progress: []
     };
     state.nextMessageId += 1;

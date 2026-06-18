@@ -1,5 +1,6 @@
 type Section =
   | "overview"
+  | "widgets"
   | "data-audit"
   | "prompts"
   | "schema-cache"
@@ -47,6 +48,8 @@ type OverviewWidgetResult = {
   columns?: string[];
   rows?: Record<string, unknown>[];
   answer?: string;
+  interpretation?: string;
+  result_mode?: "data" | "interpretation";
   sql?: string;
   error?: string;
 };
@@ -54,17 +57,22 @@ type OverviewWidgetResult = {
 type OverviewWidget = {
   widget_key: string;
   label: string;
-  widget_type: "scalar" | "timeseries";
+  widget_type: "scalar" | "timeseries" | "table";
   datasource_key: string;
   question: string;
   sql: string;
-  result: OverviewWidgetResult;
+  result_mode: "data" | "interpretation";
+  position: number;
+  grid_width: number;
+  active: boolean;
+  result?: OverviewWidgetResult;
 };
 
 type OverviewState = {
   datasources: OverviewDatasource[];
   info_widgets: OverviewWidget[];
   runtime_widget: OverviewWidget | null;
+  table_widgets: OverviewWidget[];
   widgets: OverviewWidget[];
 };
 
@@ -77,7 +85,14 @@ type State = {
   error: string;
   success: string;
   overview: OverviewState | null;
+  overviewWidgetConfigs: OverviewWidget[];
+  overviewWidgetDatasources: OverviewDatasource[];
+  selectedOverviewWidgetKey: string;
   overviewEditorWidgetKey: string | null;
+  overviewPlacementSlot: number | null;
+  overviewLoading: boolean;
+  overviewRefreshing: boolean;
+  overviewTablePages: Record<string, number>;
   dataAudit: any[];
   dataAuditType: string;
   dataAuditOutputClassification: string;
@@ -105,6 +120,7 @@ const app = document.querySelector<HTMLDivElement>("#app");
 
 const sections: Array<{ key: Section; label: string }> = [
   { key: "overview", label: "Overview" },
+  { key: "widgets", label: "Widgets" },
   { key: "data-audit", label: "Data audit" },
   { key: "prompts", label: "Prompts" },
   { key: "schema-cache", label: "Schema cache" },
@@ -126,7 +142,14 @@ const state: State = {
   error: "",
   success: "",
   overview: null,
+  overviewWidgetConfigs: [],
+  overviewWidgetDatasources: [],
+  selectedOverviewWidgetKey: "",
   overviewEditorWidgetKey: null,
+  overviewPlacementSlot: null,
+  overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
+  overviewRefreshing: false,
+  overviewTablePages: {},
   dataAudit: [],
   dataAuditType: "",
   dataAuditOutputClassification: "",
@@ -166,6 +189,12 @@ const outputClassifications = [
   { value: "unknown", label: "Unknown" },
 ];
 
+const OVERVIEW_TABLE_PAGE_SIZE = 10;
+const OVERVIEW_GRID_COLUMNS = 4;
+const OVERVIEW_MIN_GRID_SLOTS = 8;
+const ALLOWED_WIDGET_HTML_TAGS = new Set(["A", "B", "I", "UL", "LI"]);
+const DROPPED_WIDGET_HTML_TAGS = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE", "SVG", "MATH"]);
+
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -173,6 +202,70 @@ function escapeHtml(value: unknown): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function renderWidgetContent(value: unknown): string {
+  const documentFragment = new DOMParser().parseFromString(String(value ?? ""), "text/html");
+
+  return Array.from(documentFragment.body.childNodes)
+    .map(renderWidgetContentNode)
+    .join("");
+}
+
+function renderWidgetContentNode(node: ChildNode): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return escapeHtml(node.textContent || "");
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+
+  const element = node as HTMLElement;
+  const tagName = element.tagName.toUpperCase();
+
+  if (DROPPED_WIDGET_HTML_TAGS.has(tagName)) {
+    return "";
+  }
+
+  const children = Array.from(element.childNodes)
+    .map(renderWidgetContentNode)
+    .join("");
+
+  if (!ALLOWED_WIDGET_HTML_TAGS.has(tagName)) {
+    return children;
+  }
+
+  const tag = tagName.toLowerCase();
+
+  if (tag === "a") {
+    const href = sanitizeWidgetHref(element.getAttribute("href"));
+    return `<a${href ? ` href="${escapeHtml(href)}"` : ""}>${children}</a>`;
+  }
+
+  return `<${tag}>${children}</${tag}>`;
+}
+
+function sanitizeWidgetHref(value: string | null): string {
+  const href = String(value || "")
+    .trim()
+    .replace(/[\u0000-\u001F\u007F\s]+/g, "");
+
+  if (!href) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(href, window.location.origin);
+
+    if (["http:", "https:", "mailto:", "tel:"].includes(parsed.protocol)) {
+      return href;
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
 }
 
 function formatAuditTime(value: unknown): string {
@@ -226,6 +319,8 @@ function logout(): void {
   state.token = null;
   state.username = "";
   state.mustChangePassword = false;
+  state.overviewLoading = false;
+  state.overviewRefreshing = false;
   state.overviewEditorWidgetKey = null;
   localStorage.removeItem("gaard_admin_token");
   localStorage.removeItem("gaard_admin_username");
@@ -264,6 +359,7 @@ function renderLogin(): void {
         body: JSON.stringify({ username: form.get("username"), password: form.get("password") }),
       });
       persistAuth(result.token, result.username, result.must_change_password);
+      state.overviewLoading = !result.must_change_password && state.section === "overview";
       setMessage("success", "");
       render();
       if (!result.must_change_password) await loadCurrentSection();
@@ -305,6 +401,7 @@ function renderPasswordChange(): void {
         }),
       });
       state.mustChangePassword = result.must_change_password;
+      state.overviewLoading = !state.mustChangePassword && state.section === "overview";
       localStorage.setItem("gaard_admin_must_change", String(result.must_change_password));
       setMessage("success", "Password changed.");
       render();
@@ -351,6 +448,7 @@ function renderShell(): void {
       state.section = button.dataset.section as Section;
       state.mobileMenuOpen = false;
       state.overviewEditorWidgetKey = null;
+      state.overviewLoading = state.section === "overview";
       setMessage("success", "");
       render();
       await loadCurrentSection();
@@ -367,6 +465,7 @@ function renderShell(): void {
 
 function renderSection(): string {
   if (state.section === "overview") return renderOverview();
+  if (state.section === "widgets") return renderWidgets();
   if (state.section === "data-audit") return renderDataAudit();
   if (state.section === "prompts") return renderPrompts();
   if (state.section === "schema-cache") return renderSchemaCache();
@@ -382,48 +481,201 @@ function renderSection(): string {
 
 function renderOverview(): string {
   const overview = state.overview;
-  const infoWidgets = overview?.info_widgets || [];
-  const runtimeWidget = overview?.runtime_widget || null;
+  const widgets = overview?.widgets || [];
+  const isLoading = state.overviewLoading || state.overviewRefreshing;
+  const showInitialLoader = isLoading && !overview;
 
   return `
-    <div class="widget-grid">
-      ${infoWidgets.map(renderInfoWidget).join("")}
+    <div class="toolbar overview-toolbar">
+      <div class="refresh-status" aria-live="polite">
+        ${isLoading ? `<span class="spinner" aria-hidden="true"></span><span>Refreshing</span>` : ""}
+      </div>
+      <button class="primary" type="button" id="overview-refresh" ${isLoading ? "disabled" : ""}>Refresh</button>
     </div>
-    ${runtimeWidget ? renderRuntimeWidget(runtimeWidget) : renderStub("Runtime", "No runtime widget configured.")}`;
+    <div class="overview-grid">
+      ${showInitialLoader ? renderOverviewLoading() : renderOverviewGrid(widgets)}
+    </div>`;
 }
 
-function renderInfoWidget(widget: OverviewWidget): string {
+function renderOverviewLoading(): string {
+  return `
+    <section class="overview-loading" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Refreshing</span>
+    </section>`;
+}
+
+function renderOverviewGrid(widgets: OverviewWidget[]): string {
+  const layout = buildOverviewLayout(widgets);
+  const occupiedSlots = Array.from(layout.occupiedSlots);
+  const slotCount = Math.max(
+    OVERVIEW_MIN_GRID_SLOTS,
+    occupiedSlots.length ? Math.max(...occupiedSlots) + 1 : 0
+  );
+
+  return Array.from({ length: slotCount }, (_, slot) => {
+    const widget = layout.widgetSlots.get(slot);
+
+    if (widget) {
+      return renderOverviewGridWidget(widget);
+    }
+
+    if (layout.occupiedSlots.has(slot)) {
+      return "";
+    }
+
+    return renderOverviewEmptySlot(slot);
+  }).join("");
+}
+
+function buildOverviewLayout(widgets: OverviewWidget[]): {
+  widgetSlots: Map<number, OverviewWidget>;
+  occupiedSlots: Set<number>;
+} {
+  const widgetSlots = new Map<number, OverviewWidget>();
+  const occupiedSlots = new Set<number>();
+
+  widgets
+    .filter(widget => widget.active !== false)
+    .sort((left, right) => (left.position || 0) - (right.position || 0))
+    .forEach(widget => {
+      const width = getOverviewWidgetGridWidth(widget);
+      let slot = overviewSlotFromPosition(widget.position);
+
+      while (!canPlaceOverviewWidget(slot, width, occupiedSlots)) {
+        slot += 1;
+      }
+
+      widgetSlots.set(slot, widget);
+
+      for (let offset = 0; offset < width; offset += 1) {
+        occupiedSlots.add(slot + offset);
+      }
+    });
+
+  return { widgetSlots, occupiedSlots };
+}
+
+function canPlaceOverviewWidget(slot: number, width: number, occupiedSlots: Set<number>): boolean {
+  if (slot < 0) {
+    return false;
+  }
+
+  const column = slot % OVERVIEW_GRID_COLUMNS;
+
+  if (column + width > OVERVIEW_GRID_COLUMNS) {
+    return false;
+  }
+
+  for (let offset = 0; offset < width; offset += 1) {
+    if (occupiedSlots.has(slot + offset)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function findAvailableOverviewSlot(slot: number, width: number, occupiedSlots: Set<number>): number {
+  let candidate = Math.max(0, slot);
+
+  while (!canPlaceOverviewWidget(candidate, width, occupiedSlots)) {
+    candidate += 1;
+  }
+
+  return candidate;
+}
+
+function overviewSlotFromPosition(position: unknown): number {
+  const numeric = Number(position);
+
+  if (!Number.isFinite(numeric) || numeric < 10) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(numeric / 10) - 1);
+}
+
+function overviewPositionFromSlot(slot: number): number {
+  return (slot + 1) * 10;
+}
+
+function getOverviewWidgetGridWidth(widget: Pick<OverviewWidget, "widget_type" | "grid_width">): number {
+  const fallback = widget.widget_type === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
+  const width = Number(widget.grid_width || fallback);
+
+  return Math.max(1, Math.min(OVERVIEW_GRID_COLUMNS, Number.isFinite(width) ? Math.floor(width) : fallback));
+}
+
+function renderOverviewGridWidget(widget: OverviewWidget): string {
   const result = widget.result;
-  const value = result.status === "ok" ? result.value ?? "-" : "Error";
+  const width = getOverviewWidgetGridWidth(widget);
 
   return `
-    <section class="widget-card">
-      <div class="widget-card-main">
-        <span>${escapeHtml(widget.label)}</span>
-        <strong>${escapeHtml(value)}</strong>
-      </div>
-      <div class="widget-card-actions">
+    <section class="widget-card overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}" style="grid-column: span ${escapeHtml(width)};">
+      <div class="widget-card-header">
+        <div>
+          <span>${escapeHtml(widget.datasource_key)}</span>
+          <strong>${escapeHtml(widget.label)}</strong>
+        </div>
         ${renderEditWidgetButton(widget.widget_key)}
       </div>
+      <div class="widget-card-main">
+        ${renderOverviewWidgetBody(widget, result)}
+      </div>
     </section>`;
 }
 
-function renderRuntimeWidget(widget: OverviewWidget): string {
-  const result = widget.result;
+function renderOverviewWidgetBody(widget: OverviewWidget, result?: OverviewWidgetResult): string {
+  if (!result) {
+    return `<div class="empty-state">No data yet.</div>`;
+  }
+
+  if (result.status !== "ok") {
+    return `<div class="error">${escapeHtml(result.error || "Widget query failed.")}</div>`;
+  }
+
+  if ((result.result_mode || widget.result_mode) === "interpretation") {
+    const interpretation = result.interpretation || result.answer || result.value || "-";
+    return `<div class="widget-card-value widget-card-interpretation">${renderWidgetContent(interpretation)}</div>`;
+  }
+
+  if (widget.widget_type === "scalar") {
+    return `<div class="widget-card-value">${renderWidgetContent(result.value ?? "-")}</div>`;
+  }
+
+  if (widget.widget_type === "table") {
+    return renderOverviewTable(widget.widget_key, result);
+  }
+
+  return renderTimeSeriesChart(result);
+}
+
+function renderOverviewEmptySlot(slot: number): string {
+  return `
+    <section class="overview-empty-slot">
+      <button type="button" data-overview-empty-slot="${escapeHtml(slot)}" aria-label="Add widget to slot ${escapeHtml(slot + 1)}">+</button>
+      ${state.overviewPlacementSlot === slot ? renderOverviewPlacementPanel(slot) : ""}
+    </section>`;
+}
+
+function renderOverviewPlacementPanel(slot: number): string {
+  const availableWidgets = state.overviewWidgetConfigs.filter(widget => widget.active === false);
 
   return `
-    <section class="panel runtime-widget">
-      <div class="panel-header">
-        <h2>${escapeHtml(widget.label)}</h2>
-        <div class="panel-actions">
-          <span class="badge">${escapeHtml(widget.datasource_key)}</span>
-          ${renderEditWidgetButton(widget.widget_key)}
-        </div>
+    <div class="overview-placement-panel">
+      <label>Widget
+        <select data-overview-placement-select="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>
+          ${availableWidgets.length
+            ? availableWidgets.map(widget => `<option value="${escapeHtml(widget.widget_key)}">${escapeHtml(widget.label)} (${escapeHtml(widget.widget_key)}, ${escapeHtml(getOverviewWidgetGridWidth(widget))} cols)</option>`).join("")
+            : `<option>No inactive widgets</option>`}
+        </select>
+      </label>
+      <div class="button-row">
+        <button type="button" data-overview-place-widget="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>Add selected</button>
+        <button type="button" class="primary" data-overview-new-widget="${escapeHtml(slot)}">New widget</button>
       </div>
-      <div class="panel-body">
-        ${result.status === "ok" ? renderTimeSeriesChart(result) : `<div class="error">${escapeHtml(result.error || "Widget query failed.")}</div>`}
-      </div>
-    </section>`;
+    </div>`;
 }
 
 function renderEditWidgetButton(widgetKey: string): string {
@@ -452,11 +704,15 @@ function renderOverviewWidgetModal(): string {
           <button type="button" data-close-overview-widget>Close</button>
         </div>
         <form class="form-grid" data-overview-widget-form="${escapeHtml(widget.widget_key)}">
+        <input type="hidden" name="position" value="${escapeHtml(widget.position || 100)}" />
+        <input type="hidden" name="grid_width" value="${escapeHtml(getOverviewWidgetGridWidth(widget))}" />
+        <input type="hidden" name="active" value="${escapeHtml(widget.active !== false ? "true" : "false")}" />
         <label>Label<input name="label" value="${escapeHtml(widget.label)}" /></label>
         <div class="subgrid">
           <label>Type<select name="widget_type">${renderWidgetTypeOptions(widget.widget_type)}</select></label>
           <label>Datasource<select name="datasource_key">${renderOverviewDatasourceOptions(widget.datasource_key)}</select></label>
         </div>
+        <label>Result mode<select name="result_mode">${renderOverviewWidgetResultModeOptions(widget.result_mode)}</select></label>
         <label>Question<textarea name="question">${escapeHtml(widget.question)}</textarea></label>
         <label>Generated SQL<textarea class="textarea-small" readonly>${escapeHtml(widget.result?.sql || widget.sql || "")}</textarea></label>
         <div class="form-actions">
@@ -477,13 +733,15 @@ function getOverviewEditorWidget(): OverviewWidget | null {
 }
 
 function renderWidgetTypeOptions(selected: string): string {
-  return ["scalar", "timeseries"]
+  return ["scalar", "timeseries", "table"]
     .map(value => `<option value="${value}" ${value === selected ? "selected" : ""}>${value}</option>`)
     .join("");
 }
 
 function renderOverviewDatasourceOptions(selected: string): string {
-  const datasources = state.overview?.datasources || [];
+  const datasources = state.overviewWidgetDatasources.length
+    ? state.overviewWidgetDatasources
+    : state.overview?.datasources || [];
 
   return datasources
     .map(item => `<option value="${escapeHtml(item.connector_key)}" ${item.connector_key === selected ? "selected" : ""}>${escapeHtml(item.name)} (${escapeHtml(item.connector_key)})</option>`)
@@ -555,6 +813,57 @@ function isNumeric(value: unknown): boolean {
   return value !== null && value !== "" && !Array.isArray(value) && Number.isFinite(Number(value));
 }
 
+function renderOverviewTable(widgetKey: string, result: OverviewWidgetResult): string {
+  const rows = result.rows || [];
+  const columns = result.columns?.length ? result.columns : Object.keys(rows[0] || {});
+
+  if (!columns.length) {
+    return `<div class="empty-state">No data yet.</div>`;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / OVERVIEW_TABLE_PAGE_SIZE));
+  const currentPage = Math.min(
+    Math.max(state.overviewTablePages[widgetKey] || 0, 0),
+    totalPages - 1
+  );
+  const start = currentPage * OVERVIEW_TABLE_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + OVERVIEW_TABLE_PAGE_SIZE);
+
+  if (state.overviewTablePages[widgetKey] !== currentPage) {
+    state.overviewTablePages[widgetKey] = currentPage;
+  }
+
+  return `
+    <div class="table-wrap overview-table-wrap">
+      <table>
+        <thead><tr>${columns.map(column => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${pageRows.length ? pageRows.map(row => `<tr>${columns.map(column => `<td>${formatOverviewTableCell(row[column])}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${escapeHtml(columns.length)}" class="empty-state">No rows.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="table-pagination" aria-label="${escapeHtml(`${widgetKey} pagination`)}">
+      <span class="table-pagination-info">${escapeHtml(rows.length ? `${start + 1}-${Math.min(start + OVERVIEW_TABLE_PAGE_SIZE, rows.length)} of ${rows.length}` : "0 rows")}</span>
+      <div class="button-row">
+        <button type="button" data-overview-table-page="${escapeHtml(widgetKey)}" data-page="${escapeHtml(currentPage - 1)}" ${currentPage === 0 ? "disabled" : ""}>Previous</button>
+        <span class="badge">Page ${escapeHtml(currentPage + 1)} / ${escapeHtml(totalPages)}</span>
+        <button type="button" data-overview-table-page="${escapeHtml(widgetKey)}" data-page="${escapeHtml(currentPage + 1)}" ${currentPage >= totalPages - 1 ? "disabled" : ""}>Next</button>
+      </div>
+    </div>`;
+}
+
+function formatOverviewTableCell(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return `<span class="muted">-</span>`;
+  }
+
+  if (typeof value === "object") {
+    return `<code>${escapeHtml(JSON.stringify(value))}</code>`;
+  }
+
+  return renderWidgetContent(value);
+}
+
 function renderDataAudit(): string {
   return `
     <section class="panel">
@@ -608,6 +917,137 @@ function renderOutputClassificationOptions(): string {
   return outputClassifications
     .map(item => `<option value="${escapeHtml(item.value)}" ${state.dataAuditOutputClassification === item.value ? "selected" : ""}>${escapeHtml(item.label)}</option>`)
     .join("");
+}
+
+function renderWidgets(): string {
+  const selectedWidget = getSelectedOverviewWidgetConfig();
+  const creating = state.selectedOverviewWidgetKey === "__new__";
+
+  return `
+    <div class="split widgets-editor">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Widgets</h2>
+          <button type="button" id="new-overview-widget">New</button>
+        </div>
+        <div class="panel-body list widget-config-list">
+          ${state.overviewWidgetConfigs.length
+            ? state.overviewWidgetConfigs.map(widget => renderWidgetConfigListItem(widget, selectedWidget?.widget_key === widget.widget_key && !creating)).join("")
+            : `<p class="muted">No widgets defined.</p>`}
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>${creating ? "New widget" : escapeHtml(selectedWidget?.label || "Widget settings")}</h2>
+        </div>
+        <div class="panel-body">
+          ${creating || selectedWidget ? renderOverviewWidgetSettingsForm(selectedWidget) : `<p class="muted">Select a widget to edit its settings.</p>`}
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWidgetConfigListItem(widget: OverviewWidget, active: boolean): string {
+  return `
+    <div class="widget-config-row ${active ? "active" : ""}">
+      <input type="checkbox" data-overview-widget-active="${escapeHtml(widget.widget_key)}" aria-label="Enable ${escapeHtml(widget.label)}" ${widget.active ? "checked" : ""} />
+      <button class="widget-config-select" type="button" data-overview-widget-select="${escapeHtml(widget.widget_key)}">
+        <strong>${escapeHtml(widget.label)}</strong>
+        <span>${escapeHtml(widget.widget_key)} · ${escapeHtml(widget.widget_type)} · ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))} · ${escapeHtml(formatOverviewWidgetSize(widget))} · slot ${escapeHtml(overviewSlotFromPosition(widget.position) + 1)}</span>
+      </button>
+      <button class="icon-button danger widget-config-delete" type="button" data-overview-widget-delete="${escapeHtml(widget.widget_key)}" aria-label="Delete ${escapeHtml(widget.label)}" title="Delete widget">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 6h18" />
+          <path d="M8 6V4h8v2" />
+          <path d="M19 6l-1 14H6L5 6" />
+          <path d="M10 11v5" />
+          <path d="M14 11v5" />
+        </svg>
+      </button>
+    </div>`;
+}
+
+function getSelectedOverviewWidgetConfig(): OverviewWidget | null {
+  if (state.selectedOverviewWidgetKey === "__new__") {
+    return null;
+  }
+
+  return state.overviewWidgetConfigs.find(widget => widget.widget_key === state.selectedOverviewWidgetKey)
+    || state.overviewWidgetConfigs[0]
+    || null;
+}
+
+function getOverviewWidgetFormPosition(widget: OverviewWidget | null): number {
+  if (widget) {
+    return widget.position || 100;
+  }
+
+  return overviewPositionFromSlot(state.overviewPlacementSlot ?? 0);
+}
+
+function formatOverviewWidgetSize(widget: Pick<OverviewWidget, "widget_type" | "grid_width">): string {
+  return `${getOverviewWidgetGridWidth(widget)}/${OVERVIEW_GRID_COLUMNS}`;
+}
+
+function getDefaultOverviewWidgetGridWidth(widgetType: string): number {
+  return widgetType === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
+}
+
+function renderOverviewWidgetSizeOptions(selected: number): string {
+  const options = [
+    { value: 1, label: "Small (1 col)" },
+    { value: 2, label: "Medium (2 cols)" },
+    { value: 3, label: "Wide (3 cols)" },
+    { value: 4, label: "Full (4 cols)" },
+  ];
+
+  return options
+    .map(option => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+    .join("");
+}
+
+function renderOverviewWidgetResultModeOptions(selected: string = "data"): string {
+  const options = [
+    { value: "data", label: "Zwróć dane" },
+    { value: "interpretation", label: "Interpretuj dane" },
+  ];
+
+  return options
+    .map(option => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+    .join("");
+}
+
+function formatOverviewWidgetResultMode(value: string = "data"): string {
+  return value === "interpretation" ? "interpretation" : "data";
+}
+
+function renderOverviewWidgetSettingsForm(widget: OverviewWidget | null): string {
+  const creating = widget === null;
+  const position = getOverviewWidgetFormPosition(widget);
+  const widgetType = widget?.widget_type || "scalar";
+  const gridWidth = widget ? getOverviewWidgetGridWidth(widget) : getDefaultOverviewWidgetGridWidth(widgetType);
+  const resultMode = widget?.result_mode || "data";
+
+  return `
+    <form class="form-grid" id="overview-widget-settings-form" data-widget-mode="${creating ? "create" : "update"}" data-widget-key="${escapeHtml(widget?.widget_key || "")}">
+      ${creating ? `<label>Widget key<input name="widget_key" value="" placeholder="custom_widget_key" /></label>` : `<input type="hidden" name="widget_key" value="${escapeHtml(widget?.widget_key || "")}" />`}
+      <label>Label<input name="label" value="${escapeHtml(widget?.label || "")}" /></label>
+      <div class="subgrid">
+        <label>Type<select name="widget_type">${renderWidgetTypeOptions(widget?.widget_type || "scalar")}</select></label>
+        <label>Datasource<select name="datasource_key">${renderOverviewDatasourceOptions(widget?.datasource_key || "metadata-db")}</select></label>
+      </div>
+      <div class="subgrid">
+        <label>Position<input name="position" type="number" min="10" step="10" value="${escapeHtml(position)}" /></label>
+        <label>Size<select name="grid_width">${renderOverviewWidgetSizeOptions(gridWidth)}</select></label>
+      </div>
+      <label>Result mode<select name="result_mode">${renderOverviewWidgetResultModeOptions(resultMode)}</select></label>
+      <label class="inline-check"><input name="active" type="checkbox" ${widget?.active || creating ? "checked" : ""} /> Enabled</label>
+      <label>Question<textarea name="question">${escapeHtml(widget?.question || "")}</textarea></label>
+      <label>Generated SQL<textarea class="textarea-small" readonly>${escapeHtml(widget?.sql || "")}</textarea></label>
+      <div class="form-actions">
+        <button class="primary" type="submit">${creating ? "Create and refresh" : "Save and refresh"}</button>
+      </div>
+    </form>`;
 }
 
 function renderPrompts(): string {
@@ -960,6 +1400,50 @@ function renderAdminAudit(): string {
 }
 
 function attachSectionHandlers(): void {
+  document.querySelector<HTMLButtonElement>("#overview-refresh")?.addEventListener("click", refreshOverview);
+  document.querySelectorAll<HTMLButtonElement>("[data-overview-empty-slot]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const slot = Number(button.dataset.overviewEmptySlot || 0);
+
+      state.overviewPlacementSlot = state.overviewPlacementSlot === slot ? null : slot;
+
+      if (!state.overviewWidgetConfigs.length) {
+        await loadOverviewWidgetConfigs(false);
+      }
+
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-overview-place-widget]").forEach(button => {
+    button.addEventListener("click", placeOverviewWidget);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-overview-new-widget]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.overviewPlacementSlot = Number(button.dataset.overviewNewWidget || 0);
+      state.selectedOverviewWidgetKey = "__new__";
+      state.section = "widgets";
+      render();
+    });
+  });
+  document.querySelector("#new-overview-widget")?.addEventListener("click", () => {
+    state.selectedOverviewWidgetKey = "__new__";
+    state.overviewPlacementSlot = null;
+    render();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-overview-widget-select]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.selectedOverviewWidgetKey = button.dataset.overviewWidgetSelect || "";
+      state.overviewPlacementSlot = null;
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLInputElement>("[data-overview-widget-active]").forEach(input => {
+    input.addEventListener("change", updateOverviewWidgetActive);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-overview-widget-delete]").forEach(button => {
+    button.addEventListener("click", deleteOverviewWidget);
+  });
+  document.querySelector<HTMLFormElement>("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
   document.querySelectorAll<HTMLButtonElement>("[data-edit-overview-widget]").forEach(button => {
     button.addEventListener("click", () => {
       state.overviewEditorWidgetKey = button.dataset.editOverviewWidget || null;
@@ -980,6 +1464,17 @@ function attachSectionHandlers(): void {
   });
   document.querySelectorAll<HTMLFormElement>("[data-overview-widget-form]").forEach(form => {
     form.addEventListener("submit", saveOverviewWidget);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-overview-table-page]").forEach(button => {
+    button.addEventListener("click", () => {
+      const widgetKey = button.dataset.overviewTablePage;
+      const page = Number(button.dataset.page || 0);
+
+      if (!widgetKey || !Number.isFinite(page)) return;
+
+      state.overviewTablePages[widgetKey] = page;
+      render();
+    });
   });
   document.querySelector<HTMLFormElement>("#data-audit-filter-form")?.addEventListener("submit", loadDataAuditForFilters);
   document.querySelector<HTMLFormElement>("#retention-form")?.addEventListener("submit", saveRetention);
@@ -1095,11 +1590,164 @@ async function saveOverviewWidget(event: Event): Promise<void> {
         widget_type: form.get("widget_type"),
         datasource_key: form.get("datasource_key"),
         question: form.get("question"),
+        result_mode: form.get("result_mode") || "data",
+        position: Number(form.get("position") || 100),
+        grid_width: Number(form.get("grid_width") || 1),
+        active: form.get("active") !== "false",
       }),
     });
     setMessage("success", "Overview widget saved.");
     state.overviewEditorWidgetKey = null;
     await loadOverview();
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+    render();
+  }
+}
+
+async function placeOverviewWidget(event: Event): Promise<void> {
+  const button = event.currentTarget as HTMLButtonElement;
+  const slot = Number(button.dataset.overviewPlaceWidget || 0);
+  const select = document.querySelector<HTMLSelectElement>(`[data-overview-placement-select="${slot}"]`);
+  const widgetKey = select?.value || "";
+  const widget = state.overviewWidgetConfigs.find(item => item.widget_key === widgetKey);
+
+  if (!widgetKey || !widget) return;
+
+  try {
+    const width = getOverviewWidgetGridWidth(widget);
+    const layout = buildOverviewLayout(state.overview?.widgets || []);
+    const actualSlot = findAvailableOverviewSlot(slot, width, layout.occupiedSlots);
+
+    await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(actualSlot), width);
+    state.overviewPlacementSlot = null;
+    setMessage("success", "Widget added to overview.");
+    await loadOverview();
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+    render();
+  }
+}
+
+async function updateOverviewWidgetActive(event: Event): Promise<void> {
+  const input = event.currentTarget as HTMLInputElement;
+  const widgetKey = input.dataset.overviewWidgetActive || "";
+  const widget = state.overviewWidgetConfigs.find(item => item.widget_key === widgetKey);
+
+  if (!widget) return;
+
+  try {
+    await updateOverviewWidgetState(widgetKey, input.checked, widget.position, getOverviewWidgetGridWidth(widget));
+    setMessage("success", input.checked ? "Widget enabled." : "Widget disabled.");
+    await loadOverviewWidgetConfigs(false);
+    if (state.section === "overview") {
+      await loadOverview();
+    } else {
+      render();
+    }
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+    await loadOverviewWidgetConfigs();
+  }
+}
+
+async function deleteOverviewWidget(event: Event): Promise<void> {
+  const button = event.currentTarget as HTMLButtonElement;
+  const widgetKey = button.dataset.overviewWidgetDelete || "";
+  const widget = state.overviewWidgetConfigs.find(item => item.widget_key === widgetKey);
+
+  if (!widgetKey || !widget) return;
+
+  if (!window.confirm(`Delete widget "${widget.label}"?`)) {
+    return;
+  }
+
+  try {
+    await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
+      method: "DELETE",
+    });
+    setMessage("success", "Widget deleted.");
+
+    if (state.selectedOverviewWidgetKey === widgetKey) {
+      state.selectedOverviewWidgetKey = "";
+    }
+
+    if (state.overviewEditorWidgetKey === widgetKey) {
+      state.overviewEditorWidgetKey = null;
+    }
+
+    await loadOverviewWidgetConfigs(false);
+    await loadOverview();
+
+    if (state.section !== "overview") {
+      render();
+    }
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+    render();
+  }
+}
+
+async function updateOverviewWidgetState(
+  widgetKey: string,
+  active: boolean,
+  position: number,
+  gridWidth?: number,
+): Promise<void> {
+  await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}/state`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      active,
+      position,
+      grid_width: gridWidth,
+    }),
+  });
+}
+
+async function saveOverviewWidgetSettings(event: Event): Promise<void> {
+  event.preventDefault();
+  const formElement = event.currentTarget as HTMLFormElement;
+  const mode = formElement.dataset.widgetMode || "update";
+  const form = new FormData(formElement);
+  const widgetKey = String(form.get("widget_key") || "").trim();
+
+  if (!widgetKey) return;
+
+  const payload = {
+    widget_key: widgetKey,
+    label: form.get("label"),
+    widget_type: form.get("widget_type"),
+    datasource_key: form.get("datasource_key"),
+    question: form.get("question"),
+    result_mode: form.get("result_mode") || "data",
+    position: Number(form.get("position") || 100),
+    grid_width: Number(form.get("grid_width") || 1),
+    active: form.get("active") === "on",
+  };
+
+  try {
+    if (mode === "create") {
+      await api("/api/v1/admin/overview/widgets", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      state.selectedOverviewWidgetKey = widgetKey;
+      state.overviewPlacementSlot = null;
+      setMessage("success", "Widget created.");
+    } else {
+      await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      setMessage("success", "Widget saved.");
+    }
+
+    await loadOverviewWidgetConfigs(false);
+    await loadOverview();
+
+    if (state.section !== "overview") {
+      render();
+    }
   } catch (error) {
     setMessage("error", (error as Error).message);
     render();
@@ -1445,6 +2093,7 @@ async function invalidateSchemaCache(): Promise<void> {
 async function loadCurrentSection(): Promise<void> {
   if (!state.token || state.mustChangePassword) return;
   if (state.section === "overview") await loadOverview();
+  if (state.section === "widgets") await loadOverviewWidgetConfigs();
   if (state.section === "data-audit") await loadDataAudit();
   if (state.section === "prompts") await loadPrompts();
   if (state.section === "schema-cache") await loadSchemaCache();
@@ -1457,8 +2106,59 @@ async function loadCurrentSection(): Promise<void> {
 }
 
 async function loadOverview(): Promise<void> {
-  state.overview = await api("/api/v1/admin/overview");
+  state.overviewLoading = true;
+  if (state.section === "overview") {
+    render();
+  }
+
+  try {
+    const [overview, widgetConfig] = await Promise.all([
+      api<OverviewState>("/api/v1/admin/overview"),
+      api<{ items: OverviewWidget[]; datasources: OverviewDatasource[] }>("/api/v1/admin/overview/widgets"),
+    ]);
+    state.overview = overview;
+    state.overviewWidgetConfigs = widgetConfig.items || [];
+    state.overviewWidgetDatasources = widgetConfig.datasources || [];
+  } finally {
+    state.overviewLoading = false;
+    if (state.section === "overview") {
+      render();
+    }
+  }
+}
+
+async function loadOverviewWidgetConfigs(shouldRender = true): Promise<void> {
+  const payload = await api<{ items: OverviewWidget[]; datasources: OverviewDatasource[] }>("/api/v1/admin/overview/widgets");
+  state.overviewWidgetConfigs = payload.items || [];
+  state.overviewWidgetDatasources = payload.datasources || [];
+
+  if (
+    state.selectedOverviewWidgetKey !== "__new__" &&
+    !state.overviewWidgetConfigs.some(widget => widget.widget_key === state.selectedOverviewWidgetKey)
+  ) {
+    state.selectedOverviewWidgetKey = state.overviewWidgetConfigs[0]?.widget_key || "";
+  }
+
+  if (shouldRender) {
+    render();
+  }
+}
+
+async function refreshOverview(): Promise<void> {
+  if (state.overviewRefreshing || state.overviewLoading) return;
+
+  state.overviewRefreshing = true;
+  setMessage("success", "");
   render();
+
+  try {
+    state.overview = await api("/api/v1/admin/overview");
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+  } finally {
+    state.overviewRefreshing = false;
+    render();
+  }
 }
 
 async function loadDataAudit(): Promise<void> {
@@ -1557,6 +2257,7 @@ async function bootstrap(): Promise<void> {
     render();
     await loadCurrentSection();
   } catch (error) {
+    state.overviewLoading = false;
     setMessage("error", (error as Error).message);
     render();
   }

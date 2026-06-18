@@ -119,6 +119,9 @@ BUSINESS_LOGIC_LEARNING_STATUS_SKIPPED = "skipped"
 
 OVERVIEW_WIDGET_SCALAR = "scalar"
 OVERVIEW_WIDGET_TIMESERIES = "timeseries"
+OVERVIEW_WIDGET_TABLE = "table"
+OVERVIEW_WIDGET_RESULT_DATA = "data"
+OVERVIEW_WIDGET_RESULT_INTERPRETATION = "interpretation"
 
 LLM_SETTING_PROVIDER = "gaard_llm_provider"
 LLM_SETTING_BASE_URL = "gaard_llm_base_url"
@@ -2093,6 +2096,15 @@ def list_overview_widgets(session: Session) -> list[OverviewWidget]:
         session.scalars(
             select(OverviewWidget)
             .where(OverviewWidget.active.is_(True))
+            .order_by(OverviewWidget.position.asc(), OverviewWidget.id.asc())
+        )
+    )
+
+
+def list_all_overview_widgets(session: Session) -> list[OverviewWidget]:
+    return list(
+        session.scalars(
+            select(OverviewWidget)
             .order_by(OverviewWidget.position.asc(), OverviewWidget.id.asc())
         )
     )

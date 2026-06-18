@@ -186,7 +186,9 @@ class OverviewWidget(Base):
     datasource_key: Mapped[str] = mapped_column(String(255), default="metadata-db")
     question: Mapped[str] = mapped_column(Text)
     sql: Mapped[str] = mapped_column(Text, default="")
+    result_mode: Mapped[str] = mapped_column(String(50), default="data")
     position: Mapped[int] = mapped_column(Integer, default=100)
+    grid_width: Mapped[int] = mapped_column(Integer, default=1)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

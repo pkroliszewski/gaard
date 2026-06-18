@@ -30,6 +30,8 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "result_interpretation_mode" in response.text
     assert "output_classification_mode" in response.text
     assert "/api/query/stream" in response.text
+    assert "/api/widgets/from-query" in response.text
+    assert "data-save-widget" in response.text
     assert "data_question" in response.text
 
 
@@ -137,6 +139,66 @@ def test_client_app_proxies_query_mode(monkeypatch) -> None:
         "question": "gdzie uciekajo mi pinionżki",
         "user_id": "client",
         "mode": "investigation",
+    }
+
+
+def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["json"] = json
+            request = httpx.Request("POST", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "item": {
+                        "widget_key": "client_active_patients",
+                        "label": json["label"],
+                        "active": False,
+                    },
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/widgets/from-query",
+        json={
+            "label": "Active patients",
+            "widget_type": "scalar",
+            "datasource_key": "default",
+            "question": "How many active patients?",
+            "sql": "SELECT COUNT(*) AS value FROM patients",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["active"] is False
+    assert captured["url"] == (
+        "http://backend.example/api/v1/admin/overview/widgets/from-query"
+    )
+    assert captured["json"] == {
+        "label": "Active patients",
+        "widget_type": "scalar",
+        "datasource_key": "default",
+        "question": "How many active patients?",
+        "sql": "SELECT COUNT(*) AS value FROM patients",
+        "result_mode": "data",
     }
 
 

@@ -91,7 +91,7 @@ textarea {
 
 .exchange-top {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 10px;
 }
@@ -121,12 +121,19 @@ textarea {
   color: var(--danger);
 }
 
-.retry-button {
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -5px -5px 0 0;
+}
+
+.retry-button,
+.save-widget-button {
   width: 28px;
   height: 28px;
   display: inline-grid;
   place-items: center;
-  margin: -5px -5px 0 0;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
@@ -136,24 +143,29 @@ textarea {
 }
 
 .retry-button:hover,
-.retry-button:focus-visible {
+.retry-button:focus-visible,
+.save-widget-button:hover,
+.save-widget-button:focus-visible {
   border-color: rgba(23, 107, 135, 0.18);
   background: rgba(23, 107, 135, 0.06);
   color: var(--accent);
   opacity: 0.78;
 }
 
-.retry-button:focus-visible {
+.retry-button:focus-visible,
+.save-widget-button:focus-visible {
   outline: 2px solid rgba(23, 107, 135, 0.22);
   outline-offset: 2px;
 }
 
-.retry-button:disabled {
+.retry-button:disabled,
+.save-widget-button:disabled {
   cursor: progress;
   opacity: 0.16;
 }
 
-.retry-button svg {
+.retry-button svg,
+.save-widget-button svg {
   width: 15px;
   height: 15px;
   fill: none;
@@ -161,6 +173,26 @@ textarea {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.save-notice {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.save-notice.success {
+  border: 1px solid rgba(36, 116, 90, 0.26);
+  background: #eef9f4;
+  color: #205f4d;
+}
+
+.save-notice.error {
+  border: 1px solid rgba(163, 59, 59, 0.24);
+  background: #fff1f1;
+  color: var(--danger);
 }
 
 .mock-warning {

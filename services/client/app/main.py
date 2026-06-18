@@ -34,6 +34,16 @@ class ClientQueryRequest(BaseModel):
     mode: str = "sql"
 
 
+class ClientWidgetFromQueryRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=255)
+    widget_type: str = "table"
+    datasource_key: str = "default"
+    question: str = Field(min_length=1)
+    sql: str = Field(min_length=1)
+    result_mode: str = "data"
+    backend_url: str | None = None
+
+
 def get_default_backend_url() -> str:
     return os.getenv("GAARD_CLIENT_BACKEND_URL", DEFAULT_BACKEND_URL).rstrip("/")
 
@@ -79,6 +89,41 @@ async def query_backend(request: ClientQueryRequest) -> dict[str, Any]:
                     "question": request.question,
                     "user_id": "client",
                     "mode": request.mode,
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return response.json()
+
+
+@app.post("/api/widgets/from-query")
+async def create_widget_from_query(request: ClientWidgetFromQueryRequest) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    widget_url = f"{backend_url}/api/v1/admin/overview/widgets/from-query"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                widget_url,
+                json={
+                    "label": request.label,
+                    "widget_type": request.widget_type,
+                    "datasource_key": request.datasource_key,
+                    "question": request.question,
+                    "sql": request.sql,
+                    "result_mode": request.result_mode,
                 },
             )
     except httpx.HTTPError as exc:

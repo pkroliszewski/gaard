@@ -578,9 +578,34 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
         "schema_cache_ttl",
         "license_edition",
     ]
-    assert body["runtime_widget"]["widget_key"] == "runtime_daily_queries"
+    assert body["runtime_widget"] is None
+    assert [item["widget_key"] for item in body["table_widgets"]] == [
+        "prompt_templates_table",
+    ]
+    assert body["info_widgets"][0]["grid_width"] == 1
+    assert body["table_widgets"][0]["grid_width"] == 4
+    assert body["table_widgets"][0]["result"]["status"] == "ok"
+    assert body["table_widgets"][0]["result"]["columns"] == [
+        "prompt_key",
+        "name",
+        "version",
+        "active",
+    ]
+    assert len(body["table_widgets"][0]["result"]["rows"]) >= 1
     assert body["info_widgets"][0]["result"]["status"] == "ok"
     assert body["info_widgets"][0]["sql"] == "SELECT COUNT(*) AS value FROM prompt_templates"
+
+    widgets_response = admin_client.get(
+        "/api/v1/admin/overview/widgets",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert widgets_response.status_code == 200
+    widgets = widgets_response.json()["items"]
+    runtime_widget = next(
+        item for item in widgets if item["widget_key"] == "runtime_daily_queries"
+    )
+    assert runtime_widget["active"] is False
+    assert runtime_widget["grid_width"] == 4
 
     second_response = admin_client.get(
         "/api/v1/admin/overview",
@@ -646,6 +671,119 @@ def test_overview_widget_can_be_updated(admin_client: TestClient) -> None:
     assert audit_items[0]["sql"] == "SELECT 1 AS value"
     assert audit_items[0]["metadata"]["operation"] == "overview_widget.update"
     assert audit_items[0]["metadata"]["widget_key"] == "prompts_count"
+
+
+def test_overview_widget_can_use_table_type(admin_client: TestClient) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    update_response = admin_client.put(
+        "/api/v1/admin/overview/widgets/prompt_templates_table",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "label": "Prompt template rows",
+            "widget_type": "table",
+            "datasource_key": "metadata-db",
+            "question": "Return rows for prompt templates.",
+            "grid_width": 3,
+        },
+    )
+
+    assert update_response.status_code == 200
+    item = update_response.json()["item"]
+    assert item["widget_type"] == "table"
+    assert item["grid_width"] == 3
+    assert item["result"]["status"] == "ok"
+    assert item["result"]["columns"] == ["value"]
+    assert item["result"]["rows"] == [{"value": 1}]
+
+
+def test_overview_widget_can_be_saved_from_query_and_deleted(
+    admin_client: TestClient,
+) -> None:
+    create_response = admin_client.post(
+        "/api/v1/admin/overview/widgets/from-query",
+        json={
+            "label": "Prompt count from client",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "How many prompts are configured?",
+            "sql": "SELECT COUNT(*) AS value FROM prompt_templates",
+        },
+    )
+
+    assert create_response.status_code == 200
+    created_item = create_response.json()["item"]
+    widget_key = created_item["widget_key"]
+    assert widget_key.startswith("client_prompt_count_from_client")
+    assert created_item["active"] is False
+    assert created_item["result_mode"] == "data"
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    overview_response = admin_client.get(
+        "/api/v1/admin/overview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert overview_response.status_code == 200
+    assert all(
+        item["widget_key"] != widget_key
+        for item in overview_response.json()["widgets"]
+    )
+
+    widgets_response = admin_client.get(
+        "/api/v1/admin/overview/widgets",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert widgets_response.status_code == 200
+    assert any(
+        item["widget_key"] == widget_key
+        for item in widgets_response.json()["items"]
+    )
+
+    delete_response = admin_client.delete(
+        f"/api/v1/admin/overview/widgets/{widget_key}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "deleted"
+
+    widgets_after_delete = admin_client.get(
+        "/api/v1/admin/overview/widgets",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert widgets_after_delete.status_code == 200
+    assert all(
+        item["widget_key"] != widget_key
+        for item in widgets_after_delete.json()["items"]
+    )
+
+
+def test_overview_widget_can_return_interpreted_result(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    update_response = admin_client.put(
+        "/api/v1/admin/overview/widgets/prompts_count",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "label": "Prompt templates",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "Return one value for the prompt template count.",
+            "result_mode": "interpretation",
+        },
+    )
+
+    assert update_response.status_code == 200
+    item = update_response.json()["item"]
+    assert item["result_mode"] == "interpretation"
+    assert item["result"]["result_mode"] == "interpretation"
+    assert item["result"]["answer"].startswith("Zapytanie zwróciło wynik:")
+    assert item["result"]["value"] == item["result"]["answer"]
 
 
 def test_overview_widget_sql_error_creates_metadata_business_logic_suggestion(

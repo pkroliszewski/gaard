@@ -279,7 +279,9 @@ def seed_overview_widgets(session: Session) -> None:
                 "Return exactly one numeric value."
             ),
             "sql": "SELECT COUNT(*) AS value FROM prompt_templates",
+            "result_mode": "data",
             "position": 10,
+            "grid_width": 1,
         },
         {
             "widget_key": "audit_retention",
@@ -295,7 +297,9 @@ def seed_overview_widgets(session: Session) -> None:
                 "FROM admin_settings "
                 "WHERE key = 'data_query_audit_retention_days'"
             ),
+            "result_mode": "data",
             "position": 20,
+            "grid_width": 1,
         },
         {
             "widget_key": "schema_cache_ttl",
@@ -311,7 +315,9 @@ def seed_overview_widgets(session: Session) -> None:
                 "FROM admin_settings "
                 "WHERE key = 'schema_cache_ttl_seconds'"
             ),
+            "result_mode": "data",
             "position": 30,
+            "grid_width": 1,
         },
         {
             "widget_key": "license_edition",
@@ -323,7 +329,9 @@ def seed_overview_widgets(session: Session) -> None:
                 "Return exactly one text value."
             ),
             "sql": "SELECT value AS value FROM admin_settings WHERE key = 'license_edition'",
+            "result_mode": "data",
             "position": 40,
+            "grid_width": 1,
         },
         {
             "widget_key": "runtime_daily_queries",
@@ -336,7 +344,28 @@ def seed_overview_widgets(session: Session) -> None:
                 "ordered by day and datasource_id."
             ),
             "sql": runtime_sql,
+            "result_mode": "data",
             "position": 100,
+            "grid_width": 4,
+            "active": False,
+        },
+        {
+            "widget_key": "prompt_templates_table",
+            "label": "Prompt templates",
+            "widget_type": "table",
+            "datasource_key": "metadata-db",
+            "question": (
+                "List configured prompt templates with prompt_key, name, version and "
+                "active status, ordered by prompt_key."
+            ),
+            "sql": (
+                "SELECT prompt_key, name, version, active "
+                "FROM prompt_templates "
+                "ORDER BY prompt_key"
+            ),
+            "result_mode": "data",
+            "position": 50,
+            "grid_width": 4,
         },
     ]
 
@@ -349,6 +378,18 @@ def seed_overview_widgets(session: Session) -> None:
             session.add(OverviewWidget(**item))
         elif not existing.sql and existing.updated_by == "system":
             existing.sql = str(item["sql"])
+
+        if (
+            existing is not None
+            and item["widget_key"] == "runtime_daily_queries"
+            and existing.updated_by == "system"
+        ):
+            existing.active = False
+
+        if existing is not None and existing.updated_by == "system":
+            existing.position = int(item["position"])
+            existing.grid_width = int(item["grid_width"])
+            existing.result_mode = str(item["result_mode"])
 
 
 def ensure_data_query_audit_schema(engine: Engine) -> None:
@@ -434,6 +475,21 @@ def ensure_overview_widget_schema(engine: Engine) -> None:
         with engine.begin() as connection:
             connection.execute(
                 text("ALTER TABLE overview_widgets ADD COLUMN sql TEXT DEFAULT ''")
+            )
+
+    if "grid_width" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE overview_widgets ADD COLUMN grid_width INTEGER DEFAULT 1")
+            )
+
+    if "result_mode" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE overview_widgets "
+                    "ADD COLUMN result_mode VARCHAR(50) DEFAULT 'data'"
+                )
             )
 
 
