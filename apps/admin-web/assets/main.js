@@ -232,6 +232,15 @@ async function api(path, options = {}) {
 function setMessage(type, value) {
     state.error = type === "error" ? value : "";
     state.success = type === "success" ? value : "";
+    const region = document.querySelector("#message-region");
+    if (region) {
+        region.innerHTML = renderMessages();
+    }
+}
+function renderMessages() {
+    return `
+          ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
+          ${state.success ? `<div class="success">${escapeHtml(state.success)}</div>` : ""}`;
 }
 function persistAuth(token, username, mustChangePassword) {
     state.token = token;
@@ -358,8 +367,7 @@ function renderShell() {
           <div class="topbar-actions"><span>${escapeHtml(state.username)}</span><button id="top-logout-button">Sign out</button></div>
         </header>
         <section class="content">
-          ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
-          ${state.success ? `<div class="success">${escapeHtml(state.success)}</div>` : ""}
+          <div id="message-region">${renderMessages()}</div>
           ${renderSection()}
         </section>
       </main>
@@ -920,8 +928,8 @@ function renderDatasourceForm(connector) {
       <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
       <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
       <div class="subgrid">
-        <label>Database type<select name="database_type" ${disabled}>${renderTypeOptions(connector?.database_type || "sqlite")}</select></label>
-        <label>SQL dialect<select name="sql_dialect" ${disabled}>${renderTypeOptions(connector?.sql_dialect || "sqlite")}</select></label>
+        <label>Database type<select name="database_type" ${disabled}>${renderDatabaseTypeOptions(connector?.database_type || "sqlite")}</select></label>
+        <label>SQL dialect<select name="sql_dialect" ${disabled}>${renderSqlDialectOptions(connector?.sql_dialect || "sqlite")}</select></label>
       </div>
       <label>Database URL<input name="database_url" ${disabled} value="${escapeHtml(connector?.database_url || "sqlite:///./examples/medical-poc/demo.db")}" /></label>
       <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
@@ -933,10 +941,17 @@ function renderDatasourceForm(connector) {
       </div>
     </form>`;
 }
-function renderTypeOptions(selected) {
+function renderDatabaseTypeOptions(selected) {
     return [
         "sqlite",
         "postgresql",
+        "mysql"
+    ].map((value)=>`<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
+}
+function renderSqlDialectOptions(selected) {
+    return [
+        "sqlite",
+        "postgres",
         "mysql"
     ].map((value)=>`<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
 }
@@ -1384,7 +1399,6 @@ async function saveOverviewWidget(event) {
         await loadOverview();
     } catch (error) {
         setMessage("error", error.message);
-        render();
     }
 }
 async function placeOverviewWidget(event) {
@@ -1506,7 +1520,6 @@ async function saveOverviewWidgetSettings(event) {
         }
     } catch (error) {
         setMessage("error", error.message);
-        render();
     }
 }
 async function updateBusinessLogicSuggestion(event) {

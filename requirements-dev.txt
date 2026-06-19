@@ -6,6 +6,6 @@
 pytest
 ruff
 mypy
-psycopg
+psycopg2
 pymysql
 

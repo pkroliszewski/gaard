@@ -29,7 +29,7 @@ type DatasourceConnector = {
   database_type: "sqlite" | "postgresql" | "mysql";
   database_url: string;
   masked_database_url: string;
-  sql_dialect: "sqlite" | "postgresql" | "mysql";
+  sql_dialect: "sqlite" | "postgres" | "mysql";
   active: boolean;
   system_managed: boolean;
 };
@@ -304,6 +304,17 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 function setMessage(type: "error" | "success", value: string): void {
   state.error = type === "error" ? value : "";
   state.success = type === "success" ? value : "";
+  const region = document.querySelector<HTMLElement>("#message-region");
+
+  if (region) {
+    region.innerHTML = renderMessages();
+  }
+}
+
+function renderMessages(): string {
+  return `
+          ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
+          ${state.success ? `<div class="success">${escapeHtml(state.success)}</div>` : ""}`;
 }
 
 function persistAuth(token: string, username: string, mustChangePassword: boolean): void {
@@ -435,8 +446,7 @@ function renderShell(): void {
           <div class="topbar-actions"><span>${escapeHtml(state.username)}</span><button id="top-logout-button">Sign out</button></div>
         </header>
         <section class="content">
-          ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
-          ${state.success ? `<div class="success">${escapeHtml(state.success)}</div>` : ""}
+          <div id="message-region">${renderMessages()}</div>
           ${renderSection()}
         </section>
       </main>
@@ -1109,8 +1119,8 @@ function renderDatasourceForm(connector: DatasourceConnector | null): string {
       <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
       <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
       <div class="subgrid">
-        <label>Database type<select name="database_type" ${disabled}>${renderTypeOptions(connector?.database_type || "sqlite")}</select></label>
-        <label>SQL dialect<select name="sql_dialect" ${disabled}>${renderTypeOptions(connector?.sql_dialect || "sqlite")}</select></label>
+        <label>Database type<select name="database_type" ${disabled}>${renderDatabaseTypeOptions(connector?.database_type || "sqlite")}</select></label>
+        <label>SQL dialect<select name="sql_dialect" ${disabled}>${renderSqlDialectOptions(connector?.sql_dialect || "sqlite")}</select></label>
       </div>
       <label>Database URL<input name="database_url" ${disabled} value="${escapeHtml(connector?.database_url || "sqlite:///./examples/medical-poc/demo.db")}" /></label>
       <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
@@ -1123,8 +1133,14 @@ function renderDatasourceForm(connector: DatasourceConnector | null): string {
     </form>`;
 }
 
-function renderTypeOptions(selected: string): string {
+function renderDatabaseTypeOptions(selected: string): string {
   return ["sqlite", "postgresql", "mysql"]
+    .map(value => `<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+}
+
+function renderSqlDialectOptions(selected: string): string {
+  return ["sqlite", "postgres", "mysql"]
     .map(value => `<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`)
     .join("");
 }
@@ -1601,7 +1617,6 @@ async function saveOverviewWidget(event: Event): Promise<void> {
     await loadOverview();
   } catch (error) {
     setMessage("error", (error as Error).message);
-    render();
   }
 }
 
@@ -1750,7 +1765,6 @@ async function saveOverviewWidgetSettings(event: Event): Promise<void> {
     }
   } catch (error) {
     setMessage("error", (error as Error).message);
-    render();
   }
 }
 

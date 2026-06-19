@@ -222,7 +222,7 @@ class DatasourceConnectorRequest(BaseModel):
     name: str = Field(min_length=1)
     database_type: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
     database_url: str = Field(min_length=1)
-    sql_dialect: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
+    sql_dialect: str = Field(pattern=r"^(sqlite|postgres|mysql)$")
     active: bool = False
 
 
@@ -230,7 +230,7 @@ class DatasourceConnectorUpdateRequest(BaseModel):
     name: str = Field(min_length=1)
     database_type: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
     database_url: str = Field(min_length=1)
-    sql_dialect: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
+    sql_dialect: str = Field(pattern=r"^(sqlite|postgres|mysql)$")
     active: bool = False
 
 

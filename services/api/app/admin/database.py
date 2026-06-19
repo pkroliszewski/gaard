@@ -188,6 +188,8 @@ def seed_prompts(session: Session) -> None:
 
 
 def seed_datasource_connectors(session: Session) -> None:
+    migrate_postgres_sql_dialect(session)
+
     default_connector = session.scalar(
         select(DatasourceConnector).where(DatasourceConnector.connector_key == "default")
     )
@@ -247,12 +249,19 @@ def infer_datasource_type(database_url: str) -> tuple[str, str]:
         return "sqlite", "sqlite"
 
     if database_url.startswith("postgresql"):
-        return "postgresql", "postgresql"
+        return "postgresql", "postgres"
 
     if database_url.startswith("mysql"):
         return "mysql", "mysql"
 
-    return "postgresql", "postgresql"
+    return "postgresql", "postgres"
+
+
+def migrate_postgres_sql_dialect(session: Session) -> None:
+    for connector in session.scalars(
+        select(DatasourceConnector).where(DatasourceConnector.sql_dialect == "postgresql")
+    ):
+        connector.sql_dialect = "postgres"
 
 
 def seed_overview_widgets(session: Session) -> None:

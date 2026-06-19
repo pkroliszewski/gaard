@@ -910,6 +910,31 @@ def test_default_datasource_can_be_tested_and_introspected(admin_client: TestCli
     }
 
 
+def test_datasource_connector_accepts_postgres_sql_dialect(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "pg_db",
+            "name": "Postgres DB",
+            "database_type": "postgresql",
+            "database_url": "postgresql://user:pass@example.test/app",
+            "sql_dialect": "postgres",
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "postgresql"
+    assert item["sql_dialect"] == "postgres"
+
+
 def test_sql_generation_prompt_uses_active_datasource_dialect(
     admin_client: TestClient,
 ) -> None:
