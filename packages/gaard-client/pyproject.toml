@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gaard-client"
 version = "0.1.0"
-description = "GAARD client service"
+description = "GAARD frontend web services providing client interface"
+readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = [
