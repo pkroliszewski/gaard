@@ -234,6 +234,11 @@ class DatasourceConnectorUpdateRequest(BaseModel):
     active: bool = False
 
 
+class DatasourceConnectionTestRequest(BaseModel):
+    database_type: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
+    database_url: str = Field(min_length=1)
+
+
 class DatasourceSchemaTableSettingsRequest(BaseModel):
     tables: dict[str, dict[str, Any]]
 
@@ -1682,6 +1687,23 @@ def test_datasource(
     )
     session.commit()
 
+    return {"status": "ok"}
+
+
+@router.post("/datasources/test")
+def test_datasource_from_request(
+    request: DatasourceConnectionTestRequest,
+) -> dict[str, Any]:
+    validate_datasource_url(request.database_type, request.database_url)
+    connector = DatasourceConnector(
+        connector_key="__preview__",
+        name="__preview__",
+        database_type=request.database_type,
+        database_url=request.database_url,
+        sql_dialect=request.database_type if request.database_type != "postgresql" else "postgres",
+        active=False,
+    )
+    test_datasource_connection(connector)
     return {"status": "ok"}
 
 

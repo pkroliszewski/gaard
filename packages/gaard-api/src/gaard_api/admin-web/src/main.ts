@@ -110,6 +110,8 @@ type State = {
   datasources: DatasourceConnector[];
   selectedDatasourceId: number | "new" | null;
   datasourceSchema: any | null;
+  datasourceSchemaLoading: boolean;
+  datasourceSchemaError: string;
   datasourceSchemaSelectedObjectName: string;
   datasourceSchemaShowEnabledOnly: boolean;
   datasourceSchemaDraftTables: Record<string, any> | null;
@@ -167,6 +169,8 @@ const state: State = {
   datasources: [],
   selectedDatasourceId: null,
   datasourceSchema: null,
+  datasourceSchemaLoading: false,
+  datasourceSchemaError: "",
   datasourceSchemaSelectedObjectName: "",
   datasourceSchemaShowEnabledOnly: false,
   datasourceSchemaDraftTables: null,
@@ -280,6 +284,34 @@ function formatAuditTime(value: unknown): string {
   return raw;
 }
 
+function extractErrorMessage(value: unknown): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return extractErrorMessage(JSON.parse(trimmed));
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    if (typeof record.message === "string") return record.message;
+    if (typeof record.detail === "string") return record.detail;
+    if (record.error) return extractErrorMessage(record.error);
+    if (Array.isArray(record.detail) && record.detail.length) {
+      return extractErrorMessage(record.detail[0]);
+    }
+    return JSON.stringify(value);
+  }
+
+  return String(value ?? "");
+}
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
   headers.set("Content-Type", "application/json");
@@ -295,7 +327,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
-    throw new Error(payload.detail || payload.error?.message || "Request failed.");
+    throw new Error(extractErrorMessage(payload.detail ?? payload.error ?? payload.message ?? "Request failed."));
   }
 
   return payload as T;
@@ -1125,7 +1157,7 @@ function renderDatasourceForm(connector: DatasourceConnector | null): string {
       <label>Database URL<input name="database_url" ${disabled} value="${escapeHtml(connector?.database_url || "sqlite:///./examples/medical-poc/demo.db")}" /></label>
       <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
       <div class="button-row">
-        <button type="button" id="test-datasource" ${connector ? "" : "disabled"}>Test</button>
+        <button type="button" id="test-datasource">Test</button>
         <button type="button" id="introspect-datasource" ${connector ? "" : "disabled"}>Schema introspection</button>
         <button type="button" id="activate-datasource" ${connector && !connector.active && !systemManaged ? "" : "disabled"}>Activate</button>
         <button class="primary" type="submit" ${systemManaged ? "disabled" : ""}>${connector ? "Save" : "Create"}</button>
@@ -1165,7 +1197,7 @@ function renderDatasourceSchema(): string {
     <section class="panel">
       <div class="panel-header"><h2>Schema introspection</h2><span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span></div>
       <div class="panel-body">
-        ${schema ? `
+        ${state.datasourceSchemaLoading ? `<p class="muted">loading schema</p>` : state.datasourceSchemaError ? `<p class="error">${escapeHtml(state.datasourceSchemaError)}</p>` : schema ? `
           <form id="datasource-schema-form" class="schema-editor">
             <section class="schema-object-list">
               <div class="schema-object-list-header">
@@ -1563,6 +1595,8 @@ function attachSectionHandlers(): void {
   document.querySelector("#new-datasource")?.addEventListener("click", () => {
     state.selectedDatasourceId = "new";
     state.datasourceSchema = null;
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = "";
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
     render();
@@ -1974,20 +2008,31 @@ async function saveDatasource(event: Event): Promise<void> {
     await loadDatasources();
   } catch (error) {
     setMessage("error", (error as Error).message);
-    render();
   }
 }
 
 async function testDatasource(): Promise<void> {
   const selected = getSelectedDatasource();
-  if (!selected) return;
+  const form = document.querySelector<HTMLFormElement>("#datasource-form");
+  const formData = form ? new FormData(form) : null;
+
   try {
-    await api(`/api/v1/admin/datasources/${selected.id}/test`, { method: "POST" });
+    if (selected) {
+      await api(`/api/v1/admin/datasources/${selected.id}/test`, { method: "POST" });
+    } else if (formData) {
+      await api("/api/v1/admin/datasources/test", {
+        method: "POST",
+        body: JSON.stringify({
+          database_type: formData.get("database_type"),
+          database_url: formData.get("database_url"),
+        }),
+      });
+    } else {
+      return;
+    }
     setMessage("success", "Connection test succeeded.");
-    render();
   } catch (error) {
-    setMessage("error", (error as Error).message);
-    render();
+    setMessage("error", extractErrorMessage(error));
   }
 }
 
@@ -1995,12 +2040,18 @@ async function introspectDatasource(): Promise<void> {
   const selected = getSelectedDatasource();
   if (!selected) return;
   try {
+    state.datasourceSchemaLoading = true;
+    state.datasourceSchemaError = "";
+    render();
     state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/introspect`, { method: "POST" });
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
+    state.datasourceSchemaLoading = false;
     setMessage("success", "Schema introspection completed.");
     render();
   } catch (error) {
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = (error as Error).message;
     setMessage("error", (error as Error).message);
     render();
   }
@@ -2206,23 +2257,35 @@ async function loadDatasources(): Promise<void> {
   if (!state.selectedDatasourceId || state.selectedDatasourceId === "new") {
     state.selectedDatasourceId = state.datasources[0]?.id || null;
   }
-  await loadDatasourceSchema(false);
   render();
+  void loadDatasourceSchema();
 }
 
-async function loadDatasourceSchema(shouldRender = true): Promise<void> {
+async function loadDatasourceSchema(): Promise<void> {
   const selected = getSelectedDatasource();
   if (!selected) {
     state.datasourceSchema = null;
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = "";
     render();
     return;
   }
-  state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema`);
-  state.datasourceSchemaSelectedObjectName = "";
-  state.datasourceSchemaDraftTables = null;
-  if (shouldRender) render();
+  state.datasourceSchemaLoading = true;
+  state.datasourceSchemaError = "";
+  render();
+  try {
+    state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema`);
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+  } catch (error) {
+    state.datasourceSchema = null;
+    state.datasourceSchemaError = (error as Error).message;
+  } finally {
+    state.datasourceSchemaLoading = false;
+    render();
+  }
 }
 
 async function loadSchemaCache(): Promise<void> {
