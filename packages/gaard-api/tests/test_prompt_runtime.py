@@ -3,8 +3,8 @@ from decimal import Decimal
 from gaard_core.investigation.models import InvestigationContext
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 
-from app.admin.models import PromptTemplate
-from app.admin.prompt_runtime import (
+from gaard_api.admin.models import PromptTemplate
+from gaard_api.admin.prompt_runtime import (
     MetadataInvestigationReadinessPromptCompiler,
     MetadataIntentClassificationPromptCompiler,
     MetadataResultClassificationPromptCompiler,

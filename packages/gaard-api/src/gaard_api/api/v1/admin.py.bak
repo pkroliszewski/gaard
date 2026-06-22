@@ -393,6 +393,7 @@ def build_client_widget_key(session: Session, label: str, question: str) -> str:
     return widget_key
 
 
+
 def serialize_overview_widget(
     session: Session,
     widget: OverviewWidget,
@@ -465,6 +466,7 @@ def execute_overview_sql(
     connector: DatasourceConnector,
     sql: str,
 ) -> QueryResult:
+
     SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(sql)
 
     return SQLAlchemyQueryExecutor(
@@ -479,12 +481,14 @@ def generate_overview_widget_sql(
     query_request: QueryRequest,
     actor: str,
 ) -> str:
+
     schema_cache = get_or_create_datasource_schema_cache(session, connector, actor)
     session.commit()
 
     from app.api.v1.query import create_sql_generator
 
     generated_sql = create_sql_generator((connector, schema_cache)).generate(query_request)
+
     SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(generated_sql.sql)
 
     return generated_sql.sql

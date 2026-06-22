@@ -18,8 +18,8 @@ from gaard_core.query_pipeline.models import (
 )
 from gaard_llm.providers.models import ChatCompletionResponse
 
-from app.admin.database import create_session, reset_metadata_store_for_tests
-from app.admin.models import (
+from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
+from gaard_api.admin.models import (
     AdminSetting,
     BusinessKnowledgeClaim,
     DataQueryAuditLog,
@@ -28,7 +28,7 @@ from app.admin.models import (
     DatasourceSchemaCache,
     PromptTemplate,
 )
-from app.admin.services import (
+from gaard_api.admin.services import (
     get_active_business_logic_prompt_safe,
     get_governance_policy_for_schema,
     get_llm_runtime_config_safe,
@@ -37,8 +37,8 @@ from app.admin.services import (
     record_candidate_business_knowledge,
     set_setting,
 )
-from app.core.settings import settings
-from app.main import app
+from gaard_api.core.settings import settings
+from gaard_api.main import app
 
 
 @pytest.fixture()

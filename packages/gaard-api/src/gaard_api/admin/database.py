@@ -6,8 +6,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
-from app.admin.models import (
+from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
+from gaard_api.admin.models import (
     AdminSetting,
     AdminUser,
     Base,
@@ -17,8 +17,8 @@ from app.admin.models import (
     OverviewWidget,
     PromptTemplate,
 )
-from app.admin.security import hash_password
-from app.core.settings import settings
+from gaard_api.admin.security import hash_password
+from gaard_api.core.settings import settings
 
 
 _engine: Engine | None = None
@@ -148,7 +148,7 @@ def apply_runtime_settings(session: Session) -> None:
     except (TypeError, ValueError):
         return
 
-    from app.core.schema_cache import schema_context_cache
+    from gaard_api.core.schema_cache import schema_context_cache
 
     schema_context_cache.ttl_seconds = ttl_seconds
 

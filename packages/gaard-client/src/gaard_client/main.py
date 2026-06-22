@@ -9,9 +9,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from importlib.resources import files
 
 
-CLIENT_WEB_DIR = Path(__file__).resolve().parents[3] / "apps" / "client-web"
+CLIENT_WEB_DIR = files("gaard_client").joinpath("client-web")
 DEFAULT_BACKEND_URL = "http://localhost:8000"
 
 app = FastAPI(

@@ -7,11 +7,11 @@ from gaard_core.prompt_compiler.models import SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.sql_generation_prompt import SqlGenerationPromptCompiler
 from gaard_core.schema.context import SchemaContextService
 
-from app.admin.prompt_runtime import get_sql_generation_prompt_compiler
-from app.admin.services import get_datasource_schema_context_safe, get_query_runtime_config_safe
-from app.api.v1.schema import get_schema_cache_key
-from app.core.schema_cache import schema_context_cache
-from app.core.settings import settings
+from gaard_api.admin.prompt_runtime import get_sql_generation_prompt_compiler
+from gaard_api.admin.services import get_datasource_schema_context_safe, get_query_runtime_config_safe
+from gaard_api.api.v1.schema import get_schema_cache_key
+from gaard_api.core.schema_cache import schema_context_cache
+from gaard_api.core.settings import settings
 
 router = APIRouter()
 

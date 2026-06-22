@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaard-api"
+version = "0.1.0"
+description = "GAARD FastAPI service"
+requires-python = ">=3.11"
+
+dependencies = [
+    "gaard-core==0.1.0",
+    "gaard-connectors==0.1.0",
+    "gaard-llm==0.1.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "sqlalchemy>=2.0.0",
+    "httpx>=0.27.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "psycopg2>=2.9.12",
+    "pymysql>=1.2.0",
+]
+
+#
+# API owns the main CLI
+#
+[project.scripts]
+gaard = "gaard_api.cli:main"
+
+#
+# Registers "admin" command
+#
+[project.entry-points."gaard.commands"]
+admin = "gaard_api.cli_commands:register"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+gaard_api = [
+    "admin-web/**/*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -4,12 +4,12 @@ from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospecto
 from gaard_core.schema.context import SchemaContextService
 from gaard_core.schema.models import DatabaseSchema
 
-from app.admin.services import (
+from gaard_api.admin.services import (
     get_datasource_schema_context_safe,
     selected_schema_from_cache,
 )
-from app.core.schema_cache import schema_context_cache
-from app.core.settings import settings
+from gaard_api.core.schema_cache import schema_context_cache
+from gaard_api.core.settings import settings
 
 router = APIRouter()
 

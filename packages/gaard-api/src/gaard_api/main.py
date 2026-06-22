@@ -4,11 +4,12 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1.admin import router as admin_router
-from app.api.v1.prompts import router as prompts_router
-from app.api.v1.query import router as query_router
-from app.api.v1.schema import router as schema_router
-from app.core.error_handlers import register_error_handlers
+from gaard_api.api.v1.admin import router as admin_router
+from gaard_api.api.v1.prompts import router as prompts_router
+from gaard_api.api.v1.query import router as query_router
+from gaard_api.api.v1.schema import router as schema_router
+from gaard_api.core.error_handlers import register_error_handlers
+from importlib.resources import files
 
 app = FastAPI(
     title="GAARD API",
@@ -18,7 +19,7 @@ app = FastAPI(
 
 register_error_handlers(app)
 
-ADMIN_WEB_DIR = Path(__file__).resolve().parents[3] / "apps" / "admin-web"
+ADMIN_WEB_DIR = files("gaard_api").joinpath("admin-web")
 
 if ADMIN_WEB_DIR.exists():
     app.mount(

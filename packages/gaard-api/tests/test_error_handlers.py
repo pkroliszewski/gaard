@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.admin.database import create_session, reset_metadata_store_for_tests
-from app.admin.services import set_setting
-from app.core.settings import settings
-from app.main import app
+from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
+from gaard_api.admin.services import set_setting
+from gaard_api.core.settings import settings
+from gaard_api.main import app
 
 
 @pytest.fixture()

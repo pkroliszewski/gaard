@@ -1,7 +1,7 @@
 from gaard_core.query_pipeline.models import QueryRequest
 
-from app.admin.services import ACCESS_ERROR_SQL_VALIDATION
-from app.api.v1.query import (
+from gaard_api.admin.services import ACCESS_ERROR_SQL_VALIDATION
+from gaard_api.api.v1.query import (
     ALLOWLIST_REFUSAL_ANSWER,
     READ_ONLY_REFUSAL_ANSWER,
     build_access_refusal_response,

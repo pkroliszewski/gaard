@@ -5,8 +5,8 @@ from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromp
 from gaard_core.prompt_compiler.schema_formatter import SchemaPromptFormatter
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 
-from app.admin.models import PromptTemplate
-from app.admin.services import get_active_prompt_template_safe
+from gaard_api.admin.models import PromptTemplate
+from gaard_api.admin.services import get_active_prompt_template_safe
 
 
 class MetadataSqlGenerationPromptCompiler:

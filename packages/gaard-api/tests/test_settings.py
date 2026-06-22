@@ -1,4 +1,4 @@
-from app.core.settings import Settings
+from gaard_api.core.settings import Settings
 
 
 def test_settings_use_llm_defaults_and_ignore_metadata_env(monkeypatch) -> None:

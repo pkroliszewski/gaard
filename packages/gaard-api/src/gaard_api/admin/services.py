@@ -18,9 +18,9 @@ from gaard_core.schema.models import ColumnInfo, DatabaseSchema, TableInfo
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 
-from app.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG
-from app.admin.database import create_session
-from app.admin.models import (
+from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG
+from gaard_api.admin.database import create_session
+from gaard_api.admin.models import (
     AdminAuditLog,
     AdminSetting,
     BusinessLogicSuggestion,
@@ -32,7 +32,7 @@ from app.admin.models import (
     OverviewWidget,
     PromptTemplate,
 )
-from app.core.settings import settings
+from gaard_api.core.settings import settings
 
 
 def json_dumps(value: Any) -> str:

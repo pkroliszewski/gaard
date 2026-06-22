@@ -48,15 +48,15 @@ from gaard_core.schema.context import SchemaContextService
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 
-from app.admin.models import DatasourceConnector, DatasourceSchemaCache
-from app.admin.prompt_runtime import (
+from gaard_api.admin.models import DatasourceConnector, DatasourceSchemaCache
+from gaard_api.admin.prompt_runtime import (
     get_investigation_readiness_prompt_compiler,
     get_intent_classification_prompt_compiler,
     get_result_classification_prompt_compiler,
     get_result_interpretation_prompt_compiler,
     get_sql_generation_prompt_compiler,
 )
-from app.admin.services import (
+from gaard_api.admin.services import (
     ACCESS_ERROR_INTENT_CLASSIFICATION,
     ACCESS_ERROR_SQL_VALIDATION,
     get_active_business_logic_prompt_safe,
@@ -72,9 +72,9 @@ from app.admin.services import (
     record_data_query_sql_error_audit,
     upsert_investigation_analysis_business_logic_suggestion,
 )
-from app.api.v1.schema import get_schema_cache_key
-from app.core.schema_cache import schema_context_cache
-from app.core.settings import settings
+from gaard_api.api.v1.schema import get_schema_cache_key
+from gaard_api.core.schema_cache import schema_context_cache
+from gaard_api.core.settings import settings
 
 router = APIRouter()
 
