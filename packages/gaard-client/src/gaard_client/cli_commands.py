@@ -1,5 +1,6 @@
 import uvicorn
 
+
 def register(subparsers):
     parser = subparsers.add_parser("client")
     parser.add_argument("--host", default="127.0.0.1")

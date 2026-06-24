@@ -23,10 +23,8 @@ dev = [
     "mypy>=1.10.0",
 ]
 
-#
-# No console script here!
-#
-# Client only contributes commands to gaard.
+[project.scripts]
+gaard-client = "gaard_client.cli:main"
 
 [project.entry-points."gaard.commands"]
 client = "gaard_client.cli_commands:register"

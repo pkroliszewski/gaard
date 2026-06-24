@@ -6,7 +6,7 @@ them to another machine, and run them with Podman.
 The repository already contains:
 
 - `docker-compose.yml`, which defines the API service
-- `services/api/Dockerfile`, which builds the GAARD API image
+- `packages/gaard-api/Dockerfile`, which builds the GAARD API image
 
 ## 1. Prepare the demo datasource
 
@@ -28,7 +28,7 @@ From the repository root:
 ```bash
 docker build \
   -t gaard-api:local \
-  -f services/api/Dockerfile \
+  -f packages/gaard-api/Dockerfile \
   .
 ```
 
@@ -115,7 +115,7 @@ API image for `linux/amd64`:
 docker buildx build \
   --platform linux/amd64 \
   -t gaard-api:local \
-  -f services/api/Dockerfile \
+  -f packages/gaard-api/Dockerfile \
   --load \
   .
 ```

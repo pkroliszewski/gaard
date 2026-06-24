@@ -5,6 +5,9 @@ metadata.db
 *.sqlite3
 
 # Python generated files
+.venv/
+dist/
+build/
 __pycache__/
 *.py[cod]
 *.pyd

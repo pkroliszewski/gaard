@@ -48,7 +48,7 @@ This recreates `examples/medical-poc/demo.db` from:
 Run this from the repository root:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn gaard_api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The API should be available at:
@@ -86,7 +86,7 @@ Put your LLM settings here:
 Run this from the repository root in a second terminal:
 
 ```bash
-uvicorn services.client.app.main:app --reload --host 0.0.0.0 --port 8001
+python -m uvicorn gaard_client.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 Open the client at:
@@ -174,7 +174,7 @@ different initial values with process environment variables before the API
 creates metadata settings, for example:
 
 ```bash
-GAARD_SQL_GENERATION_MODE=mock GAARD_RESULT_INTERPRETATION_MODE=mock uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+GAARD_SQL_GENERATION_MODE=mock GAARD_RESULT_INTERPRETATION_MODE=mock python -m uvicorn gaard_api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 GAARD does not load `.env` files. Environment variables only affect code
@@ -314,14 +314,15 @@ This installs local GAARD packages in editable mode:
 - `packages/gaard-core`
 - `packages/gaard-connectors`
 - `packages/gaard-llm`
-- `services/api`
+- `packages/gaard-api`
+- `packages/gaard-client`
 
 ### 4. Start the API
 
 Run this from the repository root so relative datasource paths resolve correctly:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn gaard_api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 5. Check health
@@ -402,7 +403,7 @@ chat-style UI for asking questions against the GAARD backend.
 Start the API first, then run the client from the repository root:
 
 ```bash
-uvicorn services.client.app.main:app --reload --host 0.0.0.0 --port 8001
+python -m uvicorn gaard_client.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 Open:
@@ -447,6 +448,41 @@ Runtime configuration requirements:
 - A relational datasource reachable through SQLAlchemy
 - Local SQLite storage for GAARD metadata
 
+## Install Published Packages
+
+Install the API and client distributions from PyPI. Their dependencies install
+the remaining GAARD packages:
+
+```bash
+python -m pip install gaard-api gaard-client
+```
+
+Start the API and client in separate terminals:
+
+```bash
+gaard-core start --host 0.0.0.0 --port 8000
+gaard-client start --host 0.0.0.0 --port 8001
+```
+
+`gaard-api start` is also available as a descriptive alias for
+`gaard-core start`. The older `gaard admin` and `gaard client` commands remain
+available for compatibility.
+
+To build all distributions locally from the repository root, run:
+
+```bash
+scripts/build.sh
+python -m pip install dist/gaard_*.whl
+```
+
+To publish after checking the generated distributions:
+
+```bash
+scripts/build.sh --upload --repository testpypi
+# or, for the production index:
+scripts/build.sh --upload
+```
+
 ## Technology Stack
 
 - Backend API: Python + FastAPI
@@ -458,9 +494,8 @@ Runtime configuration requirements:
 
 ## Project Structure
 
-- `apps/` - web applications such as admin console, demo UI, and docs UI
-- `services/api/` - FastAPI HTTP API
-- `services/client/` - FastAPI-hosted community client UI
+- `packages/gaard-api/` - FastAPI HTTP API and bundled admin UI
+- `packages/gaard-client/` - FastAPI-hosted community client UI
 - `services/worker/` - background worker
 - `services/scheduler/` - scheduled jobs
 - `packages/gaard-core/` - query pipeline, prompts, policies, and validation
@@ -514,7 +549,8 @@ Run a package test suite:
 pytest packages/gaard-core/tests
 pytest packages/gaard-connectors/tests
 pytest packages/gaard-llm/tests
-pytest services/api/tests
+pytest packages/gaard-api/tests
+pytest packages/gaard-client/tests
 ```
 
 Run a single test file:
@@ -537,7 +573,7 @@ ruff check .
 
 ### 5. Troubleshooting
 
-If imports such as `gaard_core`, `gaard_connectors`, or `app` are missing, make
+If imports such as `gaard_core`, `gaard_connectors`, or `gaard_api` are missing, make
 sure the virtual environment is active and development dependencies were
 installed:
 

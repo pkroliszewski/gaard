@@ -3,7 +3,8 @@ testpaths = [
     "packages/gaard-core/tests",
     "packages/gaard-connectors/tests",
     "packages/gaard-llm/tests",
-    "services/api/tests"
+    "packages/gaard-api/tests",
+    "packages/gaard-client/tests"
 ]
 
 [tool.ruff]

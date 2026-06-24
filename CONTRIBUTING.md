@@ -135,13 +135,13 @@ python examples/medical-poc/create_demo_db.py
 Run the API:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn gaard_api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Run the community client in a second terminal:
 
 ```bash
-uvicorn services.client.app.main:app --reload --host 0.0.0.0 --port 8001
+python -m uvicorn gaard_client.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ## Code Standards
@@ -167,7 +167,7 @@ Run the relevant checks before opening a pull request:
 ```bash
 pytest
 ruff check .
-mypy packages/gaard-core/src packages/gaard-connectors/src packages/gaard-llm/src services/api/app
+mypy packages/gaard-core/src packages/gaard-connectors/src packages/gaard-llm/src packages/gaard-api/src packages/gaard-client/src
 ```
 
 For focused work, run the smallest useful test target as well, for example:
@@ -176,7 +176,8 @@ For focused work, run the smallest useful test target as well, for example:
 pytest packages/gaard-core/tests
 pytest packages/gaard-connectors/tests
 pytest packages/gaard-llm/tests
-pytest services/api/tests
+pytest packages/gaard-api/tests
+pytest packages/gaard-client/tests
 ```
 
 If a check cannot be run, say so in the pull request and explain why.

@@ -3,7 +3,7 @@ import json
 import httpx
 from fastapi.testclient import TestClient
 
-from services.client.app.main import app
+from gaard_client.main import app
 
 
 def test_client_app_serves_index_and_config(monkeypatch) -> None:

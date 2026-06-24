@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Build and optionally publish all GAARD Python packages to PyPI.
+
+Usage:
+  scripts/build.sh [--upload] [--repository NAME] [--python PYTHON]
+
+Options:
+  --upload           Upload checked distributions with Twine.
+  --repository NAME  Twine repository name (default: pypi).
+  --python PYTHON    Python executable to use (default: python3).
+  -h, --help         Show this help.
+
+The selected Python environment must contain the `build` and `twine` packages.
+Install development requirements first with:
+  python -m pip install -r requirements-dev.txt
+
+Credentials are read by Twine, for example from TWINE_USERNAME and
+TWINE_PASSWORD or from ~/.pypirc.
+
+Examples:
+  scripts/build.sh
+  scripts/build.sh --upload --repository testpypi
+  scripts/build.sh --upload
+USAGE
+}
+
+upload=false
+repository="pypi"
+python_bin="${PYTHON:-python3}"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --upload)
+      upload=true
+      shift
+      ;;
+    --repository)
+      repository="${2:?missing repository name}"
+      shift 2
+      ;;
+    --python)
+      python_bin="${2:?missing Python executable}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+project_root="$(cd "$script_dir/.." && pwd)"
+dist_dir="$project_root/dist"
+packages=(
+  "packages/gaard-core"
+  "packages/gaard-connectors"
+  "packages/gaard-llm"
+  "packages/gaard-api"
+  "packages/gaard-client"
+)
+
+if [[ "$python_bin" == */* ]]; then
+  python_dir="$(cd "$(dirname "$python_bin")" && pwd)"
+  python_bin="$python_dir/$(basename "$python_bin")"
+fi
+
+cd "$project_root"
+
+if ! "$python_bin" -c 'import build, twine' >/dev/null 2>&1; then
+  echo "Missing build tools for $python_bin." >&2
+  echo "Install them with: $python_bin -m pip install --upgrade build twine" >&2
+  exit 1
+fi
+
+rm -rf "$dist_dir"
+mkdir -p "$dist_dir"
+
+for package in "${packages[@]}"; do
+  echo "Building $package"
+  "$python_bin" -m build "$package" --outdir "$dist_dir"
+done
+
+echo "Checking distributions"
+"$python_bin" -m twine check "$dist_dir"/*
+
+if [ "$upload" = false ]; then
+  echo "Packages are ready in $dist_dir"
+  echo "Add --upload to publish them."
+  exit 0
+fi
+
+echo "Uploading packages to $repository"
+"$python_bin" -m twine upload --repository "$repository" "$dist_dir"/*

@@ -213,7 +213,7 @@ def stub_business_logic_learning_llm(monkeypatch, payload: dict) -> type:
             return ChatCompletionResponse(content=json.dumps(payload))
 
     monkeypatch.setattr(
-        "app.admin.services.OpenAICompatibleClient",
+        "gaard_api.admin.services.OpenAICompatibleClient",
         FakeOpenAICompatibleClient,
     )
 
@@ -1172,7 +1172,7 @@ def test_query_endpoint_investigation_stops_at_analysis_when_not_ready(
             )
 
     monkeypatch.setattr(
-        "app.api.v1.query.create_investigation_readiness_agent",
+        "gaard_api.api.v1.query.create_investigation_readiness_agent",
         lambda runtime_config: NotReadyAgent(),
     )
 
@@ -1301,7 +1301,7 @@ def test_query_stream_investigation_reports_analysis_steps(
             )
 
     monkeypatch.setattr(
-        "app.api.v1.query.create_investigation_readiness_agent",
+        "gaard_api.api.v1.query.create_investigation_readiness_agent",
         lambda runtime_config: NotReadyAgent(),
     )
 
@@ -1349,7 +1349,7 @@ def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
             )
 
     monkeypatch.setattr(
-        "app.api.v1.query.create_intent_classifier",
+        "gaard_api.api.v1.query.create_intent_classifier",
         lambda llm_config=None: DenyIntentClassifier(),
     )
 
@@ -1484,11 +1484,11 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
             )
 
     monkeypatch.setattr(
-        "app.api.v1.query.create_intent_classifier",
+        "gaard_api.api.v1.query.create_intent_classifier",
         lambda llm_config=None: AllowIntentClassifier(),
     )
     monkeypatch.setattr(
-        "app.api.v1.query.create_pipeline",
+        "gaard_api.api.v1.query.create_pipeline",
         lambda datasource_context=None: FailingPipeline(),
     )
 
@@ -1546,11 +1546,11 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
             )
 
     monkeypatch.setattr(
-        "app.api.v1.query.create_intent_classifier",
+        "gaard_api.api.v1.query.create_intent_classifier",
         lambda llm_config=None: AllowIntentClassifier(),
     )
     monkeypatch.setattr(
-        "app.api.v1.query.create_pipeline",
+        "gaard_api.api.v1.query.create_pipeline",
         lambda datasource_context=None: FailingPipeline(),
     )
 

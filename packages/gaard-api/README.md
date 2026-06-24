@@ -7,10 +7,17 @@ GAARD allows applications and users to ask questions about relational databases 
 For more informacion see https://github.com/pkroliszewski/gaard
 
 # This package
-Package gaard-api provides the main application logic and plug-in bechaviour.
-After instalation, command "gaard admin" will be avaliable with parameters:
---host \<ip adress\> #what adress to bind the web server to
---port\<port\> #what port to bind the web server to
---reload #whether to look for changes to the installed package
 
-command "gaard admin" by default should make the admin console avaliable as http://localhost:8000/admin
+`gaard-api` provides the GAARD FastAPI backend and bundled admin application.
+
+After installation, start it with:
+
+```bash
+gaard-core start
+```
+
+The command accepts `--host`, `--port`, and `--reload`. By default the API is
+available at `http://localhost:8000` and the admin application at
+`http://localhost:8000/admin`.
+
+`gaard-api start` is an alias. `gaard admin` remains available for compatibility.

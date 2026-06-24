@@ -1,11 +1,13 @@
 -e ./packages/gaard-core
 -e ./packages/gaard-connectors
 -e ./packages/gaard-llm
--e ./services/api
+-e ./packages/gaard-api
+-e ./packages/gaard-client
 
 pytest
 ruff
 mypy
-psycopg2
+build
+twine
+psycopg[binary]
 pymysql
-
