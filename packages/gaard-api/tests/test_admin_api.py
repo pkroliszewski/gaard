@@ -41,13 +41,31 @@ from gaard_api.core.settings import settings
 from gaard_api.main import app
 
 
+def create_demo_datasource_database(db_path: Path) -> None:
+    public_root = Path(__file__).resolve().parents[3]
+    demo_dir = public_root / "examples" / "medical-poc"
+
+    connection = sqlite3.connect(db_path)
+
+    try:
+        connection.executescript((demo_dir / "schema.sql").read_text(encoding="utf-8"))
+        connection.executescript((demo_dir / "seed.sql").read_text(encoding="utf-8"))
+        connection.commit()
+    finally:
+        connection.close()
+
+
 @pytest.fixture()
 def admin_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
+    demo_db = tmp_path / "demo.db"
+    create_demo_datasource_database(demo_db)
+
     monkeypatch.setattr(
         settings,
         "gaard_metadata_database_url",
         f"sqlite:///{tmp_path / 'metadata.db'}",
     )
+    monkeypatch.setattr(settings, "gaard_datasource_url", f"sqlite:///{demo_db}")
     monkeypatch.setattr(settings, "gaard_sql_generation_mode", "mock")
     monkeypatch.setattr(settings, "gaard_result_interpretation_mode", "mock")
     monkeypatch.setattr(settings, "gaard_llm_api_key", "change-me")
