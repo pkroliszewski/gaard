@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+      - "gaard-core-v*"
+      - "gaard-connectors-v*"
+      - "gaard-llm-v*"
+      - "gaard-api-v*"
+      - "gaard-client-v*"
 
 permissions:
   contents: read
@@ -13,6 +18,9 @@ jobs:
     name: Test and build distributions
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      release-package: ${{ steps.release.outputs.package }}
+      release-version: ${{ steps.release.outputs.version }}
 
     steps:
       - name: Check out public repository
@@ -25,30 +33,87 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify release tag matches package versions
+      - name: Resolve release target
+        id: release
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python - "$RELEASE_TAG" <<'PY'
           from pathlib import Path
+          import os
+          import re
+          import sys
+
+          packages = [
+              "gaard-core",
+              "gaard-connectors",
+              "gaard-llm",
+              "gaard-api",
+              "gaard-client",
+          ]
+
+          tag = sys.argv[1]
+          if tag.startswith("v"):
+              release_package = "all"
+              release_version = tag[1:]
+          else:
+              matches = [
+                  (package, tag[len(f"{package}-v"):])
+                  for package in packages
+                  if tag.startswith(f"{package}-v")
+              ]
+              if len(matches) != 1:
+                  allowed = "vX.Y.Z or <package>-vX.Y.Z"
+                  raise SystemExit(f"Unsupported release tag {tag!r}; expected {allowed}.")
+              release_package, release_version = matches[0]
+
+          if not re.fullmatch(r"[0-9][0-9A-Za-z._-]*", release_version):
+              raise SystemExit(
+                  f"Unsupported release version {release_version!r}; "
+                  "expected something like 0.1.0 or 0.2.0rc1."
+              )
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as output:
+              print(f"package={release_package}", file=output)
+              print(f"version={release_version}", file=output)
+
+          if release_package == "all":
+              print(f"Release {tag} will publish all GAARD packages.")
+          else:
+              print(f"Release {tag} will publish only {release_package}.")
+          PY
+
+      - name: Verify release target matches package versions
+        env:
+          RELEASE_PACKAGE: ${{ steps.release.outputs.package }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python - "$RELEASE_PACKAGE" "$RELEASE_VERSION" <<'PY'
+          from pathlib import Path
           import sys
           import tomllib
 
-          tag = sys.argv[1]
-          if not tag.startswith("v"):
-              raise SystemExit(f"Release tag must start with v: {tag}")
+          release_package = sys.argv[1]
+          expected_version = sys.argv[2]
+          pyprojects_by_package = {
+              "gaard-core": Path("packages/gaard-core/pyproject.toml"),
+              "gaard-connectors": Path("packages/gaard-connectors/pyproject.toml"),
+              "gaard-llm": Path("packages/gaard-llm/pyproject.toml"),
+              "gaard-api": Path("packages/gaard-api/pyproject.toml"),
+              "gaard-client": Path("packages/gaard-client/pyproject.toml"),
+          }
 
-          expected_version = tag[1:]
-          pyprojects = [
-              Path("packages/gaard-core/pyproject.toml"),
-              Path("packages/gaard-connectors/pyproject.toml"),
-              Path("packages/gaard-llm/pyproject.toml"),
-              Path("packages/gaard-api/pyproject.toml"),
-              Path("packages/gaard-client/pyproject.toml"),
-          ]
+          if release_package == "all":
+              selected = pyprojects_by_package.values()
+          else:
+              try:
+                  selected = [pyprojects_by_package[release_package]]
+              except KeyError:
+                  raise SystemExit(f"Unknown release package: {release_package}") from None
 
           mismatches = []
-          for pyproject in pyprojects:
+          for pyproject in selected:
               with pyproject.open("rb") as source:
                   package = tomllib.load(source)["project"]
               version = package["version"]
@@ -58,10 +123,13 @@ jobs:
           if mismatches:
               details = ", ".join(mismatches)
               raise SystemExit(
-                  f"Tag {tag} expects version {expected_version}; mismatches: {details}"
+                  f"Release expects version {expected_version}; mismatches: {details}"
               )
 
-          print(f"All packages match release {tag}.")
+          if release_package == "all":
+              print(f"All packages match release version {expected_version}.")
+          else:
+              print(f"{release_package} matches release version {expected_version}.")
           PY
 
       - name: Install development dependencies
@@ -73,7 +141,14 @@ jobs:
         run: pytest
 
       - name: Build and check distributions
-        run: ./scripts/build.sh --python python
+        env:
+          RELEASE_PACKAGE: ${{ steps.release.outputs.package }}
+        run: |
+          if [ "$RELEASE_PACKAGE" = "all" ]; then
+            ./scripts/build.sh --python python
+          else
+            ./scripts/build.sh --python python --package "$RELEASE_PACKAGE"
+          fi
 
       - name: Store distributions
         uses: actions/upload-artifact@v5

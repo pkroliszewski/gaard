@@ -3,15 +3,18 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Build and optionally publish all GAARD Python packages to PyPI.
+Build and optionally publish GAARD Python packages to PyPI.
 
 Usage:
-  scripts/build.sh [--upload] [--repository NAME] [--python PYTHON]
+  scripts/build.sh [--upload] [--repository NAME] [--python PYTHON] [--package NAME]
 
 Options:
   --upload           Upload checked distributions with Twine.
   --repository NAME  Twine repository name (default: pypi).
   --python PYTHON    Python executable to use (default: python3).
+  --package NAME     Build only one package. Can be used multiple times.
+                     Names: gaard-core, gaard-connectors, gaard-llm,
+                     gaard-api, gaard-client. Defaults to all packages.
   -h, --help         Show this help.
 
 The selected Python environment must contain the `build` and `twine` packages.
@@ -23,6 +26,7 @@ TWINE_PASSWORD or from ~/.pypirc.
 
 Examples:
   scripts/build.sh
+  scripts/build.sh --package gaard-core
   scripts/build.sh --upload --repository testpypi
   scripts/build.sh --upload
 USAGE
@@ -31,6 +35,30 @@ USAGE
 upload=false
 repository="pypi"
 python_bin="${PYTHON:-python3}"
+selected_packages=()
+
+package_path_for() {
+  case "$1" in
+    gaard-core|packages/gaard-core)
+      echo "packages/gaard-core"
+      ;;
+    gaard-connectors|packages/gaard-connectors)
+      echo "packages/gaard-connectors"
+      ;;
+    gaard-llm|packages/gaard-llm)
+      echo "packages/gaard-llm"
+      ;;
+    gaard-api|packages/gaard-api)
+      echo "packages/gaard-api"
+      ;;
+    gaard-client|packages/gaard-client)
+      echo "packages/gaard-client"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -44,6 +72,16 @@ while [ "$#" -gt 0 ]; do
       ;;
     --python)
       python_bin="${2:?missing Python executable}"
+      shift 2
+      ;;
+    --package)
+      package_name="${2:?missing package name}"
+      if ! package_path="$(package_path_for "$package_name")"; then
+        echo "Unknown package: $package_name" >&2
+        usage >&2
+        exit 2
+      fi
+      selected_packages+=("$package_path")
       shift 2
       ;;
     -h|--help)
@@ -68,6 +106,10 @@ packages=(
   "packages/gaard-api"
   "packages/gaard-client"
 )
+
+if [ "${#selected_packages[@]}" -gt 0 ]; then
+  packages=("${selected_packages[@]}")
+fi
 
 if [[ "$python_bin" == */* ]]; then
   python_dir="$(cd "$(dirname "$python_bin")" && pwd)"

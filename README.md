@@ -475,6 +475,12 @@ scripts/build.sh
 python -m pip install dist/gaard_*.whl
 ```
 
+To build only one distribution, pass the package name:
+
+```bash
+scripts/build.sh --package gaard-core
+```
+
 To publish after checking the generated distributions:
 
 ```bash
