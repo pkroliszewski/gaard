@@ -23,19 +23,19 @@ pip install --upgrade pip
 pip install gaard-api gaard-client
 ```
 
-### 2. Install example database (optional)
+### 3. Install example database (optional)
 
 ```bash
 gaard-core install-example-database
 ```
 
-### 3. Start the Gaard API
+### 4. Start the Gaard API
 ```bash
 gaard-core start
 ```
 The admin panel will be available at http://localhost:8000/admin
 
-### 4. Start the Gaard Client
+### 5. Start the Gaard Client
 ```bash
 gaard-client start
 ```
@@ -46,14 +46,9 @@ value. It points the client to the GAARD API backend.
 
 ## Upgrading Gaard
 
-### 1. Upgrade pip packages
 ```bash
 python -m pip install --upgrade gaard-api gaard-client
 ```
-
-The fastest local path is to run the API with Uvicorn and use the bundled SQLite
-demo database.
-
 
 ## Configure Gaard from the admin UI
 
