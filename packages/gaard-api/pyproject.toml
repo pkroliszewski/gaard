@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-api"
-version = "0.1.0"
+version = "0.1.1"
 description = "GAARD backend web services providing admin interface"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -44,7 +44,7 @@ gaard-core = "gaard_api.server_cli:main"
 admin = "gaard_api.cli_commands:register"
 
 [tool.setuptools]
-include-package-data = true
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -52,6 +52,14 @@ where = ["src"]
 [tool.setuptools.package-data]
 gaard_api = [
     "admin-web/**/*",
+    "example_data/medical_poc/*.sql",
+]
+
+[tool.setuptools.exclude-package-data]
+gaard_api = [
+    "**/__pycache__/*",
+    "**/*.pyc",
+    "**/*.pyo",
 ]
 
 [tool.ruff]

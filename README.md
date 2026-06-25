@@ -35,13 +35,16 @@ pip install -r requirements-dev.txt
 From the repository root:
 
 ```bash
-python examples/medical-poc/create_demo_db.py
+gaard-core install-example-database
 ```
 
 This recreates `examples/medical-poc/demo.db` from:
 
 - `examples/medical-poc/schema.sql`
 - `examples/medical-poc/seed.sql`
+
+It also registers the database as the active `default` datasource in
+`metadata.db`.
 
 ### 4. Start the API and the Admin Panel with Uvicorn
 
@@ -456,6 +459,18 @@ the remaining GAARD packages:
 ```bash
 python -m pip install gaard-api gaard-client
 ```
+
+Create the bundled Medical POC SQLite demo database:
+
+```bash
+gaard-core install-example-database
+```
+
+By default this writes `examples/medical-poc/demo.db` in the current working
+directory, registers it as the active `default` datasource in `metadata.db`,
+and matches the default `GAARD_DATASOURCE_URL`. To place the database elsewhere,
+pass `--output /path/to/demo.db`; the command prints the datasource URL it saved
+in metadata.
 
 Start the API and client in separate terminals:
 

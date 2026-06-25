@@ -190,22 +190,6 @@ def seed_prompts(session: Session) -> None:
 def seed_datasource_connectors(session: Session) -> None:
     migrate_postgres_sql_dialect(session)
 
-    default_connector = session.scalar(
-        select(DatasourceConnector).where(DatasourceConnector.connector_key == "default")
-    )
-
-    if default_connector is None:
-        session.add(
-            DatasourceConnector(
-                connector_key="default",
-                name="Medical POC SQLite",
-                database_type="sqlite",
-                database_url=settings.gaard_datasource_url,
-                sql_dialect=settings.gaard_sql_dialect,
-                active=True,
-            )
-        )
-
     metadata_connector = session.scalar(
         select(DatasourceConnector).where(DatasourceConnector.connector_key == "metadata-db")
     )
@@ -229,19 +213,6 @@ def seed_datasource_connectors(session: Session) -> None:
         metadata_connector.sql_dialect = sql_dialect
         metadata_connector.active = False
         metadata_connector.updated_by = "system"
-
-    active_user_connector = session.scalar(
-        select(DatasourceConnector).where(
-            DatasourceConnector.connector_key != "metadata-db",
-            DatasourceConnector.active.is_(True),
-        )
-    )
-    default_connector = session.scalar(
-        select(DatasourceConnector).where(DatasourceConnector.connector_key == "default")
-    )
-
-    if active_user_connector is None and default_connector is not None:
-        default_connector.active = True
 
 
 def infer_datasource_type(database_url: str) -> tuple[str, str]:

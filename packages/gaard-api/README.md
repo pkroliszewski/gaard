@@ -13,11 +13,19 @@ For more informacion see https://github.com/pkroliszewski/gaard
 After installation, start it with:
 
 ```bash
+gaard-core install-example-database
 gaard-core start
 ```
 
-The command accepts `--host`, `--port`, and `--reload`. By default the API is
-available at `http://localhost:8000` and the admin application at
+`gaard-core install-example-database` creates the bundled Medical POC SQLite
+database at `examples/medical-poc/demo.db` in the current working directory,
+registers it as the active `default` datasource in `metadata.db`, and matches
+the default datasource URL. Use
+`gaard-core install-example-database --output /path/to/demo.db` to place it
+elsewhere; the command prints the SQLite datasource URL saved in metadata.
+
+`gaard-core start` accepts `--host`, `--port`, and `--reload`. By default the
+API is available at `http://localhost:8000` and the admin application at
 `http://localhost:8000/admin`.
 
 `gaard-api start` is an alias. `gaard admin` remains available for compatibility.
