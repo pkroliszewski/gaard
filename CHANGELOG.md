@@ -1,3 +1,6 @@
+### v.0.1.0 - PIP packages era
+- The Gaard is available as a PIP package
+
 ### 2026-06-18 Improved widgets handling and managing
 
 * Widgets are now listed on separated view. Also available by the api endpoint. Admin can add widgets, put it on the Overview.
