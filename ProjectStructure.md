@@ -12,4 +12,5 @@
 - `infra/` - deployment assets
 - `docs/` - architecture, API, and operational documentation
 - `examples/` - demo datasets and use cases
+- `examples/extensions/` - copyable extension packages; not default GAARD distributions
 - `tests/` - integration, end-to-end, and prompt evaluation tests

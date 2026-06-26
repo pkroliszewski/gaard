@@ -108,13 +108,14 @@ This will allow you to get widgets, and answer user queries.
 Details coming soon.
 
 ## More reading
+- [HOT! Extensions](Extensions.md)
 - [Configuration Details](ConfigurationDetails.md)
 - [Datasource Configuration](DatasourceConfiguration.md)
 - [Compiling Portable Docker Images](CompilingDockerImages.md)
 - [Run Gaard Using Docker](RunUsingDocker.md)
 - [Gaard Development](GaardDevelopment.md)
+- [Extensions](Extensions.md)
 - [Project Structure](ProjectStructure.md)
 - [Requirements](Requirements.md)
-
 
 

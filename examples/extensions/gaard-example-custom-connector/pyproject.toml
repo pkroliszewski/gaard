@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaard-example-custom-connector"
+version = "0.1.0"
+description = "Public example datasource connector for the GAARD extension platform"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "gaard-connectors>=0.1.0,<0.2.0",
+    "gaard-plugin-api>=0.1.0,<0.2.0",
+    "sqlalchemy>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+
+[project.entry-points."gaard.extensions"]
+example-custom-connector = "gaard_example_custom_connector.plugin:extension"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
