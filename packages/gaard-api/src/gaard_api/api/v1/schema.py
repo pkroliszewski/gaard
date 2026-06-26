@@ -1,6 +1,5 @@
 from fastapi import APIRouter
 
-from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 from gaard_core.schema.context import SchemaContextService
 from gaard_core.schema.models import DatabaseSchema
 
@@ -10,6 +9,7 @@ from gaard_api.admin.services import (
 )
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
+from gaard_api.extensions import get_connector_registry
 
 router = APIRouter()
 
@@ -29,9 +29,9 @@ def get_schema() -> DatabaseSchema:
         _connector, schema_cache = datasource_context
         return selected_schema_from_cache(schema_cache)
 
-    introspector = SQLAlchemySchemaIntrospector(
-        database_url=settings.gaard_datasource_url,
-    )
+    introspector = get_connector_registry().detect_from_database_url(
+        settings.gaard_datasource_url
+    ).introspector_factory(settings.gaard_datasource_url)
 
     service = SchemaContextService(
         introspector=introspector,

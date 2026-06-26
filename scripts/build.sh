@@ -13,8 +13,8 @@ Options:
   --repository NAME  Twine repository name (default: pypi).
   --python PYTHON    Python executable to use (default: python3).
   --package NAME     Build only one package. Can be used multiple times.
-                     Names: gaard-core, gaard-connectors, gaard-llm,
-                     gaard-api, gaard-client. Defaults to all packages.
+                     Names: gaard-plugin-api, gaard-core, gaard-connectors,
+                     gaard-llm, gaard-api, gaard-client. Defaults to all packages.
   -h, --help         Show this help.
 
 The selected Python environment must contain the `build` and `twine` packages.
@@ -39,6 +39,9 @@ selected_packages=()
 
 package_path_for() {
   case "$1" in
+    gaard-plugin-api|packages/gaard-plugin-api)
+      echo "packages/gaard-plugin-api"
+      ;;
     gaard-core|packages/gaard-core)
       echo "packages/gaard-core"
       ;;
@@ -100,6 +103,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_dir/.." && pwd)"
 dist_dir="$project_root/dist"
 packages=(
+  "packages/gaard-plugin-api"
   "packages/gaard-core"
   "packages/gaard-connectors"
   "packages/gaard-llm"

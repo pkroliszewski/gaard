@@ -91,6 +91,31 @@ def change_password(client: TestClient, token: str) -> None:
     assert response.json()["must_change_password"] is False
 
 
+def test_admin_lists_datasource_types_from_connector_registry(admin_client: TestClient) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    response = admin_client.get(
+        "/api/v1/admin/datasource-types",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    definitions = {item["type_key"]: item for item in response.json()["items"]}
+    assert definitions["sqlite"]["default_sql_dialect"] == "sqlite"
+    assert definitions["postgresql"]["default_sql_dialect"] == "postgres"
+    assert definitions["mysql"]["config_schema"]["required"] == ["database_url"]
+
+
+def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: TestClient) -> None:
+    response = admin_client.get("/admin/assets/main.js")
+
+    assert response.status_code == 200
+    assert 'api("/api/v1/admin/datasource-types")' in response.text
+    assert "plugin unavailable" in response.text
+    assert "renderDatabaseTypeOptions" not in response.text
+
+
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

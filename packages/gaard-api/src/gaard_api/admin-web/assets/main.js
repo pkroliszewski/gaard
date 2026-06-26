@@ -81,6 +81,7 @@ const state = {
     llmConfig: null,
     governancePolicy: null,
     datasources: [],
+    datasourceTypes: [],
     selectedDatasourceId: null,
     datasourceSchema: null,
     datasourceSchemaLoading: false,
@@ -946,7 +947,14 @@ function getSelectedDatasource() {
 }
 function renderDatasourceForm(connector) {
     const systemManaged = connector?.system_managed === true;
-    const disabled = systemManaged ? "disabled" : "";
+    const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
+    const selectedType = getDatasourceType(selectedTypeKey);
+    const databaseUrlSchema = selectedType?.config_schema?.properties?.database_url;
+    const selectedSqlDialect = connector?.sql_dialect || selectedType?.default_sql_dialect || "";
+    const databaseUrl = connector?.database_url || String(databaseUrlSchema?.default || "");
+    const unavailableType = Boolean(selectedTypeKey && !selectedType);
+    const disabled = systemManaged || unavailableType || !selectedType ? "disabled" : "";
+    const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
     return `
     <form id="datasource-form" class="form-grid">
       <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
@@ -954,32 +962,74 @@ function renderDatasourceForm(connector) {
       <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
       <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
       <div class="subgrid">
-        <label>Database type<select name="database_type" ${disabled}>${renderDatabaseTypeOptions(connector?.database_type || "sqlite")}</select></label>
-        <label>SQL dialect<select name="sql_dialect" ${disabled}>${renderSqlDialectOptions(connector?.sql_dialect || "sqlite")}</select></label>
+        <label>Connector type<select id="datasource-type" name="database_type" ${disabled}>${renderDatasourceTypeOptions(selectedTypeKey)}</select></label>
+        <label>SQL dialect<select id="datasource-sql-dialect" name="sql_dialect" ${disabled}>${renderSqlDialectOptions(selectedType, selectedSqlDialect)}</select></label>
       </div>
-      <label>Database URL<input name="database_url" ${disabled} value="${escapeHtml(connector?.database_url || "sqlite:///./examples/medical-poc/demo.db")}" /></label>
+      <p id="datasource-type-description" class="muted">${escapeHtml(connectorDescription)}</p>
+      <label><span id="datasource-url-label">${escapeHtml(databaseUrlSchema?.title || "Database URL")}</span><input id="datasource-url" name="database_url" ${disabled} placeholder="${escapeHtml(databaseUrlSchema?.description || "")}" value="${escapeHtml(databaseUrl)}" /></label>
       <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
       <div class="button-row">
-        <button type="button" id="test-datasource">Test</button>
+        <button type="button" id="test-datasource" ${disabled}>Test</button>
         <button type="button" id="introspect-datasource" ${connector ? "" : "disabled"}>Schema introspection</button>
         <button type="button" id="activate-datasource" ${connector && !connector.active && !systemManaged ? "" : "disabled"}>Activate</button>
         <button class="primary" type="submit" ${systemManaged ? "disabled" : ""}>${connector ? "Save" : "Create"}</button>
       </div>
     </form>`;
 }
-function renderDatabaseTypeOptions(selected) {
-    return [
-        "sqlite",
-        "postgresql",
-        "mysql"
-    ].map((value)=>`<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
+function getDatasourceType(typeKey) {
+    return state.datasourceTypes.find((item)=>item.type_key === typeKey) || null;
 }
-function renderSqlDialectOptions(selected) {
-    return [
-        "sqlite",
-        "postgres",
-        "mysql"
-    ].map((value)=>`<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
+function renderDatasourceTypeOptions(selected) {
+    const datasourceTypes = [
+        ...state.datasourceTypes
+    ];
+    if (selected && !getDatasourceType(selected)) {
+        datasourceTypes.unshift({
+            type_key: selected,
+            label: `${selected} (plugin unavailable)`,
+            description: "",
+            sql_dialects: [],
+            default_sql_dialect: "",
+            config_schema: {}
+        });
+    }
+    if (!datasourceTypes.length) {
+        return `<option value="" selected>No connector types available</option>`;
+    }
+    return datasourceTypes.map((item)=>`<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+}
+function renderSqlDialectOptions(datasourceType, selected) {
+    const dialects = [
+        ...datasourceType?.sql_dialects || []
+    ];
+    if (selected && !dialects.includes(selected)) {
+        dialects.unshift(selected);
+    }
+    if (!dialects.length) {
+        return `<option value="" selected>No SQL dialect available</option>`;
+    }
+    return dialects.map((value)=>`<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
+}
+function syncDatasourceTypeFields(event) {
+    const typeKey = event.currentTarget.value;
+    const datasourceType = getDatasourceType(typeKey);
+    const sqlDialect = document.querySelector("#datasource-sql-dialect");
+    const description = document.querySelector("#datasource-type-description");
+    const urlLabel = document.querySelector("#datasource-url-label");
+    const urlInput = document.querySelector("#datasource-url");
+    const databaseUrlSchema = datasourceType?.config_schema?.properties?.database_url;
+    if (sqlDialect) {
+        sqlDialect.innerHTML = renderSqlDialectOptions(datasourceType, datasourceType?.default_sql_dialect || "");
+    }
+    if (description) {
+        description.textContent = datasourceType?.description || "Connector type is unavailable.";
+    }
+    if (urlLabel) {
+        urlLabel.textContent = databaseUrlSchema?.title || "Database URL";
+    }
+    if (urlInput) {
+        urlInput.placeholder = databaseUrlSchema?.description || "";
+    }
 }
 function renderModeOptions(selected, values) {
     return values.map((value)=>`<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
@@ -1315,6 +1365,7 @@ function attachSectionHandlers() {
     document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
     document.querySelector("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
     document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
+    document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
     document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
     document.querySelector("#schema-show-enabled-only")?.addEventListener("change", (event)=>{
         syncDatasourceSchemaDraftFromForm();
@@ -1974,8 +2025,12 @@ async function loadPrompts() {
     render();
 }
 async function loadDatasources() {
-    const result = await api("/api/v1/admin/datasources");
-    state.datasources = result.items || [];
+    const [datasources, datasourceTypes] = await Promise.all([
+        api("/api/v1/admin/datasources"),
+        api("/api/v1/admin/datasource-types")
+    ]);
+    state.datasources = datasources.items || [];
+    state.datasourceTypes = datasourceTypes.items || [];
     if (!state.selectedDatasourceId || state.selectedDatasourceId === "new") {
         state.selectedDatasourceId = state.datasources[0]?.id || null;
     }

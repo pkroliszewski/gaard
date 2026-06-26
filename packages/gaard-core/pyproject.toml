@@ -9,6 +9,7 @@ description = "Core GAARD query pipeline, prompt compiler, policies and SQL vali
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "gaard-plugin-api>=0.1.0,<0.2.0",
     "pydantic>=2.7.0",
     "sqlglot>=25.0.0",
 ]

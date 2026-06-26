@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -92,10 +91,12 @@ from gaard_api.admin.services import (
     update_business_logic_suggestion_content,
     update_schema_table_settings,
     validate_datasource_url,
+    validate_datasource_configuration,
 )
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
+from gaard_api.extensions import get_connector_registry
 
 router = APIRouter()
 
@@ -220,22 +221,22 @@ class OverviewWidgetFromQueryRequest(BaseModel):
 class DatasourceConnectorRequest(BaseModel):
     connector_key: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     name: str = Field(min_length=1)
-    database_type: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
+    database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     database_url: str = Field(min_length=1)
-    sql_dialect: str = Field(pattern=r"^(sqlite|postgres|mysql)$")
+    sql_dialect: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     active: bool = False
 
 
 class DatasourceConnectorUpdateRequest(BaseModel):
     name: str = Field(min_length=1)
-    database_type: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
+    database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     database_url: str = Field(min_length=1)
-    sql_dialect: str = Field(pattern=r"^(sqlite|postgres|mysql)$")
+    sql_dialect: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     active: bool = False
 
 
 class DatasourceConnectionTestRequest(BaseModel):
-    database_type: str = Field(pattern=r"^(sqlite|postgresql|mysql)$")
+    database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     database_url: str = Field(min_length=1)
 
 
@@ -472,10 +473,15 @@ def execute_overview_sql(
 ) -> QueryResult:
     SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(sql)
 
-    return SQLAlchemyQueryExecutor(
-        database_url=connector.database_url,
-        max_rows=get_query_runtime_config(session).query_max_rows,
-    ).execute(sql)
+    return (
+        get_connector_registry()
+        .get(connector.database_type)
+        .executor_factory(
+            connector.database_url,
+            get_query_runtime_config(session).query_max_rows,
+        )
+        .execute(sql)
+    )
 
 
 def generate_overview_widget_sql(
@@ -1502,6 +1508,16 @@ def get_datasources(
     }
 
 
+@router.get("/datasource-types")
+def get_datasource_types(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "items": [definition.serialize() for definition in get_connector_registry().list()],
+        "viewer": user.username,
+    }
+
+
 @router.post("/datasources")
 def create_datasource(
     request: DatasourceConnectorRequest,
@@ -1515,7 +1531,11 @@ def create_datasource(
         )
 
     try:
-        validate_datasource_url(request.database_type, request.database_url)
+        validate_datasource_configuration(
+            request.database_type,
+            request.database_url,
+            request.sql_dialect,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -1584,7 +1604,11 @@ def update_datasource(
         )
 
     try:
-        validate_datasource_url(request.database_type, request.database_url)
+        validate_datasource_configuration(
+            request.database_type,
+            request.database_url,
+            request.sql_dialect,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -1695,12 +1719,13 @@ def test_datasource_from_request(
     request: DatasourceConnectionTestRequest,
 ) -> dict[str, Any]:
     validate_datasource_url(request.database_type, request.database_url)
+    definition = get_connector_registry().get(request.database_type)
     connector = DatasourceConnector(
         connector_key="__preview__",
         name="__preview__",
         database_type=request.database_type,
         database_url=request.database_url,
-        sql_dialect=request.database_type if request.database_type != "postgresql" else "postgres",
+        sql_dialect=definition.default_sql_dialect,
         active=False,
     )
     test_datasource_connection(connector)

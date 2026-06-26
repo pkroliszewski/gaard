@@ -3,20 +3,16 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gaard-connectors"
+name = "gaard-plugin-api"
 version = "0.1.0"
-description = "Database connectors for GAARD based on SQLAlchemy"
+description = "Versioned extension contracts and discovery for GAARD"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "gaard-core==0.1.0",
-    "gaard-plugin-api>=0.1.0,<0.2.0",
-    "sqlalchemy>=2.0.0",
+    "packaging>=24.0",
 ]
 
 [project.optional-dependencies]
-postgres = ["psycopg[binary]>=3.2.0"]
-mysql = ["pymysql>=1.1.0"]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.5.0",

@@ -5,12 +5,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import create_engine, text
 from sqlalchemy import delete, desc, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 from gaard_core.errors import LlmProviderError
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import OutputClassification, QueryRequest, QueryResponse
@@ -33,6 +31,7 @@ from gaard_api.admin.models import (
     PromptTemplate,
 )
 from gaard_api.core.settings import settings
+from gaard_api.extensions import get_connector_registry
 
 
 def json_dumps(value: Any) -> str:
@@ -43,24 +42,16 @@ def json_loads(value: str) -> Any:
     return json.loads(value or "{}")
 
 
-SUPPORTED_DATABASE_TYPES = {
-    "sqlite": ("sqlite://", "sqlite"),
-    "postgresql": ("postgresql://", "postgresql+psycopg://"),
-    "mysql": ("mysql://", "mysql+pymysql://"),
-}
-
-
 def validate_datasource_url(database_type: str, database_url: str) -> None:
-    prefixes = SUPPORTED_DATABASE_TYPES.get(database_type)
+    get_connector_registry().get(database_type).validate_database_url(database_url)
 
-    if prefixes is None:
-        raise ValueError("Unsupported datasource type.")
 
-    if not database_url.startswith(prefixes):
-        raise ValueError(
-            f"Datasource URL for {database_type} must start with one of: "
-            f"{', '.join(prefixes)}"
-        )
+def validate_datasource_configuration(
+    database_type: str,
+    database_url: str,
+    sql_dialect: str,
+) -> None:
+    get_connector_registry().validate(database_type, database_url, sql_dialect)
 
 
 def mask_database_url(database_url: str) -> str:
@@ -1896,18 +1887,7 @@ def set_active_datasource_connector(
 
 
 def test_datasource_connection(connector: DatasourceConnector) -> None:
-    connect_args = (
-        {"check_same_thread": False}
-        if connector.database_url.startswith("sqlite")
-        else {}
-    )
-    engine = create_engine(connector.database_url, connect_args=connect_args)
-
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-    finally:
-        engine.dispose()
+    get_connector_registry().get(connector.database_type).connection_tester(connector.database_url)
 
 
 def get_datasource_schema_cache(
@@ -1935,7 +1915,12 @@ def introspect_datasource_connector(
     connector: DatasourceConnector,
     actor: str,
 ) -> DatasourceSchemaCache:
-    schema = SQLAlchemySchemaIntrospector(connector.database_url).introspect()
+    schema = (
+        get_connector_registry()
+        .get(connector.database_type)
+        .introspector_factory(connector.database_url)
+        .introspect()
+    )
     existing = get_datasource_schema_cache(session, connector.id)
     existing_settings = (
         json_loads(existing.table_settings_json) if existing is not None else {}

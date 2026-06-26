@@ -1,5 +1,6 @@
 ## Project Structure
 
+- `packages/gaard-plugin-api/` - versioned extension contracts and discovery
 - `packages/gaard-api/` - FastAPI HTTP API and bundled admin UI
 - `packages/gaard-client/` - FastAPI-hosted community client UI
 - `services/worker/` - background worker
@@ -12,4 +13,3 @@
 - `docs/` - architecture, API, and operational documentation
 - `examples/` - demo datasets and use cases
 - `tests/` - integration, end-to-end, and prompt evaluation tests
-

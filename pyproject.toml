@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = [
+    "packages/gaard-plugin-api/tests",
     "packages/gaard-core/tests",
     "packages/gaard-connectors/tests",
     "packages/gaard-llm/tests",

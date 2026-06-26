@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "gaard-plugin-api-v*"
       - "gaard-core-v*"
       - "gaard-connectors-v*"
       - "gaard-llm-v*"
@@ -45,6 +46,7 @@ jobs:
           import sys
 
           packages = [
+              "gaard-plugin-api",
               "gaard-core",
               "gaard-connectors",
               "gaard-llm",
@@ -97,6 +99,7 @@ jobs:
           release_package = sys.argv[1]
           expected_version = sys.argv[2]
           pyprojects_by_package = {
+              "gaard-plugin-api": Path("packages/gaard-plugin-api/pyproject.toml"),
               "gaard-core": Path("packages/gaard-core/pyproject.toml"),
               "gaard-connectors": Path("packages/gaard-connectors/pyproject.toml"),
               "gaard-llm": Path("packages/gaard-llm/pyproject.toml"),

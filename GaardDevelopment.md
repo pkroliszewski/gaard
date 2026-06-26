@@ -28,6 +28,7 @@ pip install -r requirements-dev.txt
 
 This installs local GAARD packages in editable mode:
 
+- `packages/gaard-plugin-api`
 - `packages/gaard-core`
 - `packages/gaard-connectors`
 - `packages/gaard-llm`

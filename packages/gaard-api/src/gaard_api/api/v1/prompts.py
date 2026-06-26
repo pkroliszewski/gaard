@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 from gaard_core.prompt_compiler.models import CompiledPrompt
 from gaard_core.prompt_compiler.models import SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.sql_generation_prompt import SqlGenerationPromptCompiler
@@ -12,6 +11,7 @@ from gaard_api.admin.services import get_datasource_schema_context_safe, get_que
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
+from gaard_api.extensions import get_connector_registry
 
 router = APIRouter()
 
@@ -32,9 +32,9 @@ def compile_sql_generation_prompt(
         sql_dialect = connector.sql_dialect
     else:
         sql_dialect = settings.gaard_sql_dialect
-        introspector = SQLAlchemySchemaIntrospector(
-            database_url=settings.gaard_datasource_url,
-        )
+        introspector = get_connector_registry().detect_from_database_url(
+            settings.gaard_datasource_url
+        ).introspector_factory(settings.gaard_datasource_url)
         service = SchemaContextService(
             introspector=introspector,
             cache=schema_context_cache,

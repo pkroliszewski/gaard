@@ -9,6 +9,7 @@ COPY packages /app/packages
 COPY examples /app/examples
 
 RUN pip install --no-cache-dir \
+    -e /app/packages/gaard-plugin-api \
     -e /app/packages/gaard-core \
     -e /app/packages/gaard-connectors \
     -e /app/packages/gaard-llm \

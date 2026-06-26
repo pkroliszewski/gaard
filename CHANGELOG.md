@@ -1,3 +1,7 @@
+### v.0.1.1 - GAARD Modularization
+- Main packages will be modularized so all can be easily extended by extrernal code
+- Extensions are smoothly integarted into Admin UI and metadata
+
 ### v.0.1.0 - PIP packages era
 - The Gaard is available as a PIP package
 

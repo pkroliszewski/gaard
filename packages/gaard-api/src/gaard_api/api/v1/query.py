@@ -8,8 +8,6 @@ from typing import Any, Callable
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
-from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -75,6 +73,7 @@ from gaard_api.admin.services import (
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
+from gaard_api.extensions import get_connector_registry
 
 router = APIRouter()
 
@@ -169,9 +168,9 @@ def create_sql_generator(
                 prompt_compiler=get_sql_generation_prompt_compiler(),
             )
 
-        introspector = SQLAlchemySchemaIntrospector(
-            database_url=settings.gaard_datasource_url,
-        )
+        introspector = get_connector_registry().detect_from_database_url(
+            settings.gaard_datasource_url
+        ).introspector_factory(settings.gaard_datasource_url)
 
         schema_context_service = SchemaContextService(
             introspector=introspector,
@@ -315,9 +314,14 @@ def create_pipeline(datasource_context: DatasourceContext | None = None) -> Quer
         else settings.gaard_sql_dialect
     )
 
-    executor = SQLAlchemyQueryExecutor(
-        database_url=database_url,
-        max_rows=runtime_config.query_max_rows,
+    connector_definition = (
+        get_connector_registry().get(datasource_context[0].database_type)
+        if datasource_context is not None
+        else get_connector_registry().detect_from_database_url(database_url)
+    )
+    executor = connector_definition.executor_factory(
+        database_url,
+        runtime_config.query_max_rows,
     )
     llm_config = (
         get_llm_runtime_config_safe()
@@ -376,9 +380,9 @@ def schema_and_business_logic_for_investigation(
             get_active_business_logic_prompt_safe(connector.id),
         )
 
-    introspector = SQLAlchemySchemaIntrospector(
-        database_url=settings.gaard_datasource_url,
-    )
+    introspector = get_connector_registry().detect_from_database_url(
+        settings.gaard_datasource_url
+    ).introspector_factory(settings.gaard_datasource_url)
     schema_context_service = SchemaContextService(
         introspector=introspector,
         cache=schema_context_cache,

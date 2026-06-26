@@ -13,6 +13,7 @@ dependencies = [
     "gaard-core==0.1.0",
     "gaard-connectors==0.1.0",
     "gaard-llm==0.1.0",
+    "gaard-plugin-api>=0.1.0,<0.2.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.7.0",

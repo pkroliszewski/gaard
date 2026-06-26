@@ -1,0 +1,10 @@
+{
+  "name": "gaard-admin-web",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=esm --target=es2020 --outfile=assets/main.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
