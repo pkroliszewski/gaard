@@ -15,13 +15,14 @@ mkdir gaard
 cd gaard
 python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 ```
 
 ### 2. Install Gaard
 ```bash
-pip install --upgrade pip
 pip install gaard-api gaard-client
 ```
+If you created the virtual Python environment - be sure that workdir is set to the directory where .venv is, and you sourced the .venv/bin/activate.
 
 ### 3. Install example database (optional)
 
