@@ -1,302 +1,321 @@
-const app = document.querySelector("#app");
-const sections = [
-    {
-        key: "overview",
-        label: "Overview"
-    },
-    {
-        key: "widgets",
-        label: "Widgets"
-    },
-    {
-        key: "data-audit",
-        label: "Data audit"
-    },
-    {
-        key: "prompts",
-        label: "Prompts"
-    },
-    {
-        key: "schema-cache",
-        label: "Schema cache"
-    },
-    {
-        key: "business-logic",
-        label: "Business logic suggestions"
-    },
-    {
-        key: "llm-config",
-        label: "LLM configuration"
-    },
-    {
-        key: "governance-policy",
-        label: "Governance policy"
-    },
-    {
-        key: "identity",
-        label: "Identity connector"
-    },
-    {
-        key: "datasources",
-        label: "Datasource connector"
-    },
-    {
-        key: "license",
-        label: "License"
-    },
-    {
-        key: "admin-audit",
-        label: "Admin audit"
-    }
-];
-const state = {
-    token: localStorage.getItem("gaard_admin_token"),
-    username: localStorage.getItem("gaard_admin_username") || "",
-    mustChangePassword: localStorage.getItem("gaard_admin_must_change") === "true",
-    mobileMenuOpen: false,
-    section: "overview",
-    error: "",
-    success: "",
-    overview: null,
-    overviewWidgetConfigs: [],
-    overviewWidgetDatasources: [],
-    selectedOverviewWidgetKey: "",
-    overviewEditorWidgetKey: null,
-    overviewPlacementSlot: null,
-    overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
-    overviewRefreshing: false,
-    overviewTablePages: {},
-    dataAudit: [],
-    dataAuditType: "",
-    dataAuditOutputClassification: "",
-    dataAuditSqlContains: "",
-    adminAudit: [],
-    auditSettings: null,
-    prompts: [],
-    selectedPromptKey: "",
-    schemaCache: null,
-    businessLogic: [],
-    businessLogicDatasource: null,
-    businessLogicEditorId: null,
-    llmConfig: null,
-    governancePolicy: null,
-    datasources: [],
-    datasourceTypes: [],
-    selectedDatasourceId: null,
-    datasourceSchema: null,
-    datasourceSchemaLoading: false,
-    datasourceSchemaError: "",
-    datasourceSchemaSelectedObjectName: "",
-    datasourceSchemaShowEnabledOnly: false,
-    datasourceSchemaDraftTables: null,
-    license: null
+// src/main.ts
+var app = document.querySelector("#app");
+var builtInSectionLabels = {
+  overview: "Overview",
+  widgets: "Widgets",
+  "data-audit": "Data audit",
+  prompts: "Prompts",
+  "schema-cache": "Schema cache",
+  "business-logic": "Business logic suggestions",
+  "llm-config": "LLM",
+  reasoning: "Reasoning",
+  "governance-policy": "Governance policy",
+  identity: "Identities",
+  datasources: "Data sources",
+  license: "License",
+  "admin-audit": "Admin audit"
 };
-const dataAuditTypes = [
-    {
-        value: "",
-        label: "All types"
-    },
-    {
-        value: "info",
-        label: "Info"
-    },
-    {
-        value: "sql_error",
-        label: "SQL error"
-    },
-    {
-        value: "access_error",
-        label: "Access error"
-    }
+var state = {
+  token: localStorage.getItem("gaard_admin_token"),
+  username: localStorage.getItem("gaard_admin_username") || "",
+  mustChangePassword: localStorage.getItem("gaard_admin_must_change") === "true",
+  mobileMenuOpen: false,
+  openMenuGroups: {},
+  section: "overview",
+  error: "",
+  success: "",
+  overview: null,
+  overviewWidgetConfigs: [],
+  overviewWidgetDatasources: [],
+  selectedOverviewWidgetKey: "",
+  overviewEditorWidgetKey: null,
+  overviewPlacementSlot: null,
+  overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
+  overviewRefreshing: false,
+  overviewTablePages: {},
+  dataAudit: [],
+  dataAuditType: "",
+  dataAuditOutputClassification: "",
+  dataAuditSqlContains: "",
+  adminAudit: [],
+  auditSettings: null,
+  prompts: [],
+  selectedPromptKey: "",
+  schemaCache: null,
+  businessLogic: [],
+  businessLogicDatasource: null,
+  businessLogicEditorId: null,
+  llmConfig: null,
+  reasoningConfig: null,
+  governancePolicy: null,
+  datasources: [],
+  datasourceTypes: [],
+  selectedDatasourceId: null,
+  datasourceSchema: null,
+  datasourceSchemaLoading: false,
+  datasourceSchemaError: "",
+  datasourceSchemaSelectedObjectName: "",
+  datasourceSchemaShowEnabledOnly: false,
+  datasourceSchemaDraftTables: null,
+  extensionSections: [],
+  extensionsLoaded: false,
+  license: null
+};
+var dataAuditTypes = [
+  { value: "", label: "All types" },
+  { value: "info", label: "Info" },
+  { value: "sql_error", label: "SQL error" },
+  { value: "access_error", label: "Access error" }
 ];
-const outputClassifications = [
-    {
-        value: "",
-        label: "All classifications"
-    },
-    {
-        value: "personal_data",
-        label: "Personal data"
-    },
-    {
-        value: "sensitive_data",
-        label: "Sensitive data"
-    },
-    {
-        value: "technical_data",
-        label: "Technical data"
-    },
-    {
-        value: "neutral_data",
-        label: "Neutral data"
-    },
-    {
-        value: "unknown",
-        label: "Unknown"
-    }
+var outputClassifications = [
+  { value: "", label: "All classifications" },
+  { value: "personal_data", label: "Personal data" },
+  { value: "sensitive_data", label: "Sensitive data" },
+  { value: "technical_data", label: "Technical data" },
+  { value: "neutral_data", label: "Neutral data" },
+  { value: "unknown", label: "Unknown" }
 ];
-const OVERVIEW_TABLE_PAGE_SIZE = 10;
-const OVERVIEW_GRID_COLUMNS = 4;
-const OVERVIEW_MIN_GRID_SLOTS = 8;
-const ALLOWED_WIDGET_HTML_TAGS = new Set([
-    "A",
-    "B",
-    "I",
-    "UL",
-    "LI"
-]);
-const DROPPED_WIDGET_HTML_TAGS = new Set([
-    "SCRIPT",
-    "STYLE",
-    "IFRAME",
-    "OBJECT",
-    "EMBED",
-    "TEMPLATE",
-    "SVG",
-    "MATH"
-]);
+var OVERVIEW_TABLE_PAGE_SIZE = 10;
+var OVERVIEW_GRID_COLUMNS = 4;
+var OVERVIEW_MIN_GRID_SLOTS = 8;
+var ALLOWED_WIDGET_HTML_TAGS = /* @__PURE__ */ new Set(["A", "B", "I", "UL", "LI"]);
+var DROPPED_WIDGET_HTML_TAGS = /* @__PURE__ */ new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE", "SVG", "MATH"]);
+function getMenuGroups() {
+  return [
+    {
+      key: "dashboards",
+      label: "Dashboards",
+      sections: [
+        { key: "overview", label: builtInSectionLabels.overview }
+      ]
+    },
+    {
+      key: "governance",
+      label: "Governance",
+      sections: [
+        { key: "data-audit", label: builtInSectionLabels["data-audit"] },
+        { key: "business-logic", label: builtInSectionLabels["business-logic"] },
+        { key: "admin-audit", label: builtInSectionLabels["admin-audit"] },
+        { key: "license", label: builtInSectionLabels.license }
+      ]
+    },
+    {
+      key: "configuration",
+      label: "Configuration",
+      sections: [
+        { key: "llm-config", label: builtInSectionLabels["llm-config"] },
+        { key: "reasoning", label: builtInSectionLabels.reasoning },
+        { key: "datasources", label: builtInSectionLabels.datasources },
+        { key: "prompts", label: builtInSectionLabels.prompts },
+        { key: "widgets", label: builtInSectionLabels.widgets },
+        { key: "identity", label: builtInSectionLabels.identity },
+        { key: "governance-policy", label: builtInSectionLabels["governance-policy"] }
+      ]
+    },
+    {
+      key: "extensions",
+      label: "Extensions",
+      sections: state.extensionSections.map((section) => ({
+        key: section.section_id,
+        label: section.label
+      })),
+      emptyLabel: "No active extensions"
+    }
+  ];
+}
+function getSections() {
+  return getMenuGroups().flatMap((group) => group.sections);
+}
+function getSectionLabel(section) {
+  const menuSection = getSections().find((item) => item.key === section);
+  if (menuSection) return menuSection.label;
+  if (isExtensionSection(section)) return getExtensionSection(section)?.label || "Extension";
+  return builtInSectionLabels[section];
+}
+function isExtensionSection(section) {
+  return section.startsWith("extension:");
+}
+function getExtensionSection(section) {
+  if (!isExtensionSection(section)) return null;
+  return state.extensionSections.find((item) => item.section_id === section) || null;
+}
+function isMenuGroupActive(group) {
+  return group.sections.some((section) => section.key === state.section);
+}
+function renderNavigation() {
+  return getMenuGroups().map((group) => renderMenuGroup(group)).join("");
+}
+function renderMenuGroup(group) {
+  const isOpen = Boolean(state.openMenuGroups[group.key]);
+  const isActive = isMenuGroupActive(group);
+  const submenu = isOpen ? renderSubmenu(group) : "";
+  return `
+    <div class="nav-group${isActive ? " active" : ""}">
+      <button
+        type="button"
+        class="nav-group-button${isActive ? " active" : ""}"
+        data-menu-group="${escapeHtml(group.key)}"
+        aria-expanded="${isOpen}"
+      >
+        <span>${escapeHtml(group.label)}</span>
+        <span class="nav-chevron" aria-hidden="true">${isOpen ? "\u25BE" : "\u25B8"}</span>
+      </button>
+      ${submenu}
+    </div>`;
+}
+function renderSubmenu(group) {
+  if (group.sections.length === 0) {
+    return `<div class="submenu"><div class="nav-empty">${escapeHtml(group.emptyLabel || "No items")}</div></div>`;
+  }
+  return `
+    <div class="submenu">
+      ${group.sections.map((section) => `
+        <button
+          type="button"
+          data-section="${escapeHtml(section.key)}"
+          class="submenu-button${section.key === state.section ? " active" : ""}"
+        >
+          ${escapeHtml(section.label)}
+        </button>`).join("")}
+    </div>`;
+}
 function escapeHtml(value) {
-    return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
 function renderWidgetContent(value) {
-    const documentFragment = new DOMParser().parseFromString(String(value ?? ""), "text/html");
-    return Array.from(documentFragment.body.childNodes).map(renderWidgetContentNode).join("");
+  const documentFragment = new DOMParser().parseFromString(String(value ?? ""), "text/html");
+  return Array.from(documentFragment.body.childNodes).map(renderWidgetContentNode).join("");
 }
 function renderWidgetContentNode(node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-        return escapeHtml(node.textContent || "");
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-        return "";
-    }
-    const element = node;
-    const tagName = element.tagName.toUpperCase();
-    if (DROPPED_WIDGET_HTML_TAGS.has(tagName)) {
-        return "";
-    }
-    const children = Array.from(element.childNodes).map(renderWidgetContentNode).join("");
-    if (!ALLOWED_WIDGET_HTML_TAGS.has(tagName)) {
-        return children;
-    }
-    const tag = tagName.toLowerCase();
-    if (tag === "a") {
-        const href = sanitizeWidgetHref(element.getAttribute("href"));
-        return `<a${href ? ` href="${escapeHtml(href)}"` : ""}>${children}</a>`;
-    }
-    return `<${tag}>${children}</${tag}>`;
+  if (node.nodeType === Node.TEXT_NODE) {
+    return escapeHtml(node.textContent || "");
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+  const element = node;
+  const tagName = element.tagName.toUpperCase();
+  if (DROPPED_WIDGET_HTML_TAGS.has(tagName)) {
+    return "";
+  }
+  const children = Array.from(element.childNodes).map(renderWidgetContentNode).join("");
+  if (!ALLOWED_WIDGET_HTML_TAGS.has(tagName)) {
+    return children;
+  }
+  const tag = tagName.toLowerCase();
+  if (tag === "a") {
+    const href = sanitizeWidgetHref(element.getAttribute("href"));
+    return `<a${href ? ` href="${escapeHtml(href)}"` : ""}>${children}</a>`;
+  }
+  return `<${tag}>${children}</${tag}>`;
 }
 function sanitizeWidgetHref(value) {
-    const href = String(value || "").trim().replace(/[\u0000-\u001F\u007F\s]+/g, "");
-    if (!href) {
-        return "";
-    }
-    try {
-        const parsed = new URL(href, window.location.origin);
-        if ([
-            "http:",
-            "https:",
-            "mailto:",
-            "tel:"
-        ].includes(parsed.protocol)) {
-            return href;
-        }
-    } catch  {
-        return "";
-    }
+  const href = String(value || "").trim().replace(/[\u0000-\u001F\u007F\s]+/g, "");
+  if (!href) {
     return "";
+  }
+  try {
+    const parsed = new URL(href, window.location.origin);
+    if (["http:", "https:", "mailto:", "tel:"].includes(parsed.protocol)) {
+      return href;
+    }
+  } catch {
+    return "";
+  }
+  return "";
 }
 function formatAuditTime(value) {
-    const raw = String(value ?? "");
-    const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?/);
-    if (match) {
-        const millis = (match[5] || "000").slice(0, 3).padEnd(3, "0");
-        return `${match[1]} ${match[2]}:${match[3]}:${match[4]}:${millis}`;
-    }
-    return raw;
+  const raw = String(value ?? "");
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?/);
+  if (match) {
+    const millis = (match[5] || "000").slice(0, 3).padEnd(3, "0");
+    return `${match[1]} ${match[2]}:${match[3]}:${match[4]}:${millis}`;
+  }
+  return raw;
 }
 function extractErrorMessage(value) {
-    if (typeof value === "string") {
-        const trimmed = value.trim();
-        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-            try {
-                return extractErrorMessage(JSON.parse(trimmed));
-            } catch {
-                return value;
-            }
-        }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return extractErrorMessage(JSON.parse(trimmed));
+      } catch {
         return value;
+      }
     }
-    if (value && typeof value === "object") {
-        const record = value;
-        if (typeof record.message === "string") return record.message;
-        if (typeof record.detail === "string") return record.detail;
-        if (record.error) return extractErrorMessage(record.error);
-        if (Array.isArray(record.detail) && record.detail.length) {
-            return extractErrorMessage(record.detail[0]);
-        }
-        return JSON.stringify(value);
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value;
+    if (typeof record.message === "string") return record.message;
+    if (typeof record.detail === "string") return record.detail;
+    if (record.error) return extractErrorMessage(record.error);
+    if (Array.isArray(record.detail) && record.detail.length) {
+      return extractErrorMessage(record.detail[0]);
     }
-    return String(value ?? "");
+    return JSON.stringify(value);
+  }
+  return String(value ?? "");
 }
 async function api(path, options = {}) {
-    const headers = new Headers(options.headers || {});
-    headers.set("Content-Type", "application/json");
-    if (state.token) headers.set("Authorization", `Bearer ${state.token}`);
-    const response = await fetch(path, {
-        ...options,
-        headers
-    });
-    const payload = await response.json().catch(()=>({}));
-    if (response.status === 401) {
-        logout();
-        throw new Error("Session expired.");
-    }
-    if (!response.ok) {
-        throw new Error(extractErrorMessage(payload.detail ?? payload.error ?? payload.message ?? "Request failed."));
-    }
-    return payload;
+  const headers = new Headers(options.headers || {});
+  headers.set("Content-Type", "application/json");
+  if (state.token) headers.set("Authorization", `Bearer ${state.token}`);
+  const response = await fetch(path, { ...options, headers });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    logout();
+    throw new Error("Session expired.");
+  }
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload.detail ?? payload.error ?? payload.message ?? "Request failed."));
+  }
+  return payload;
 }
 function setMessage(type, value) {
-    state.error = type === "error" ? value : "";
-    state.success = type === "success" ? value : "";
-    const region = document.querySelector("#message-region");
-    if (region) {
-        region.innerHTML = renderMessages();
-    }
+  state.error = type === "error" ? value : "";
+  state.success = type === "success" ? value : "";
+  const region = document.querySelector("#message-region");
+  if (region) {
+    region.innerHTML = renderMessages();
+  }
 }
 function renderMessages() {
-    return `
+  return `
           ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
           ${state.success ? `<div class="success">${escapeHtml(state.success)}</div>` : ""}`;
 }
 function persistAuth(token, username, mustChangePassword) {
-    state.token = token;
-    state.username = username;
-    state.mustChangePassword = mustChangePassword;
-    localStorage.setItem("gaard_admin_token", token);
-    localStorage.setItem("gaard_admin_username", username);
-    localStorage.setItem("gaard_admin_must_change", String(mustChangePassword));
+  state.token = token;
+  state.username = username;
+  state.mustChangePassword = mustChangePassword;
+  localStorage.setItem("gaard_admin_token", token);
+  localStorage.setItem("gaard_admin_username", username);
+  localStorage.setItem("gaard_admin_must_change", String(mustChangePassword));
 }
 function logout() {
-    state.token = null;
-    state.username = "";
-    state.mustChangePassword = false;
-    state.overviewLoading = false;
-    state.overviewRefreshing = false;
-    state.overviewEditorWidgetKey = null;
-    localStorage.removeItem("gaard_admin_token");
-    localStorage.removeItem("gaard_admin_username");
-    localStorage.removeItem("gaard_admin_must_change");
-    render();
+  state.token = null;
+  state.username = "";
+  state.mustChangePassword = false;
+  state.overviewLoading = false;
+  state.overviewRefreshing = false;
+  state.overviewEditorWidgetKey = null;
+  state.openMenuGroups = {};
+  state.extensionSections = [];
+  state.extensionsLoaded = false;
+  localStorage.removeItem("gaard_admin_token");
+  localStorage.removeItem("gaard_admin_username");
+  localStorage.removeItem("gaard_admin_must_change");
+  render();
 }
 function render() {
-    if (!app) return;
-    if (!state.token) return renderLogin();
-    if (state.mustChangePassword) return renderPasswordChange();
-    renderShell();
+  if (!app) return;
+  if (!state.token) return renderLogin();
+  if (state.mustChangePassword) return renderPasswordChange();
+  renderShell();
 }
 function renderLogin() {
-    app.innerHTML = `
+  app.innerHTML = `
     <main class="login-shell">
       <section class="login-panel">
         <h1>GAARD Admin Console</h1>
@@ -309,30 +328,27 @@ function renderLogin() {
         </form>
       </section>
     </main>`;
-    document.querySelector("#login-form")?.addEventListener("submit", async (event)=>{
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        try {
-            const result = await api("/api/v1/admin/auth/login", {
-                method: "POST",
-                body: JSON.stringify({
-                    username: form.get("username"),
-                    password: form.get("password")
-                })
-            });
-            persistAuth(result.token, result.username, result.must_change_password);
-            state.overviewLoading = !result.must_change_password && state.section === "overview";
-            setMessage("success", "");
-            render();
-            if (!result.must_change_password) await loadCurrentSection();
-        } catch (error) {
-            setMessage("error", error.message);
-            render();
-        }
-    });
+  document.querySelector("#login-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await api("/api/v1/admin/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username: form.get("username"), password: form.get("password") })
+      });
+      persistAuth(result.token, result.username, result.must_change_password);
+      state.overviewLoading = !result.must_change_password && state.section === "overview";
+      setMessage("success", "");
+      render();
+      if (!result.must_change_password) await loadCurrentSection();
+    } catch (error) {
+      setMessage("error", error.message);
+      render();
+    }
+  });
 }
 function renderPasswordChange() {
-    app.innerHTML = `
+  app.innerHTML = `
     <main class="login-shell">
       <section class="login-panel">
         <h1>Change password</h1>
@@ -348,33 +364,33 @@ function renderPasswordChange() {
         </form>
       </section>
     </main>`;
-    document.querySelector("#logout-button")?.addEventListener("click", logout);
-    document.querySelector("#password-form")?.addEventListener("submit", async (event)=>{
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        try {
-            const result = await api("/api/v1/admin/auth/change-password", {
-                method: "POST",
-                body: JSON.stringify({
-                    current_password: form.get("current_password"),
-                    new_password: form.get("new_password")
-                })
-            });
-            state.mustChangePassword = result.must_change_password;
-            state.overviewLoading = !state.mustChangePassword && state.section === "overview";
-            localStorage.setItem("gaard_admin_must_change", String(result.must_change_password));
-            setMessage("success", "Password changed.");
-            render();
-            await loadCurrentSection();
-        } catch (error) {
-            setMessage("error", error.message);
-            render();
-        }
-    });
+  document.querySelector("#logout-button")?.addEventListener("click", logout);
+  document.querySelector("#password-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await api("/api/v1/admin/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: form.get("current_password"),
+          new_password: form.get("new_password")
+        })
+      });
+      state.mustChangePassword = result.must_change_password;
+      state.overviewLoading = !state.mustChangePassword && state.section === "overview";
+      localStorage.setItem("gaard_admin_must_change", String(result.must_change_password));
+      setMessage("success", "Password changed.");
+      render();
+      await loadCurrentSection();
+    } catch (error) {
+      setMessage("error", error.message);
+      render();
+    }
+  });
 }
 function renderShell() {
-    const active = sections.find((section)=>section.key === state.section);
-    app.innerHTML = `
+  const activeLabel = getSectionLabel(state.section);
+  app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
         <div class="sidebar-header">
@@ -384,13 +400,13 @@ function renderShell() {
           </button>
         </div>
         <nav class="nav" id="admin-navigation">
-          ${sections.map((section)=>`<button data-section="${section.key}" class="${section.key === state.section ? "active" : ""}">${section.label}</button>`).join("")}
+          ${renderNavigation()}
         </nav>
         <div class="sidebar-footer"><span>${escapeHtml(state.username)}</span><button id="logout-button">Sign out</button></div>
       </aside>
       <main class="main">
         <header class="topbar">
-          <h1>${escapeHtml(active?.label || "Admin")}</h1>
+          <h1>${escapeHtml(activeLabel || "Admin")}</h1>
           <div class="topbar-actions"><span>${escapeHtml(state.username)}</span><button id="top-logout-button">Sign out</button></div>
         </header>
         <section class="content">
@@ -400,46 +416,106 @@ function renderShell() {
       </main>
     </div>
     ${renderOverviewWidgetModal()}`;
-    document.querySelectorAll("[data-section]").forEach((button)=>{
-        button.addEventListener("click", async ()=>{
-            state.section = button.dataset.section;
-            state.mobileMenuOpen = false;
-            state.overviewEditorWidgetKey = null;
-            state.overviewLoading = state.section === "overview";
-            setMessage("success", "");
-            render();
-            await loadCurrentSection();
-        });
+  document.querySelectorAll("[data-menu-group]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const groupKey = button.dataset.menuGroup;
+      if (!groupKey) return;
+      state.openMenuGroups[groupKey] = !state.openMenuGroups[groupKey];
+      render();
     });
-    document.querySelector("#mobile-menu-button")?.addEventListener("click", ()=>{
-        state.mobileMenuOpen = !state.mobileMenuOpen;
-        render();
+  });
+  document.querySelectorAll("[data-section]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.section = button.dataset.section;
+      state.mobileMenuOpen = false;
+      state.overviewEditorWidgetKey = null;
+      state.overviewLoading = state.section === "overview";
+      setMessage("success", "");
+      render();
+      await loadCurrentSection();
     });
-    document.querySelector("#logout-button")?.addEventListener("click", logout);
-    document.querySelector("#top-logout-button")?.addEventListener("click", logout);
-    attachSectionHandlers();
+  });
+  document.querySelector("#mobile-menu-button")?.addEventListener("click", () => {
+    state.mobileMenuOpen = !state.mobileMenuOpen;
+    render();
+  });
+  document.querySelector("#logout-button")?.addEventListener("click", logout);
+  document.querySelector("#top-logout-button")?.addEventListener("click", logout);
+  attachSectionHandlers();
+  resizeExtensionFrames();
 }
 function renderSection() {
-    if (state.section === "overview") return renderOverview();
-    if (state.section === "widgets") return renderWidgets();
-    if (state.section === "data-audit") return renderDataAudit();
-    if (state.section === "prompts") return renderPrompts();
-    if (state.section === "schema-cache") return renderSchemaCache();
-    if (state.section === "business-logic") return renderBusinessLogicSuggestions();
-    if (state.section === "llm-config") return renderLlmConfig();
-    if (state.section === "governance-policy") return renderGovernancePolicy();
-    if (state.section === "identity") return renderStub("Identity connector", "FreeIPA connector configuration is planned.");
-    if (state.section === "datasources") return renderDatasources();
-    if (state.section === "license") return renderLicense();
-    if (state.section === "admin-audit") return renderAdminAudit();
-    return "";
+  if (state.section === "overview") return renderOverview();
+  if (state.section === "widgets") return renderWidgets();
+  if (state.section === "data-audit") return renderDataAudit();
+  if (state.section === "prompts") return renderPrompts();
+  if (state.section === "schema-cache") return renderSchemaCache();
+  if (state.section === "business-logic") return renderBusinessLogicSuggestions();
+  if (state.section === "llm-config") return renderLlmConfig();
+  if (state.section === "reasoning") return renderReasoningConfig();
+  if (state.section === "governance-policy") return renderGovernancePolicy();
+  if (state.section === "identity") return renderStub("Identity connector", "FreeIPA connector configuration is planned.");
+  if (state.section === "datasources") return renderDatasources();
+  if (state.section === "license") return renderLicense();
+  if (state.section === "admin-audit") return renderAdminAudit();
+  if (isExtensionSection(state.section)) return renderExtensionSection();
+  return "";
 }
+function renderExtensionSection() {
+  const section = getExtensionSection(state.section);
+  if (!section) {
+    return renderStub(
+      "Extension unavailable",
+      "This extension section is no longer available. Reinstall or enable its plugin, then refresh the admin console."
+    );
+  }
+  return `
+    <iframe
+      class="extension-frame"
+      data-extension-frame="${escapeHtml(section.section_id)}"
+      title="${escapeHtml(section.label)}"
+      src="${escapeHtml(section.path)}"
+      loading="lazy"
+    ></iframe>`;
+}
+function resizeExtensionFrames() {
+  document.querySelectorAll(".extension-frame").forEach((frame) => {
+    frame.addEventListener("load", () => resizeExtensionFrame(frame), { once: true });
+    resizeExtensionFrame(frame);
+  });
+}
+function resizeExtensionFrame(frame) {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    const height = Math.max(
+      doc.documentElement?.scrollHeight || 0,
+      doc.body?.scrollHeight || 0,
+      doc.documentElement?.offsetHeight || 0,
+      doc.body?.offsetHeight || 0
+    );
+    if (height > 0) {
+      frame.style.height = `${Math.ceil(height)}px`;
+    }
+  } catch {
+  }
+}
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) return;
+  const data = event.data;
+  if (!data || data.type !== "gaard:extension:height") return;
+  const height = Number(data.height);
+  if (!Number.isFinite(height) || height <= 0) return;
+  const frame = Array.from(document.querySelectorAll(".extension-frame")).find((item) => item.contentWindow === event.source);
+  if (!frame) return;
+  frame.style.height = `${Math.ceil(height)}px`;
+});
 function renderOverview() {
-    const overview = state.overview;
-    const widgets = overview?.widgets || [];
-    const isLoading = state.overviewLoading || state.overviewRefreshing;
-    const showInitialLoader = isLoading && !overview;
-    return `
+  const overview = state.overview;
+  const widgets = overview?.widgets || [];
+  const isLoading = state.overviewLoading || state.overviewRefreshing;
+  const showInitialLoader = isLoading && !overview;
+  return `
     <div class="toolbar overview-toolbar">
       <div class="refresh-status" aria-live="polite">
         ${isLoading ? `<span class="spinner" aria-hidden="true"></span><span>Refreshing</span>` : ""}
@@ -451,89 +527,87 @@ function renderOverview() {
     </div>`;
 }
 function renderOverviewLoading() {
-    return `
+  return `
     <section class="overview-loading" aria-live="polite">
       <span class="spinner" aria-hidden="true"></span>
       <span>Refreshing</span>
     </section>`;
 }
 function renderOverviewGrid(widgets) {
-    const layout = buildOverviewLayout(widgets);
-    const occupiedSlots = Array.from(layout.occupiedSlots);
-    const slotCount = Math.max(OVERVIEW_MIN_GRID_SLOTS, occupiedSlots.length ? Math.max(...occupiedSlots) + 1 : 0);
-    return Array.from({
-        length: slotCount
-    }, (_, slot)=>{
-        const widget = layout.widgetSlots.get(slot);
-        if (widget) {
-            return renderOverviewGridWidget(widget);
-        }
-        if (layout.occupiedSlots.has(slot)) {
-            return "";
-        }
-        return renderOverviewEmptySlot(slot);
-    }).join("");
+  const layout = buildOverviewLayout(widgets);
+  const occupiedSlots = Array.from(layout.occupiedSlots);
+  const slotCount = Math.max(
+    OVERVIEW_MIN_GRID_SLOTS,
+    occupiedSlots.length ? Math.max(...occupiedSlots) + 1 : 0
+  );
+  return Array.from({ length: slotCount }, (_, slot) => {
+    const widget = layout.widgetSlots.get(slot);
+    if (widget) {
+      return renderOverviewGridWidget(widget);
+    }
+    if (layout.occupiedSlots.has(slot)) {
+      return "";
+    }
+    return renderOverviewEmptySlot(slot);
+  }).join("");
 }
 function buildOverviewLayout(widgets) {
-    const widgetSlots = new Map();
-    const occupiedSlots = new Set();
-    widgets.filter((widget)=>widget.active !== false).sort((left, right)=>(left.position || 0) - (right.position || 0)).forEach((widget)=>{
-        const width = getOverviewWidgetGridWidth(widget);
-        let slot = overviewSlotFromPosition(widget.position);
-        while(!canPlaceOverviewWidget(slot, width, occupiedSlots)){
-            slot += 1;
-        }
-        widgetSlots.set(slot, widget);
-        for(let offset = 0; offset < width; offset += 1){
-            occupiedSlots.add(slot + offset);
-        }
-    });
-    return {
-        widgetSlots,
-        occupiedSlots
-    };
+  const widgetSlots = /* @__PURE__ */ new Map();
+  const occupiedSlots = /* @__PURE__ */ new Set();
+  widgets.filter((widget) => widget.active !== false).sort((left, right) => (left.position || 0) - (right.position || 0)).forEach((widget) => {
+    const width = getOverviewWidgetGridWidth(widget);
+    let slot = overviewSlotFromPosition(widget.position);
+    while (!canPlaceOverviewWidget(slot, width, occupiedSlots)) {
+      slot += 1;
+    }
+    widgetSlots.set(slot, widget);
+    for (let offset = 0; offset < width; offset += 1) {
+      occupiedSlots.add(slot + offset);
+    }
+  });
+  return { widgetSlots, occupiedSlots };
 }
 function canPlaceOverviewWidget(slot, width, occupiedSlots) {
-    if (slot < 0) {
-        return false;
+  if (slot < 0) {
+    return false;
+  }
+  const column = slot % OVERVIEW_GRID_COLUMNS;
+  if (column + width > OVERVIEW_GRID_COLUMNS) {
+    return false;
+  }
+  for (let offset = 0; offset < width; offset += 1) {
+    if (occupiedSlots.has(slot + offset)) {
+      return false;
     }
-    const column = slot % OVERVIEW_GRID_COLUMNS;
-    if (column + width > OVERVIEW_GRID_COLUMNS) {
-        return false;
-    }
-    for(let offset = 0; offset < width; offset += 1){
-        if (occupiedSlots.has(slot + offset)) {
-            return false;
-        }
-    }
-    return true;
+  }
+  return true;
 }
 function findAvailableOverviewSlot(slot, width, occupiedSlots) {
-    let candidate = Math.max(0, slot);
-    while(!canPlaceOverviewWidget(candidate, width, occupiedSlots)){
-        candidate += 1;
-    }
-    return candidate;
+  let candidate = Math.max(0, slot);
+  while (!canPlaceOverviewWidget(candidate, width, occupiedSlots)) {
+    candidate += 1;
+  }
+  return candidate;
 }
 function overviewSlotFromPosition(position) {
-    const numeric = Number(position);
-    if (!Number.isFinite(numeric) || numeric < 10) {
-        return 0;
-    }
-    return Math.max(0, Math.floor(numeric / 10) - 1);
+  const numeric = Number(position);
+  if (!Number.isFinite(numeric) || numeric < 10) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(numeric / 10) - 1);
 }
 function overviewPositionFromSlot(slot) {
-    return (slot + 1) * 10;
+  return (slot + 1) * 10;
 }
 function getOverviewWidgetGridWidth(widget) {
-    const fallback = widget.widget_type === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
-    const width = Number(widget.grid_width || fallback);
-    return Math.max(1, Math.min(OVERVIEW_GRID_COLUMNS, Number.isFinite(width) ? Math.floor(width) : fallback));
+  const fallback = widget.widget_type === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
+  const width = Number(widget.grid_width || fallback);
+  return Math.max(1, Math.min(OVERVIEW_GRID_COLUMNS, Number.isFinite(width) ? Math.floor(width) : fallback));
 }
 function renderOverviewGridWidget(widget) {
-    const result = widget.result;
-    const width = getOverviewWidgetGridWidth(widget);
-    return `
+  const result = widget.result;
+  const width = getOverviewWidgetGridWidth(widget);
+  return `
     <section class="widget-card overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}" style="grid-column: span ${escapeHtml(width)};">
       <div class="widget-card-header">
         <div>
@@ -548,38 +622,38 @@ function renderOverviewGridWidget(widget) {
     </section>`;
 }
 function renderOverviewWidgetBody(widget, result) {
-    if (!result) {
-        return `<div class="empty-state">No data yet.</div>`;
-    }
-    if (result.status !== "ok") {
-        return `<div class="error">${escapeHtml(result.error || "Widget query failed.")}</div>`;
-    }
-    if ((result.result_mode || widget.result_mode) === "interpretation") {
-        const interpretation = result.interpretation || result.answer || result.value || "-";
-        return `<div class="widget-card-value widget-card-interpretation">${renderWidgetContent(interpretation)}</div>`;
-    }
-    if (widget.widget_type === "scalar") {
-        return `<div class="widget-card-value">${renderWidgetContent(result.value ?? "-")}</div>`;
-    }
-    if (widget.widget_type === "table") {
-        return renderOverviewTable(widget.widget_key, result);
-    }
-    return renderTimeSeriesChart(result);
+  if (!result) {
+    return `<div class="empty-state">No data yet.</div>`;
+  }
+  if (result.status !== "ok") {
+    return `<div class="error">${escapeHtml(result.error || "Widget query failed.")}</div>`;
+  }
+  if ((result.result_mode || widget.result_mode) === "interpretation") {
+    const interpretation = result.interpretation || result.answer || result.value || "-";
+    return `<div class="widget-card-value widget-card-interpretation">${renderWidgetContent(interpretation)}</div>`;
+  }
+  if (widget.widget_type === "scalar") {
+    return `<div class="widget-card-value">${renderWidgetContent(result.value ?? "-")}</div>`;
+  }
+  if (widget.widget_type === "table") {
+    return renderOverviewTable(widget.widget_key, result);
+  }
+  return renderTimeSeriesChart(result);
 }
 function renderOverviewEmptySlot(slot) {
-    return `
+  return `
     <section class="overview-empty-slot">
       <button type="button" data-overview-empty-slot="${escapeHtml(slot)}" aria-label="Add widget to slot ${escapeHtml(slot + 1)}">+</button>
       ${state.overviewPlacementSlot === slot ? renderOverviewPlacementPanel(slot) : ""}
     </section>`;
 }
 function renderOverviewPlacementPanel(slot) {
-    const availableWidgets = state.overviewWidgetConfigs.filter((widget)=>widget.active === false);
-    return `
+  const availableWidgets = state.overviewWidgetConfigs.filter((widget) => widget.active === false);
+  return `
     <div class="overview-placement-panel">
       <label>Widget
         <select data-overview-placement-select="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>
-          ${availableWidgets.length ? availableWidgets.map((widget)=>`<option value="${escapeHtml(widget.widget_key)}">${escapeHtml(widget.label)} (${escapeHtml(widget.widget_key)}, ${escapeHtml(getOverviewWidgetGridWidth(widget))} cols)</option>`).join("") : `<option>No inactive widgets</option>`}
+          ${availableWidgets.length ? availableWidgets.map((widget) => `<option value="${escapeHtml(widget.widget_key)}">${escapeHtml(widget.label)} (${escapeHtml(widget.widget_key)}, ${escapeHtml(getOverviewWidgetGridWidth(widget))} cols)</option>`).join("") : `<option>No inactive widgets</option>`}
         </select>
       </label>
       <div class="button-row">
@@ -589,7 +663,7 @@ function renderOverviewPlacementPanel(slot) {
     </div>`;
 }
 function renderEditWidgetButton(widgetKey) {
-    return `
+  return `
     <button class="icon-button" type="button" data-edit-overview-widget="${escapeHtml(widgetKey)}" aria-label="Edit widget source" title="Edit source">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 20h9" />
@@ -598,9 +672,9 @@ function renderEditWidgetButton(widgetKey) {
     </button>`;
 }
 function renderOverviewWidgetModal() {
-    const widget = getOverviewEditorWidget();
-    if (!widget) return "";
-    return `
+  const widget = getOverviewEditorWidget();
+  if (!widget) return "";
+  return `
     <div class="modal-backdrop" data-overview-widget-backdrop>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="overview-widget-modal-title">
         <div class="modal-header">
@@ -631,87 +705,90 @@ function renderOverviewWidgetModal() {
     </div>`;
 }
 function getOverviewEditorWidget() {
-    if (!state.overviewEditorWidgetKey) return null;
-    return (state.overview?.widgets || []).find((widget)=>widget.widget_key === state.overviewEditorWidgetKey) || null;
+  if (!state.overviewEditorWidgetKey) return null;
+  return (state.overview?.widgets || []).find(
+    (widget) => widget.widget_key === state.overviewEditorWidgetKey
+  ) || null;
 }
 function renderWidgetTypeOptions(selected) {
-    return [
-        "scalar",
-        "timeseries",
-        "table"
-    ].map((value)=>`<option value="${value}" ${value === selected ? "selected" : ""}>${value}</option>`).join("");
+  return ["scalar", "timeseries", "table"].map((value) => `<option value="${value}" ${value === selected ? "selected" : ""}>${value}</option>`).join("");
 }
 function renderOverviewDatasourceOptions(selected) {
-    const datasources = state.overviewWidgetDatasources.length ? state.overviewWidgetDatasources : state.overview?.datasources || [];
-    return datasources.map((item)=>`<option value="${escapeHtml(item.connector_key)}" ${item.connector_key === selected ? "selected" : ""}>${escapeHtml(item.name)} (${escapeHtml(item.connector_key)})</option>`).join("");
+  const datasources = state.overviewWidgetDatasources.length ? state.overviewWidgetDatasources : state.overview?.datasources || [];
+  return datasources.map((item) => `<option value="${escapeHtml(item.connector_key)}" ${item.connector_key === selected ? "selected" : ""}>${escapeHtml(item.name)} (${escapeHtml(item.connector_key)})</option>`).join("");
 }
 function renderTimeSeriesChart(result) {
-    const points = normalizeChartPoints(result);
-    if (!points.length) {
-        return `<div class="empty-state">No data yet.</div>`;
-    }
-    const max = Math.max(...points.map((point)=>point.value), 1);
-    const dates = Array.from(new Set(points.map((point)=>point.date)));
-    const series = Array.from(new Set(points.map((point)=>point.series)));
-    return `
+  const points = normalizeChartPoints(result);
+  if (!points.length) {
+    return `<div class="empty-state">No data yet.</div>`;
+  }
+  const max = Math.max(...points.map((point) => point.value), 1);
+  const dates = Array.from(new Set(points.map((point) => point.date)));
+  const series = Array.from(new Set(points.map((point) => point.series)));
+  return `
     <div class="chart">
-      ${dates.map((date)=>{
-        const datePoints = points.filter((point)=>point.date === date);
-        return `<div class="chart-row">
+      ${dates.map((date) => {
+    const datePoints = points.filter((point) => point.date === date);
+    return `<div class="chart-row">
           <div class="chart-date">${escapeHtml(date)}</div>
           <div class="chart-bars">
-            ${datePoints.map((point)=>`<div class="chart-bar" title="${escapeHtml(`${point.series}: ${point.value}`)}" style="width: ${Math.max(4, point.value / max * 100)}%"><span>${escapeHtml(point.series)}: ${escapeHtml(point.value)}</span></div>`).join("")}
+            ${datePoints.map((point) => `<div class="chart-bar" title="${escapeHtml(`${point.series}: ${point.value}`)}" style="width: ${Math.max(4, point.value / max * 100)}%"><span>${escapeHtml(point.series)}: ${escapeHtml(point.value)}</span></div>`).join("")}
           </div>
         </div>`;
-    }).join("")}
+  }).join("")}
     </div>
-    <div class="chart-legend">${series.map((item)=>`<span>${escapeHtml(item)}</span>`).join("")}</div>`;
+    <div class="chart-legend">${series.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>`;
 }
 function normalizeChartPoints(result) {
-    const rows = result.rows || [];
-    const columns = result.columns || Object.keys(rows[0] || {});
-    if (!rows.length || columns.length < 2) {
-        return [];
-    }
-    const dateColumn = columns[0];
-    if (columns.length === 3 && rows.some((row)=>!isNumeric(row[columns[1]]) && isNumeric(row[columns[2]]))) {
-        return rows.filter((row)=>isNumeric(row[columns[2]])).map((row)=>({
-                date: formatChartDate(row[dateColumn]),
-                series: String(row[columns[1]] ?? "series"),
-                value: Number(row[columns[2]])
-            }));
-    }
-    return rows.flatMap((row)=>columns.slice(1).filter((column)=>isNumeric(row[column])).map((column)=>({
-                date: formatChartDate(row[dateColumn]),
-                series: column,
-                value: Number(row[column])
-            })));
+  const rows = result.rows || [];
+  const columns = result.columns || Object.keys(rows[0] || {});
+  if (!rows.length || columns.length < 2) {
+    return [];
+  }
+  const dateColumn = columns[0];
+  if (columns.length === 3 && rows.some((row) => !isNumeric(row[columns[1]]) && isNumeric(row[columns[2]]))) {
+    return rows.filter((row) => isNumeric(row[columns[2]])).map((row) => ({
+      date: formatChartDate(row[dateColumn]),
+      series: String(row[columns[1]] ?? "series"),
+      value: Number(row[columns[2]])
+    }));
+  }
+  return rows.flatMap(
+    (row) => columns.slice(1).filter((column) => isNumeric(row[column])).map((column) => ({
+      date: formatChartDate(row[dateColumn]),
+      series: column,
+      value: Number(row[column])
+    }))
+  );
 }
 function formatChartDate(value) {
-    return String(value ?? "").slice(0, 10);
+  return String(value ?? "").slice(0, 10);
 }
 function isNumeric(value) {
-    return value !== null && value !== "" && !Array.isArray(value) && Number.isFinite(Number(value));
+  return value !== null && value !== "" && !Array.isArray(value) && Number.isFinite(Number(value));
 }
 function renderOverviewTable(widgetKey, result) {
-    const rows = result.rows || [];
-    const columns = result.columns?.length ? result.columns : Object.keys(rows[0] || {});
-    if (!columns.length) {
-        return `<div class="empty-state">No data yet.</div>`;
-    }
-    const totalPages = Math.max(1, Math.ceil(rows.length / OVERVIEW_TABLE_PAGE_SIZE));
-    const currentPage = Math.min(Math.max(state.overviewTablePages[widgetKey] || 0, 0), totalPages - 1);
-    const start = currentPage * OVERVIEW_TABLE_PAGE_SIZE;
-    const pageRows = rows.slice(start, start + OVERVIEW_TABLE_PAGE_SIZE);
-    if (state.overviewTablePages[widgetKey] !== currentPage) {
-        state.overviewTablePages[widgetKey] = currentPage;
-    }
-    return `
+  const rows = result.rows || [];
+  const columns = result.columns?.length ? result.columns : Object.keys(rows[0] || {});
+  if (!columns.length) {
+    return `<div class="empty-state">No data yet.</div>`;
+  }
+  const totalPages = Math.max(1, Math.ceil(rows.length / OVERVIEW_TABLE_PAGE_SIZE));
+  const currentPage = Math.min(
+    Math.max(state.overviewTablePages[widgetKey] || 0, 0),
+    totalPages - 1
+  );
+  const start = currentPage * OVERVIEW_TABLE_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + OVERVIEW_TABLE_PAGE_SIZE);
+  if (state.overviewTablePages[widgetKey] !== currentPage) {
+    state.overviewTablePages[widgetKey] = currentPage;
+  }
+  return `
     <div class="table-wrap overview-table-wrap">
       <table>
-        <thead><tr>${columns.map((column)=>`<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+        <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
         <tbody>
-          ${pageRows.length ? pageRows.map((row)=>`<tr>${columns.map((column)=>`<td>${formatOverviewTableCell(row[column])}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${escapeHtml(columns.length)}" class="empty-state">No rows.</td></tr>`}
+          ${pageRows.length ? pageRows.map((row) => `<tr>${columns.map((column) => `<td>${formatOverviewTableCell(row[column])}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${escapeHtml(columns.length)}" class="empty-state">No rows.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -725,16 +802,16 @@ function renderOverviewTable(widgetKey, result) {
     </div>`;
 }
 function formatOverviewTableCell(value) {
-    if (value === null || value === undefined || value === "") {
-        return `<span class="muted">-</span>`;
-    }
-    if (typeof value === "object") {
-        return `<code>${escapeHtml(JSON.stringify(value))}</code>`;
-    }
-    return renderWidgetContent(value);
+  if (value === null || value === void 0 || value === "") {
+    return `<span class="muted">-</span>`;
+  }
+  if (typeof value === "object") {
+    return `<code>${escapeHtml(JSON.stringify(value))}</code>`;
+  }
+  return renderWidgetContent(value);
 }
 function renderDataAudit() {
-    return `
+  return `
     <section class="panel">
       <div class="panel-header">
         <h2>Data query audit</h2>
@@ -753,32 +830,32 @@ function renderDataAudit() {
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Time</th><th>Type</th><th>Output classification</th><th>Learning</th><th>User</th><th>Datasource</th><th>Question</th><th>Answer</th><th>SQL</th><th>Metadata</th></tr></thead>
-        <tbody>${state.dataAudit.map((item)=>`<tr><td>${escapeHtml(formatAuditTime(item.occurred_at))}</td><td>${escapeHtml(item.audit_type || "info")}</td><td>${escapeHtml(item.output_classification || "unknown")}</td><td>${renderAuditLearning(item)}</td><td>${escapeHtml(item.user_id)}</td><td>${escapeHtml(item.datasource_id)}</td><td>${escapeHtml(item.question)}</td><td>${escapeHtml(item.answer)}</td><td><code>${escapeHtml(item.sql)}</code></td><td>${renderAuditMetadata(item)}</td></tr>`).join("")}</tbody>
+        <tbody>${state.dataAudit.map((item) => `<tr><td>${escapeHtml(formatAuditTime(item.occurred_at))}</td><td>${escapeHtml(item.audit_type || "info")}</td><td>${escapeHtml(item.output_classification || "unknown")}</td><td>${renderAuditLearning(item)}</td><td>${escapeHtml(item.user_id)}</td><td>${escapeHtml(item.datasource_id)}</td><td>${escapeHtml(item.question)}</td><td>${escapeHtml(item.answer)}</td><td><code>${escapeHtml(item.sql)}</code></td><td>${renderAuditMetadata(item)}</td></tr>`).join("")}</tbody>
       </table></div>
     </section>`;
 }
 function renderAuditMetadata(item) {
-    const metadata = item.metadata || {};
-    if (!Object.keys(metadata).length) return "";
-    return `<pre class="metadata-json">${escapeHtml(JSON.stringify(metadata, null, 2))}</pre>`;
+  const metadata = item.metadata || {};
+  if (!Object.keys(metadata).length) return "";
+  return `<pre class="metadata-json">${escapeHtml(JSON.stringify(metadata, null, 2))}</pre>`;
 }
 function renderAuditLearning(item) {
-    const learning = item.metadata?.business_logic_learning;
-    if (!learning) return "";
-    return `
+  const learning = item.metadata?.business_logic_learning;
+  if (!learning) return "";
+  return `
     <span>${escapeHtml(learning.message || "")}</span>
     ${learning.suggestion_id ? `<button type="button" data-open-business-logic>Open suggestions</button>` : ""}`;
 }
 function renderDataAuditTypeOptions() {
-    return dataAuditTypes.map((type)=>`<option value="${escapeHtml(type.value)}" ${state.dataAuditType === type.value ? "selected" : ""}>${escapeHtml(type.label)}</option>`).join("");
+  return dataAuditTypes.map((type) => `<option value="${escapeHtml(type.value)}" ${state.dataAuditType === type.value ? "selected" : ""}>${escapeHtml(type.label)}</option>`).join("");
 }
 function renderOutputClassificationOptions() {
-    return outputClassifications.map((item)=>`<option value="${escapeHtml(item.value)}" ${state.dataAuditOutputClassification === item.value ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  return outputClassifications.map((item) => `<option value="${escapeHtml(item.value)}" ${state.dataAuditOutputClassification === item.value ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
 }
 function renderWidgets() {
-    const selectedWidget = getSelectedOverviewWidgetConfig();
-    const creating = state.selectedOverviewWidgetKey === "__new__";
-    return `
+  const selectedWidget = getSelectedOverviewWidgetConfig();
+  const creating = state.selectedOverviewWidgetKey === "__new__";
+  return `
     <div class="split widgets-editor">
       <section class="panel">
         <div class="panel-header">
@@ -786,7 +863,7 @@ function renderWidgets() {
           <button type="button" id="new-overview-widget">New</button>
         </div>
         <div class="panel-body list widget-config-list">
-          ${state.overviewWidgetConfigs.length ? state.overviewWidgetConfigs.map((widget)=>renderWidgetConfigListItem(widget, selectedWidget?.widget_key === widget.widget_key && !creating)).join("") : `<p class="muted">No widgets defined.</p>`}
+          ${state.overviewWidgetConfigs.length ? state.overviewWidgetConfigs.map((widget) => renderWidgetConfigListItem(widget, selectedWidget?.widget_key === widget.widget_key && !creating)).join("") : `<p class="muted">No widgets defined.</p>`}
         </div>
       </section>
       <section class="panel">
@@ -800,12 +877,12 @@ function renderWidgets() {
     </div>`;
 }
 function renderWidgetConfigListItem(widget, active) {
-    return `
+  return `
     <div class="widget-config-row ${active ? "active" : ""}">
       <input type="checkbox" data-overview-widget-active="${escapeHtml(widget.widget_key)}" aria-label="Enable ${escapeHtml(widget.label)}" ${widget.active ? "checked" : ""} />
       <button class="widget-config-select" type="button" data-overview-widget-select="${escapeHtml(widget.widget_key)}">
         <strong>${escapeHtml(widget.label)}</strong>
-        <span>${escapeHtml(widget.widget_key)} · ${escapeHtml(widget.widget_type)} · ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))} · ${escapeHtml(formatOverviewWidgetSize(widget))} · slot ${escapeHtml(overviewSlotFromPosition(widget.position) + 1)}</span>
+        <span>${escapeHtml(widget.widget_key)} \xB7 ${escapeHtml(widget.widget_type)} \xB7 ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))} \xB7 ${escapeHtml(formatOverviewWidgetSize(widget))} \xB7 slot ${escapeHtml(overviewSlotFromPosition(widget.position) + 1)}</span>
       </button>
       <button class="icon-button danger widget-config-delete" type="button" data-overview-widget-delete="${escapeHtml(widget.widget_key)}" aria-label="Delete ${escapeHtml(widget.label)}" title="Delete widget">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -819,67 +896,49 @@ function renderWidgetConfigListItem(widget, active) {
     </div>`;
 }
 function getSelectedOverviewWidgetConfig() {
-    if (state.selectedOverviewWidgetKey === "__new__") {
-        return null;
-    }
-    return state.overviewWidgetConfigs.find((widget)=>widget.widget_key === state.selectedOverviewWidgetKey) || state.overviewWidgetConfigs[0] || null;
+  if (state.selectedOverviewWidgetKey === "__new__") {
+    return null;
+  }
+  return state.overviewWidgetConfigs.find((widget) => widget.widget_key === state.selectedOverviewWidgetKey) || state.overviewWidgetConfigs[0] || null;
 }
 function getOverviewWidgetFormPosition(widget) {
-    if (widget) {
-        return widget.position || 100;
-    }
-    return overviewPositionFromSlot(state.overviewPlacementSlot ?? 0);
+  if (widget) {
+    return widget.position || 100;
+  }
+  return overviewPositionFromSlot(state.overviewPlacementSlot ?? 0);
 }
 function formatOverviewWidgetSize(widget) {
-    return `${getOverviewWidgetGridWidth(widget)}/${OVERVIEW_GRID_COLUMNS}`;
+  return `${getOverviewWidgetGridWidth(widget)}/${OVERVIEW_GRID_COLUMNS}`;
 }
 function getDefaultOverviewWidgetGridWidth(widgetType) {
-    return widgetType === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
+  return widgetType === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
 }
 function renderOverviewWidgetSizeOptions(selected) {
-    const options = [
-        {
-            value: 1,
-            label: "Small (1 col)"
-        },
-        {
-            value: 2,
-            label: "Medium (2 cols)"
-        },
-        {
-            value: 3,
-            label: "Wide (3 cols)"
-        },
-        {
-            value: 4,
-            label: "Full (4 cols)"
-        }
-    ];
-    return options.map((option)=>`<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+  const options = [
+    { value: 1, label: "Small (1 col)" },
+    { value: 2, label: "Medium (2 cols)" },
+    { value: 3, label: "Wide (3 cols)" },
+    { value: 4, label: "Full (4 cols)" }
+  ];
+  return options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
 }
 function renderOverviewWidgetResultModeOptions(selected = "data") {
-    const options = [
-        {
-            value: "data",
-            label: "Zwróć dane"
-        },
-        {
-            value: "interpretation",
-            label: "Interpretuj dane"
-        }
-    ];
-    return options.map((option)=>`<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+  const options = [
+    { value: "data", label: "Zwr\xF3\u0107 dane" },
+    { value: "interpretation", label: "Interpretuj dane" }
+  ];
+  return options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
 }
 function formatOverviewWidgetResultMode(value = "data") {
-    return value === "interpretation" ? "interpretation" : "data";
+  return value === "interpretation" ? "interpretation" : "data";
 }
 function renderOverviewWidgetSettingsForm(widget) {
-    const creating = widget === null;
-    const position = getOverviewWidgetFormPosition(widget);
-    const widgetType = widget?.widget_type || "scalar";
-    const gridWidth = widget ? getOverviewWidgetGridWidth(widget) : getDefaultOverviewWidgetGridWidth(widgetType);
-    const resultMode = widget?.result_mode || "data";
-    return `
+  const creating = widget === null;
+  const position = getOverviewWidgetFormPosition(widget);
+  const widgetType = widget?.widget_type || "scalar";
+  const gridWidth = widget ? getOverviewWidgetGridWidth(widget) : getDefaultOverviewWidgetGridWidth(widgetType);
+  const resultMode = widget?.result_mode || "data";
+  return `
     <form class="form-grid" id="overview-widget-settings-form" data-widget-mode="${creating ? "create" : "update"}" data-widget-key="${escapeHtml(widget?.widget_key || "")}">
       ${creating ? `<label>Widget key<input name="widget_key" value="" placeholder="custom_widget_key" /></label>` : `<input type="hidden" name="widget_key" value="${escapeHtml(widget?.widget_key || "")}" />`}
       <label>Label<input name="label" value="${escapeHtml(widget?.label || "")}" /></label>
@@ -901,12 +960,12 @@ function renderOverviewWidgetSettingsForm(widget) {
     </form>`;
 }
 function renderPrompts() {
-    const selected = state.prompts.find((prompt)=>prompt.prompt_key === state.selectedPromptKey) || state.prompts[0];
-    return `
+  const selected = state.prompts.find((prompt) => prompt.prompt_key === state.selectedPromptKey) || state.prompts[0];
+  return `
     <div class="split">
       <section class="panel">
         <div class="panel-header"><h2>Prompt templates</h2></div>
-        <div class="panel-body list">${state.prompts.map((prompt)=>`<button data-prompt="${prompt.prompt_key}" class="${selected?.prompt_key === prompt.prompt_key ? "active" : ""}"><strong>${escapeHtml(prompt.name)}</strong><br /><span>v${escapeHtml(prompt.version)} ${prompt.active ? "active" : "inactive"}</span></button>`).join("")}</div>
+        <div class="panel-body list">${state.prompts.map((prompt) => `<button data-prompt="${prompt.prompt_key}" class="${selected?.prompt_key === prompt.prompt_key ? "active" : ""}"><strong>${escapeHtml(prompt.name)}</strong><br /><span>v${escapeHtml(prompt.version)} ${prompt.active ? "active" : "inactive"}</span></button>`).join("")}</div>
       </section>
       <section class="panel">
         <div class="panel-header"><h2>${escapeHtml(selected?.name || "Prompt")}</h2></div>
@@ -915,7 +974,7 @@ function renderPrompts() {
     </div>`;
 }
 function renderPromptForm(prompt) {
-    return `
+  return `
     <form id="prompt-form" class="form-grid">
       <input type="hidden" name="prompt_key" value="${escapeHtml(prompt.prompt_key)}" />
       <label>Name<input name="name" value="${escapeHtml(prompt.name)}" /></label>
@@ -927,12 +986,12 @@ function renderPromptForm(prompt) {
     </form>`;
 }
 function renderDatasources() {
-    const selected = getSelectedDatasource();
-    return `
+  const selected = getSelectedDatasource();
+  return `
     <div class="split">
       <section class="panel">
         <div class="panel-header"><h2>Datasources</h2><button id="new-datasource">New</button></div>
-        <div class="panel-body list">${state.datasources.map((connector)=>`<button data-datasource="${connector.id}" class="${selected?.id === connector.id ? "active" : ""}"><strong>${escapeHtml(connector.name)}</strong><br /><span>${escapeHtml(connector.database_type)} ${connector.active ? "active" : ""}</span></button>`).join("")}</div>
+        <div class="panel-body list">${state.datasources.map((connector) => `<button data-datasource="${connector.id}" class="${selected?.id === connector.id ? "active" : ""}"><strong>${escapeHtml(connector.name)}</strong><br /><span>${escapeHtml(connector.database_type)} ${connector.active ? "active" : ""}</span></button>`).join("")}</div>
       </section>
       <section class="panel">
         <div class="panel-header"><h2>${selected ? escapeHtml(selected.name) : "New datasource"}</h2></div>
@@ -942,20 +1001,20 @@ function renderDatasources() {
     ${selected ? renderDatasourceSchema() : ""}`;
 }
 function getSelectedDatasource() {
-    if (state.selectedDatasourceId === "new") return null;
-    return state.datasources.find((item)=>item.id === state.selectedDatasourceId) || state.datasources[0] || null;
+  if (state.selectedDatasourceId === "new") return null;
+  return state.datasources.find((item) => item.id === state.selectedDatasourceId) || state.datasources[0] || null;
 }
 function renderDatasourceForm(connector) {
-    const systemManaged = connector?.system_managed === true;
-    const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
-    const selectedType = getDatasourceType(selectedTypeKey);
-    const databaseUrlSchema = selectedType?.config_schema?.properties?.database_url;
-    const selectedSqlDialect = connector?.sql_dialect || selectedType?.default_sql_dialect || "";
-    const databaseUrl = connector?.database_url || String(databaseUrlSchema?.default || "");
-    const unavailableType = Boolean(selectedTypeKey && !selectedType);
-    const disabled = systemManaged || unavailableType || !selectedType ? "disabled" : "";
-    const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
-    return `
+  const systemManaged = connector?.system_managed === true;
+  const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
+  const selectedType = getDatasourceType(selectedTypeKey);
+  const databaseUrlSchema = selectedType?.config_schema?.properties?.database_url;
+  const selectedSqlDialect = connector?.sql_dialect || selectedType?.default_sql_dialect || "";
+  const databaseUrl = connector?.database_url || String(databaseUrlSchema?.default || "");
+  const unavailableType = Boolean(selectedTypeKey && !selectedType);
+  const disabled = systemManaged || unavailableType || !selectedType ? "disabled" : "";
+  const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
+  return `
     <form id="datasource-form" class="form-grid">
       <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
       ${systemManaged ? `<div class="badge">System managed</div>` : ""}
@@ -977,72 +1036,71 @@ function renderDatasourceForm(connector) {
     </form>`;
 }
 function getDatasourceType(typeKey) {
-    return state.datasourceTypes.find((item)=>item.type_key === typeKey) || null;
+  return state.datasourceTypes.find((item) => item.type_key === typeKey) || null;
 }
 function renderDatasourceTypeOptions(selected) {
-    const datasourceTypes = [
-        ...state.datasourceTypes
-    ];
-    if (selected && !getDatasourceType(selected)) {
-        datasourceTypes.unshift({
-            type_key: selected,
-            label: `${selected} (plugin unavailable)`,
-            description: "",
-            sql_dialects: [],
-            default_sql_dialect: "",
-            config_schema: {}
-        });
-    }
-    if (!datasourceTypes.length) {
-        return `<option value="" selected>No connector types available</option>`;
-    }
-    return datasourceTypes.map((item)=>`<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  const datasourceTypes = [...state.datasourceTypes];
+  if (selected && !getDatasourceType(selected)) {
+    datasourceTypes.unshift({
+      type_key: selected,
+      label: `${selected} (plugin unavailable)`,
+      description: "",
+      sql_dialects: [],
+      default_sql_dialect: "",
+      config_schema: {}
+    });
+  }
+  if (!datasourceTypes.length) {
+    return `<option value="" selected>No connector types available</option>`;
+  }
+  return datasourceTypes.map((item) => `<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
 }
 function renderSqlDialectOptions(datasourceType, selected) {
-    const dialects = [
-        ...datasourceType?.sql_dialects || []
-    ];
-    if (selected && !dialects.includes(selected)) {
-        dialects.unshift(selected);
-    }
-    if (!dialects.length) {
-        return `<option value="" selected>No SQL dialect available</option>`;
-    }
-    return dialects.map((value)=>`<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
+  const dialects = [...datasourceType?.sql_dialects || []];
+  if (selected && !dialects.includes(selected)) {
+    dialects.unshift(selected);
+  }
+  if (!dialects.length) {
+    return `<option value="" selected>No SQL dialect available</option>`;
+  }
+  return dialects.map((value) => `<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
 }
 function syncDatasourceTypeFields(event) {
-    const typeKey = event.currentTarget.value;
-    const datasourceType = getDatasourceType(typeKey);
-    const sqlDialect = document.querySelector("#datasource-sql-dialect");
-    const description = document.querySelector("#datasource-type-description");
-    const urlLabel = document.querySelector("#datasource-url-label");
-    const urlInput = document.querySelector("#datasource-url");
-    const databaseUrlSchema = datasourceType?.config_schema?.properties?.database_url;
-    if (sqlDialect) {
-        sqlDialect.innerHTML = renderSqlDialectOptions(datasourceType, datasourceType?.default_sql_dialect || "");
-    }
-    if (description) {
-        description.textContent = datasourceType?.description || "Connector type is unavailable.";
-    }
-    if (urlLabel) {
-        urlLabel.textContent = databaseUrlSchema?.title || "Database URL";
-    }
-    if (urlInput) {
-        urlInput.placeholder = databaseUrlSchema?.description || "";
-    }
+  const typeKey = event.currentTarget.value;
+  const datasourceType = getDatasourceType(typeKey);
+  const sqlDialect = document.querySelector("#datasource-sql-dialect");
+  const description = document.querySelector("#datasource-type-description");
+  const urlLabel = document.querySelector("#datasource-url-label");
+  const urlInput = document.querySelector("#datasource-url");
+  const databaseUrlSchema = datasourceType?.config_schema?.properties?.database_url;
+  if (sqlDialect) {
+    sqlDialect.innerHTML = renderSqlDialectOptions(
+      datasourceType,
+      datasourceType?.default_sql_dialect || ""
+    );
+  }
+  if (description) {
+    description.textContent = datasourceType?.description || "Connector type is unavailable.";
+  }
+  if (urlLabel) {
+    urlLabel.textContent = databaseUrlSchema?.title || "Database URL";
+  }
+  if (urlInput) {
+    urlInput.placeholder = databaseUrlSchema?.description || "";
+  }
 }
 function renderModeOptions(selected, values) {
-    return values.map((value)=>`<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
+  return values.map((value) => `<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
 }
 function renderDatasourceSchema() {
-    const schema = state.datasourceSchema?.item;
-    const rawTables = schema?.raw_schema?.tables || [];
-    const tableSettings = schema?.table_settings?.tables || {};
-    const draftTables = schema ? getDatasourceSchemaDraftTables(rawTables, tableSettings) : {};
-    const visibleTables = state.datasourceSchemaShowEnabledOnly ? rawTables.filter((table)=>draftTables[table.name]?.selected !== false) : rawTables;
-    const selectedTable = schema ? getSelectedDatasourceSchemaObject(rawTables, visibleTables) : null;
-    const selectedSettings = selectedTable ? draftTables[selectedTable.name] || {} : {};
-    return `
+  const schema = state.datasourceSchema?.item;
+  const rawTables = schema?.raw_schema?.tables || [];
+  const tableSettings = schema?.table_settings?.tables || {};
+  const draftTables = schema ? getDatasourceSchemaDraftTables(rawTables, tableSettings) : {};
+  const visibleTables = state.datasourceSchemaShowEnabledOnly ? rawTables.filter((table) => draftTables[table.name]?.selected !== false) : rawTables;
+  const selectedTable = schema ? getSelectedDatasourceSchemaObject(rawTables, visibleTables) : null;
+  const selectedSettings = selectedTable ? draftTables[selectedTable.name] || {} : {};
+  return `
     <section class="panel">
       <div class="panel-header"><h2>Schema introspection</h2><span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span></div>
       <div class="panel-body">
@@ -1053,7 +1111,7 @@ function renderDatasourceSchema() {
                 <label class="inline-check"><input id="schema-show-enabled-only" type="checkbox" ${state.datasourceSchemaShowEnabledOnly ? "checked" : ""} /> Show enabled objects only</label>
               </div>
               <div class="schema-object-list-body">
-                ${visibleTables.length ? visibleTables.map((table)=>renderDatasourceObjectListItem(table, draftTables[table.name] || {}, selectedTable?.name === table.name)).join("") : `<p class="muted schema-object-empty">No enabled objects.</p>`}
+                ${visibleTables.length ? visibleTables.map((table) => renderDatasourceObjectListItem(table, draftTables[table.name] || {}, selectedTable?.name === table.name)).join("") : `<p class="muted schema-object-empty">No enabled objects.</p>`}
               </div>
             </section>
             <section class="schema-object-details">
@@ -1065,33 +1123,33 @@ function renderDatasourceSchema() {
     </section>`;
 }
 function getDatasourceSchemaDraftTables(rawTables, tableSettings) {
-    if (!state.datasourceSchemaDraftTables) {
-        state.datasourceSchemaDraftTables = {};
-    }
-    for (const table of rawTables){
-        if (state.datasourceSchemaDraftTables[table.name]) continue;
-        const settings = tableSettings[table.name] || {};
-        state.datasourceSchemaDraftTables[table.name] = {
-            selected: settings.selected !== false,
-            description: settings.description || "",
-            primary_key_prompt: settings.primary_key_prompt || "",
-            foreign_key_prompt: settings.foreign_key_prompt || "",
-            join_logic: settings.join_logic || ""
-        };
-    }
-    return state.datasourceSchemaDraftTables;
+  if (!state.datasourceSchemaDraftTables) {
+    state.datasourceSchemaDraftTables = {};
+  }
+  for (const table of rawTables) {
+    if (state.datasourceSchemaDraftTables[table.name]) continue;
+    const settings = tableSettings[table.name] || {};
+    state.datasourceSchemaDraftTables[table.name] = {
+      selected: settings.selected !== false,
+      description: settings.description || "",
+      primary_key_prompt: settings.primary_key_prompt || "",
+      foreign_key_prompt: settings.foreign_key_prompt || "",
+      join_logic: settings.join_logic || ""
+    };
+  }
+  return state.datasourceSchemaDraftTables;
 }
 function getSelectedDatasourceSchemaObject(rawTables, visibleTables) {
-    const current = rawTables.find((table)=>table.name === state.datasourceSchemaSelectedObjectName);
-    const currentIsVisible = visibleTables.some((table)=>table.name === current?.name);
-    if (current && currentIsVisible) return current;
-    const fallback = visibleTables[0] || null;
-    state.datasourceSchemaSelectedObjectName = fallback?.name || "";
-    return fallback;
+  const current = rawTables.find((table) => table.name === state.datasourceSchemaSelectedObjectName);
+  const currentIsVisible = visibleTables.some((table) => table.name === current?.name);
+  if (current && currentIsVisible) return current;
+  const fallback = visibleTables[0] || null;
+  state.datasourceSchemaSelectedObjectName = fallback?.name || "";
+  return fallback;
 }
 function renderBusinessLogicSuggestions() {
-    const datasource = state.businessLogicDatasource;
-    return `
+  const datasource = state.businessLogicDatasource;
+  return `
     <section class="panel">
       <div class="panel-header">
         <h2>Business logic suggestions</h2>
@@ -1099,7 +1157,7 @@ function renderBusinessLogicSuggestions() {
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Use</th><th>Status</th><th>Safety</th><th>Rule</th><th>Error</th><th>Confidence</th><th>Actions</th></tr></thead>
-        <tbody>${state.businessLogic.map((item)=>`
+        <tbody>${state.businessLogic.map((item) => `
           <tr>
             <td><input type="checkbox" data-business-logic-toggle="${escapeHtml(item.id)}" ${item.enabled ? "checked" : ""} /></td>
             <td>${escapeHtml(item.status)}</td>
@@ -1120,9 +1178,9 @@ function renderBusinessLogicSuggestions() {
     ${renderBusinessLogicEditorModal()}`;
 }
 function renderBusinessLogicEditorModal() {
-    const suggestion = getBusinessLogicEditorSuggestion();
-    if (!suggestion) return "";
-    return `
+  const suggestion = getBusinessLogicEditorSuggestion();
+  if (!suggestion) return "";
+  return `
     <div class="modal-backdrop" data-business-logic-backdrop>
       <section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="business-logic-modal-title">
         <div class="modal-header">
@@ -1144,14 +1202,14 @@ function renderBusinessLogicEditorModal() {
     </div>`;
 }
 function getBusinessLogicEditorSuggestion() {
-    if (state.businessLogicEditorId === null) return null;
-    return state.businessLogic.find((item)=>Number(item.id) === state.businessLogicEditorId) || null;
+  if (state.businessLogicEditorId === null) return null;
+  return state.businessLogic.find((item) => Number(item.id) === state.businessLogicEditorId) || null;
 }
 function renderLlmConfig() {
-    const config = state.llmConfig || {};
-    const apiKeyStatus = config.api_key_configured ? `Configured (${escapeHtml(config.api_key_preview || "hidden")})` : "Not configured";
-    const apiKeyPlaceholder = config.api_key_configured ? "Leave blank to keep current key" : "Enter API key";
-    return `
+  const config = state.llmConfig || {};
+  const apiKeyStatus = config.api_key_configured ? `Configured (${escapeHtml(config.api_key_preview || "hidden")})` : "Not configured";
+  const apiKeyPlaceholder = config.api_key_configured ? "Leave blank to keep current key" : "Enter API key";
+  return `
     <section class="panel">
       <div class="panel-header"><h2>LLM configuration</h2></div>
       <div class="panel-body">
@@ -1159,53 +1217,58 @@ function renderLlmConfig() {
           <label>Provider<input name="provider" value="${escapeHtml(config.provider || "openai-compatible")}" /></label>
           <label>Base URL<input name="base_url" value="${escapeHtml(config.base_url || "")}" /></label>
           <label>API key <span class="muted">${apiKeyStatus}</span><input name="api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>
-          <label class="checkbox-row"><input name="clear_api_key" type="checkbox" /> Clear API key</label>
           <label>Model<input name="model" value="${escapeHtml(config.model || "")}" /></label>
           <label>LLM timeout seconds<input name="timeout_seconds" type="number" min="1" max="600" value="${escapeHtml(config.timeout_seconds || 60)}" /></label>
+          <label>Extra body JSON<textarea name="extra_body">${escapeHtml(config.extra_body_json || "{}")}</textarea></label>
+          <div class="form-actions">
+            <button
+              aria-label="Test LLM configuration"
+              class="icon-button"
+              id="test-llm-config"
+              title="Test LLM configuration"
+              type="button"
+            >\u{1F9EA}</button>
+            <button class="primary" type="submit">Save LLM configuration</button>
+          </div>
+        </form>
+      </div>
+    </section>`;
+}
+function renderReasoningConfig() {
+  const config = state.reasoningConfig || {};
+  return `
+    <section class="panel">
+      <div class="panel-header"><h2>Reasoning</h2></div>
+      <div class="panel-body">
+        <form id="reasoning-config-form" class="form-grid">
           <div class="subgrid">
-            <label>Intent mode<select name="intent_classification_mode">${renderModeOptions(config.intent_classification_mode || "auto", [
-        "auto",
-        "llm"
-    ])}</select></label>
-            <label>SQL generation<select name="sql_generation_mode">${renderModeOptions(config.sql_generation_mode || "llm", [
-        "llm"
-    ])}</select></label>
+            <label>Intent mode<select name="intent_classification_mode">${renderModeOptions(config.intent_classification_mode || "auto", ["auto", "llm"])}</select></label>
+            <label>SQL generation<select name="sql_generation_mode">${renderModeOptions(config.sql_generation_mode || "llm", ["llm"])}</select></label>
           </div>
           <div class="subgrid">
-            <label>Result interpretation<select name="result_interpretation_mode">${renderModeOptions(config.result_interpretation_mode || "llm", [
-        "llm"
-    ])}</select></label>
-            <label>Output classification<select name="output_classification_mode">${renderModeOptions(config.output_classification_mode || "auto", [
-        "auto",
-        "llm"
-    ])}</select></label>
+            <label>Result interpretation<select name="result_interpretation_mode">${renderModeOptions(config.result_interpretation_mode || "llm", ["llm"])}</select></label>
+            <label>Output classification<select name="output_classification_mode">${renderModeOptions(config.output_classification_mode || "auto", ["auto", "llm"])}</select></label>
           </div>
           <div class="subgrid">
-            <label>Investigation mode<select name="investigation_mode">${renderModeOptions(config.investigation_mode || "llm", [
-        "llm"
-    ])}</select></label>
-            <label>Ambiguity handling<select name="investigation_ambiguity_mode">${renderModeOptions(config.investigation_ambiguity_mode || "clarify", [
-        "clarify",
-        "safe_aggregate"
-    ])}</select></label>
+            <label>Investigation mode<select name="investigation_mode">${renderModeOptions(config.investigation_mode || "llm", ["llm"])}</select></label>
+            <label>Ambiguity handling<select name="investigation_ambiguity_mode">${renderModeOptions(config.investigation_ambiguity_mode || "clarify", ["clarify", "safe_aggregate"])}</select></label>
           </div>
           <div class="subgrid">
             <label>Query max rows<input name="query_max_rows" type="number" min="1" max="100000" value="${escapeHtml(config.query_max_rows || 100)}" /></label>
             <label>Query timeout seconds<input name="query_timeout_seconds" type="number" min="1" max="3600" value="${escapeHtml(config.query_timeout_seconds || 30)}" /></label>
           </div>
-          <label>Extra body JSON<textarea name="extra_body">${escapeHtml(config.extra_body_json || "{}")}</textarea></label>
           <div class="mono muted">${escapeHtml(JSON.stringify(config.sources || {}, null, 2))}</div>
-          <div class="form-actions"><button class="primary" type="submit">Save LLM configuration</button></div>
+          <div class="form-actions"><button class="primary" type="submit">Save reasoning configuration</button></div>
         </form>
       </div>
     </section>`;
 }
 function renderGovernancePolicy() {
-    const config = state.governancePolicy || {};
-    const finalAnswer = config.final_answer || {};
-    const sql = config.sql || {};
-    const privacy = config.privacy || {};
-    return `
+  const config = state.governancePolicy || {};
+  const finalAnswer = config.final_answer || {};
+  const sql = config.sql || {};
+  const privacy = config.privacy || {};
+  return `
     <section class="panel">
       <div class="panel-header"><h2>Governance policy</h2></div>
       <div class="panel-body">
@@ -1232,9 +1295,9 @@ function renderGovernancePolicy() {
     </section>`;
 }
 function renderDatasourceObjectListItem(table, settings, active) {
-    const selected = settings.selected !== false;
-    const objectType = table.object_type || "table";
-    return `
+  const selected = settings.selected !== false;
+  const objectType = table.object_type || "table";
+  return `
     <div class="schema-object-row ${active ? "active" : ""}" data-schema-object-row="${escapeHtml(table.name)}">
       <input name="${escapeHtml(table.name)}__selected" data-schema-object-enabled="${escapeHtml(table.name)}" aria-label="Use ${escapeHtml(table.name)}" type="checkbox" ${selected ? "checked" : ""} />
       <button type="button" data-schema-object="${escapeHtml(table.name)}">
@@ -1244,22 +1307,22 @@ function renderDatasourceObjectListItem(table, settings, active) {
     </div>`;
 }
 function renderDatasourceObjectDetails(table, settings) {
-    const objectType = table.object_type || "table";
-    return `
+  const objectType = table.object_type || "table";
+  return `
     <div class="schema-object-detail-header">
       <div>
         <h3>${escapeHtml(table.name)}</h3>
         <span class="badge">${escapeHtml(objectType)}</span>
       </div>
     </div>
-    <div class="schema-object-columns">${escapeHtml((table.columns || []).map((column)=>`${column.name}:${column.type}${column.primary_key ? " pk" : ""}`).join(", ") || "No columns available.")}</div>
+    <div class="schema-object-columns">${escapeHtml((table.columns || []).map((column) => `${column.name}:${column.type}${column.primary_key ? " pk" : ""}`).join(", ") || "No columns available.")}</div>
     <label>Description<input data-schema-detail="description" name="${escapeHtml(table.name)}__description" value="${escapeHtml(settings.description || "")}" /></label>
     <label>Primary key guidance<input data-schema-detail="primary_key_prompt" name="${escapeHtml(table.name)}__primary_key_prompt" value="${escapeHtml(settings.primary_key_prompt || "")}" /></label>
     <label>Foreign key guidance<input data-schema-detail="foreign_key_prompt" name="${escapeHtml(table.name)}__foreign_key_prompt" value="${escapeHtml(settings.foreign_key_prompt || "")}" /></label>
     <label>Join logic<textarea data-schema-detail="join_logic" class="textarea-small" name="${escapeHtml(table.name)}__join_logic">${escapeHtml(settings.join_logic || "")}</textarea></label>`;
 }
 function renderSchemaCache() {
-    return `
+  return `
     <section class="panel"><div class="panel-header"><h2>Schema cache</h2></div>
       <div class="panel-body"><form id="schema-cache-form" class="form-grid">
         <label>TTL seconds<input name="ttl_seconds" type="number" min="1" max="86400" value="${escapeHtml(state.schemaCache?.ttl_seconds ?? 300)}" /></label>
@@ -1270,303 +1333,201 @@ function renderSchemaCache() {
     </section>`;
 }
 function renderStub(title, text) {
-    return `<section class="panel"><div class="panel-header"><h2>${escapeHtml(title)}</h2><span class="badge planned">planned</span></div><div class="panel-body"><p class="muted">${escapeHtml(text)}</p></div></section>`;
+  return `<section class="panel"><div class="panel-header"><h2>${escapeHtml(title)}</h2><span class="badge planned">planned</span></div><div class="panel-body"><p class="muted">${escapeHtml(text)}</p></div></section>`;
 }
 function renderLicense() {
-    return `<section class="panel"><div class="panel-header"><h2>License</h2></div><div class="panel-body mono">${escapeHtml(JSON.stringify(state.license || {}, null, 2))}</div></section>`;
+  return `<section class="panel"><div class="panel-header"><h2>License</h2></div><div class="panel-body mono">${escapeHtml(JSON.stringify(state.license || {}, null, 2))}</div></section>`;
 }
 function renderAdminAudit() {
-    return `
+  return `
     <section class="panel"><div class="panel-header"><h2>Admin audit</h2></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Resource</th><th>Details</th></tr></thead>
-        <tbody>${state.adminAudit.map((item)=>`<tr><td>${escapeHtml(item.occurred_at)}</td><td>${escapeHtml(item.actor)}</td><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.resource_type)}:${escapeHtml(item.resource_id)}</td><td><code>${escapeHtml(JSON.stringify(item.details))}</code></td></tr>`).join("")}</tbody>
+        <tbody>${state.adminAudit.map((item) => `<tr><td>${escapeHtml(item.occurred_at)}</td><td>${escapeHtml(item.actor)}</td><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.resource_type)}:${escapeHtml(item.resource_id)}</td><td><code>${escapeHtml(JSON.stringify(item.details))}</code></td></tr>`).join("")}</tbody>
       </table></div>
     </section>`;
 }
 function attachSectionHandlers() {
-    document.querySelector("#overview-refresh")?.addEventListener("click", refreshOverview);
-    document.querySelectorAll("[data-overview-empty-slot]").forEach((button)=>{
-        button.addEventListener("click", async ()=>{
-            const slot = Number(button.dataset.overviewEmptySlot || 0);
-            state.overviewPlacementSlot = state.overviewPlacementSlot === slot ? null : slot;
-            if (!state.overviewWidgetConfigs.length) {
-                await loadOverviewWidgetConfigs(false);
-            }
-            render();
-        });
+  document.querySelector("#overview-refresh")?.addEventListener("click", refreshOverview);
+  document.querySelectorAll("[data-overview-empty-slot]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const slot = Number(button.dataset.overviewEmptySlot || 0);
+      state.overviewPlacementSlot = state.overviewPlacementSlot === slot ? null : slot;
+      if (!state.overviewWidgetConfigs.length) {
+        await loadOverviewWidgetConfigs(false);
+      }
+      render();
     });
-    document.querySelectorAll("[data-overview-place-widget]").forEach((button)=>{
-        button.addEventListener("click", placeOverviewWidget);
+  });
+  document.querySelectorAll("[data-overview-place-widget]").forEach((button) => {
+    button.addEventListener("click", placeOverviewWidget);
+  });
+  document.querySelectorAll("[data-overview-new-widget]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.overviewPlacementSlot = Number(button.dataset.overviewNewWidget || 0);
+      state.selectedOverviewWidgetKey = "__new__";
+      state.section = "widgets";
+      render();
     });
-    document.querySelectorAll("[data-overview-new-widget]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.overviewPlacementSlot = Number(button.dataset.overviewNewWidget || 0);
-            state.selectedOverviewWidgetKey = "__new__";
-            state.section = "widgets";
-            render();
-        });
+  });
+  document.querySelector("#new-overview-widget")?.addEventListener("click", () => {
+    state.selectedOverviewWidgetKey = "__new__";
+    state.overviewPlacementSlot = null;
+    render();
+  });
+  document.querySelectorAll("[data-overview-widget-select]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedOverviewWidgetKey = button.dataset.overviewWidgetSelect || "";
+      state.overviewPlacementSlot = null;
+      render();
     });
-    document.querySelector("#new-overview-widget")?.addEventListener("click", ()=>{
-        state.selectedOverviewWidgetKey = "__new__";
-        state.overviewPlacementSlot = null;
-        render();
+  });
+  document.querySelectorAll("[data-overview-widget-active]").forEach((input) => {
+    input.addEventListener("change", updateOverviewWidgetActive);
+  });
+  document.querySelectorAll("[data-overview-widget-delete]").forEach((button) => {
+    button.addEventListener("click", deleteOverviewWidget);
+  });
+  document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
+  document.querySelectorAll("[data-edit-overview-widget]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.overviewEditorWidgetKey = button.dataset.editOverviewWidget || null;
+      render();
     });
-    document.querySelectorAll("[data-overview-widget-select]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.selectedOverviewWidgetKey = button.dataset.overviewWidgetSelect || "";
-            state.overviewPlacementSlot = null;
-            render();
-        });
+  });
+  document.querySelectorAll("[data-close-overview-widget]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.overviewEditorWidgetKey = null;
+      render();
     });
-    document.querySelectorAll("[data-overview-widget-active]").forEach((input)=>{
-        input.addEventListener("change", updateOverviewWidgetActive);
+  });
+  document.querySelector("[data-overview-widget-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      state.overviewEditorWidgetKey = null;
+      render();
+    }
+  });
+  document.querySelectorAll("[data-overview-widget-form]").forEach((form) => {
+    form.addEventListener("submit", saveOverviewWidget);
+  });
+  document.querySelectorAll("[data-overview-table-page]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const widgetKey = button.dataset.overviewTablePage;
+      const page = Number(button.dataset.page || 0);
+      if (!widgetKey || !Number.isFinite(page)) return;
+      state.overviewTablePages[widgetKey] = page;
+      render();
     });
-    document.querySelectorAll("[data-overview-widget-delete]").forEach((button)=>{
-        button.addEventListener("click", deleteOverviewWidget);
+  });
+  document.querySelector("#data-audit-filter-form")?.addEventListener("submit", loadDataAuditForFilters);
+  document.querySelector("#retention-form")?.addEventListener("submit", saveRetention);
+  document.querySelector("#data-audit-type")?.addEventListener("change", loadDataAuditForFilters);
+  document.querySelector("#data-audit-output-classification")?.addEventListener("change", loadDataAuditForFilters);
+  document.querySelector("#prompt-form")?.addEventListener("submit", savePrompt);
+  document.querySelector("#schema-cache-form")?.addEventListener("submit", saveSchemaCacheTtl);
+  document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
+  document.querySelector("#test-llm-config")?.addEventListener("click", testLlmConfig);
+  document.querySelector("#reasoning-config-form")?.addEventListener("submit", saveReasoningConfig);
+  document.querySelector("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
+  document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
+  document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
+  document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
+  document.querySelector("#schema-show-enabled-only")?.addEventListener("change", (event) => {
+    syncDatasourceSchemaDraftFromForm();
+    state.datasourceSchemaShowEnabledOnly = event.currentTarget.checked;
+    render();
+  });
+  document.querySelectorAll("[data-schema-object-enabled]").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (!state.datasourceSchemaShowEnabledOnly) return;
+      syncDatasourceSchemaDraftFromForm();
+      render();
     });
-    document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
-    document.querySelectorAll("[data-edit-overview-widget]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.overviewEditorWidgetKey = button.dataset.editOverviewWidget || null;
-            render();
-        });
+  });
+  document.querySelectorAll("[data-schema-object]").forEach((button) => {
+    button.addEventListener("click", () => {
+      syncDatasourceSchemaDraftFromForm();
+      state.datasourceSchemaSelectedObjectName = button.dataset.schemaObject || "";
+      render();
     });
-    document.querySelectorAll("[data-close-overview-widget]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.overviewEditorWidgetKey = null;
-            render();
-        });
+  });
+  document.querySelector("#invalidate-schema-cache")?.addEventListener("click", invalidateSchemaCache);
+  document.querySelector("#test-datasource")?.addEventListener("click", testDatasource);
+  document.querySelector("#introspect-datasource")?.addEventListener("click", introspectDatasource);
+  document.querySelector("#activate-datasource")?.addEventListener("click", activateDatasource);
+  document.querySelectorAll("[data-open-business-logic]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.section = "business-logic";
+      render();
+      await loadBusinessLogicSuggestions();
     });
-    document.querySelector("[data-overview-widget-backdrop]")?.addEventListener("click", (event)=>{
-        if (event.target === event.currentTarget) {
-            state.overviewEditorWidgetKey = null;
-            render();
-        }
+  });
+  document.querySelectorAll("[data-business-logic-toggle]").forEach((input) => {
+    input.addEventListener("change", updateBusinessLogicSuggestion);
+  });
+  document.querySelectorAll("[data-business-logic-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.businessLogicEditorId = Number(button.dataset.businessLogicEdit);
+      render();
     });
-    document.querySelectorAll("[data-overview-widget-form]").forEach((form)=>{
-        form.addEventListener("submit", saveOverviewWidget);
+  });
+  document.querySelectorAll("[data-close-business-logic-editor]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.businessLogicEditorId = null;
+      render();
     });
-    document.querySelectorAll("[data-overview-table-page]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            const widgetKey = button.dataset.overviewTablePage;
-            const page = Number(button.dataset.page || 0);
-            if (!widgetKey || !Number.isFinite(page)) return;
-            state.overviewTablePages[widgetKey] = page;
-            render();
-        });
+  });
+  document.querySelector("[data-business-logic-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      state.businessLogicEditorId = null;
+      render();
+    }
+  });
+  document.querySelectorAll("[data-business-logic-form]").forEach((form) => {
+    form.addEventListener("submit", saveBusinessLogicSuggestion);
+  });
+  document.querySelectorAll("[data-business-logic-delete]").forEach((button) => {
+    button.addEventListener("click", deleteBusinessLogicSuggestion);
+  });
+  document.querySelector("#new-datasource")?.addEventListener("click", () => {
+    state.selectedDatasourceId = "new";
+    state.datasourceSchema = null;
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = "";
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+    render();
+  });
+  document.querySelectorAll("[data-prompt]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedPromptKey = button.dataset.prompt || "";
+      render();
     });
-    document.querySelector("#data-audit-filter-form")?.addEventListener("submit", loadDataAuditForFilters);
-    document.querySelector("#retention-form")?.addEventListener("submit", saveRetention);
-    document.querySelector("#data-audit-type")?.addEventListener("change", loadDataAuditForFilters);
-    document.querySelector("#data-audit-output-classification")?.addEventListener("change", loadDataAuditForFilters);
-    document.querySelector("#prompt-form")?.addEventListener("submit", savePrompt);
-    document.querySelector("#schema-cache-form")?.addEventListener("submit", saveSchemaCacheTtl);
-    document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
-    document.querySelector("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
-    document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
-    document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
-    document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
-    document.querySelector("#schema-show-enabled-only")?.addEventListener("change", (event)=>{
-        syncDatasourceSchemaDraftFromForm();
-        state.datasourceSchemaShowEnabledOnly = event.currentTarget.checked;
-        render();
+  });
+  document.querySelectorAll("[data-datasource]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.selectedDatasourceId = Number(button.dataset.datasource);
+      await loadDatasourceSchema();
     });
-    document.querySelectorAll("[data-schema-object-enabled]").forEach((input)=>{
-        input.addEventListener("change", ()=>{
-            if (!state.datasourceSchemaShowEnabledOnly) return;
-            syncDatasourceSchemaDraftFromForm();
-            render();
-        });
-    });
-    document.querySelectorAll("[data-schema-object]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            syncDatasourceSchemaDraftFromForm();
-            state.datasourceSchemaSelectedObjectName = button.dataset.schemaObject || "";
-            render();
-        });
-    });
-    document.querySelector("#invalidate-schema-cache")?.addEventListener("click", invalidateSchemaCache);
-    document.querySelector("#test-datasource")?.addEventListener("click", testDatasource);
-    document.querySelector("#introspect-datasource")?.addEventListener("click", introspectDatasource);
-    document.querySelector("#activate-datasource")?.addEventListener("click", activateDatasource);
-    document.querySelectorAll("[data-open-business-logic]").forEach((button)=>{
-        button.addEventListener("click", async ()=>{
-            state.section = "business-logic";
-            render();
-            await loadBusinessLogicSuggestions();
-        });
-    });
-    document.querySelectorAll("[data-business-logic-toggle]").forEach((input)=>{
-        input.addEventListener("change", updateBusinessLogicSuggestion);
-    });
-    document.querySelectorAll("[data-business-logic-edit]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.businessLogicEditorId = Number(button.dataset.businessLogicEdit);
-            render();
-        });
-    });
-    document.querySelectorAll("[data-close-business-logic-editor]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.businessLogicEditorId = null;
-            render();
-        });
-    });
-    document.querySelector("[data-business-logic-backdrop]")?.addEventListener("click", (event)=>{
-        if (event.target === event.currentTarget) {
-            state.businessLogicEditorId = null;
-            render();
-        }
-    });
-    document.querySelectorAll("[data-business-logic-form]").forEach((form)=>{
-        form.addEventListener("submit", saveBusinessLogicSuggestion);
-    });
-    document.querySelectorAll("[data-business-logic-delete]").forEach((button)=>{
-        button.addEventListener("click", deleteBusinessLogicSuggestion);
-    });
-    document.querySelector("#new-datasource")?.addEventListener("click", ()=>{
-        state.selectedDatasourceId = "new";
-        state.datasourceSchema = null;
-        state.datasourceSchemaLoading = false;
-        state.datasourceSchemaError = "";
-        state.datasourceSchemaSelectedObjectName = "";
-        state.datasourceSchemaDraftTables = null;
-        render();
-    });
-    document.querySelectorAll("[data-prompt]").forEach((button)=>{
-        button.addEventListener("click", ()=>{
-            state.selectedPromptKey = button.dataset.prompt || "";
-            render();
-        });
-    });
-    document.querySelectorAll("[data-datasource]").forEach((button)=>{
-        button.addEventListener("click", async ()=>{
-            state.selectedDatasourceId = Number(button.dataset.datasource);
-            await loadDatasourceSchema();
-        });
-    });
+  });
 }
 async function loadDataAuditForFilters(event) {
-    event.preventDefault();
-    state.dataAuditType = document.querySelector("#data-audit-type")?.value || "";
-    state.dataAuditOutputClassification = document.querySelector("#data-audit-output-classification")?.value || "";
-    state.dataAuditSqlContains = document.querySelector("#data-audit-sql-contains")?.value || "";
-    await loadDataAudit();
+  event.preventDefault();
+  state.dataAuditType = document.querySelector("#data-audit-type")?.value || "";
+  state.dataAuditOutputClassification = document.querySelector("#data-audit-output-classification")?.value || "";
+  state.dataAuditSqlContains = document.querySelector("#data-audit-sql-contains")?.value || "";
+  await loadDataAudit();
 }
 async function saveOverviewWidget(event) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const widgetKey = formElement.dataset.overviewWidgetForm;
-    if (!widgetKey) return;
-    const form = new FormData(formElement);
-    try {
-        await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
-            method: "PUT",
-            body: JSON.stringify({
-                label: form.get("label"),
-                widget_type: form.get("widget_type"),
-                datasource_key: form.get("datasource_key"),
-                question: form.get("question"),
-                result_mode: form.get("result_mode") || "data",
-                position: Number(form.get("position") || 100),
-                grid_width: Number(form.get("grid_width") || 1),
-                active: form.get("active") !== "false"
-            })
-        });
-        setMessage("success", "Overview widget saved.");
-        state.overviewEditorWidgetKey = null;
-        await loadOverview();
-    } catch (error) {
-        setMessage("error", error.message);
-    }
-}
-async function placeOverviewWidget(event) {
-    const button = event.currentTarget;
-    const slot = Number(button.dataset.overviewPlaceWidget || 0);
-    const select = document.querySelector(`[data-overview-placement-select="${slot}"]`);
-    const widgetKey = select?.value || "";
-    const widget = state.overviewWidgetConfigs.find((item)=>item.widget_key === widgetKey);
-    if (!widgetKey || !widget) return;
-    try {
-        const width = getOverviewWidgetGridWidth(widget);
-        const layout = buildOverviewLayout(state.overview?.widgets || []);
-        const actualSlot = findAvailableOverviewSlot(slot, width, layout.occupiedSlots);
-        await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(actualSlot), width);
-        state.overviewPlacementSlot = null;
-        setMessage("success", "Widget added to overview.");
-        await loadOverview();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
-}
-async function updateOverviewWidgetActive(event) {
-    const input = event.currentTarget;
-    const widgetKey = input.dataset.overviewWidgetActive || "";
-    const widget = state.overviewWidgetConfigs.find((item)=>item.widget_key === widgetKey);
-    if (!widget) return;
-    try {
-        await updateOverviewWidgetState(widgetKey, input.checked, widget.position, getOverviewWidgetGridWidth(widget));
-        setMessage("success", input.checked ? "Widget enabled." : "Widget disabled.");
-        await loadOverviewWidgetConfigs(false);
-        if (state.section === "overview") {
-            await loadOverview();
-        } else {
-            render();
-        }
-    } catch (error) {
-        setMessage("error", error.message);
-        await loadOverviewWidgetConfigs();
-    }
-}
-async function deleteOverviewWidget(event) {
-    const button = event.currentTarget;
-    const widgetKey = button.dataset.overviewWidgetDelete || "";
-    const widget = state.overviewWidgetConfigs.find((item)=>item.widget_key === widgetKey);
-    if (!widgetKey || !widget) return;
-    if (!window.confirm(`Delete widget "${widget.label}"?`)) {
-        return;
-    }
-    try {
-        await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
-            method: "DELETE"
-        });
-        setMessage("success", "Widget deleted.");
-        if (state.selectedOverviewWidgetKey === widgetKey) {
-            state.selectedOverviewWidgetKey = "";
-        }
-        if (state.overviewEditorWidgetKey === widgetKey) {
-            state.overviewEditorWidgetKey = null;
-        }
-        await loadOverviewWidgetConfigs(false);
-        await loadOverview();
-        if (state.section !== "overview") {
-            render();
-        }
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
-}
-async function updateOverviewWidgetState(widgetKey, active, position, gridWidth) {
-    await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}/state`, {
-        method: "PATCH",
-        body: JSON.stringify({
-            active,
-            position,
-            grid_width: gridWidth
-        })
-    });
-}
-async function saveOverviewWidgetSettings(event) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const mode = formElement.dataset.widgetMode || "update";
-    const form = new FormData(formElement);
-    const widgetKey = String(form.get("widget_key") || "").trim();
-    if (!widgetKey) return;
-    const payload = {
-        widget_key: widgetKey,
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  const widgetKey = formElement.dataset.overviewWidgetForm;
+  if (!widgetKey) return;
+  const form = new FormData(formElement);
+  try {
+    await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
+      method: "PUT",
+      body: JSON.stringify({
         label: form.get("label"),
         widget_type: form.get("widget_type"),
         datasource_key: form.get("datasource_key"),
@@ -1574,538 +1535,681 @@ async function saveOverviewWidgetSettings(event) {
         result_mode: form.get("result_mode") || "data",
         position: Number(form.get("position") || 100),
         grid_width: Number(form.get("grid_width") || 1),
-        active: form.get("active") === "on"
-    };
-    try {
-        if (mode === "create") {
-            await api("/api/v1/admin/overview/widgets", {
-                method: "POST",
-                body: JSON.stringify(payload)
-            });
-            state.selectedOverviewWidgetKey = widgetKey;
-            state.overviewPlacementSlot = null;
-            setMessage("success", "Widget created.");
-        } else {
-            await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
-                method: "PUT",
-                body: JSON.stringify(payload)
-            });
-            setMessage("success", "Widget saved.");
-        }
-        await loadOverviewWidgetConfigs(false);
-        await loadOverview();
-        if (state.section !== "overview") {
-            render();
-        }
-    } catch (error) {
-        setMessage("error", error.message);
+        active: form.get("active") !== "false"
+      })
+    });
+    setMessage("success", "Overview widget saved.");
+    state.overviewEditorWidgetKey = null;
+    await loadOverview();
+  } catch (error) {
+    setMessage("error", error.message);
+  }
+}
+async function placeOverviewWidget(event) {
+  const button = event.currentTarget;
+  const slot = Number(button.dataset.overviewPlaceWidget || 0);
+  const select = document.querySelector(`[data-overview-placement-select="${slot}"]`);
+  const widgetKey = select?.value || "";
+  const widget = state.overviewWidgetConfigs.find((item) => item.widget_key === widgetKey);
+  if (!widgetKey || !widget) return;
+  try {
+    const width = getOverviewWidgetGridWidth(widget);
+    const layout = buildOverviewLayout(state.overview?.widgets || []);
+    const actualSlot = findAvailableOverviewSlot(slot, width, layout.occupiedSlots);
+    await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(actualSlot), width);
+    state.overviewPlacementSlot = null;
+    setMessage("success", "Widget added to overview.");
+    await loadOverview();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function updateOverviewWidgetActive(event) {
+  const input = event.currentTarget;
+  const widgetKey = input.dataset.overviewWidgetActive || "";
+  const widget = state.overviewWidgetConfigs.find((item) => item.widget_key === widgetKey);
+  if (!widget) return;
+  try {
+    await updateOverviewWidgetState(widgetKey, input.checked, widget.position, getOverviewWidgetGridWidth(widget));
+    setMessage("success", input.checked ? "Widget enabled." : "Widget disabled.");
+    await loadOverviewWidgetConfigs(false);
+    if (state.section === "overview") {
+      await loadOverview();
+    } else {
+      render();
     }
+  } catch (error) {
+    setMessage("error", error.message);
+    await loadOverviewWidgetConfigs();
+  }
+}
+async function deleteOverviewWidget(event) {
+  const button = event.currentTarget;
+  const widgetKey = button.dataset.overviewWidgetDelete || "";
+  const widget = state.overviewWidgetConfigs.find((item) => item.widget_key === widgetKey);
+  if (!widgetKey || !widget) return;
+  if (!window.confirm(`Delete widget "${widget.label}"?`)) {
+    return;
+  }
+  try {
+    await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
+      method: "DELETE"
+    });
+    setMessage("success", "Widget deleted.");
+    if (state.selectedOverviewWidgetKey === widgetKey) {
+      state.selectedOverviewWidgetKey = "";
+    }
+    if (state.overviewEditorWidgetKey === widgetKey) {
+      state.overviewEditorWidgetKey = null;
+    }
+    await loadOverviewWidgetConfigs(false);
+    await loadOverview();
+    if (state.section !== "overview") {
+      render();
+    }
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function updateOverviewWidgetState(widgetKey, active, position, gridWidth) {
+  await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}/state`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      active,
+      position,
+      grid_width: gridWidth
+    })
+  });
+}
+async function saveOverviewWidgetSettings(event) {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  const mode = formElement.dataset.widgetMode || "update";
+  const form = new FormData(formElement);
+  const widgetKey = String(form.get("widget_key") || "").trim();
+  if (!widgetKey) return;
+  const payload = {
+    widget_key: widgetKey,
+    label: form.get("label"),
+    widget_type: form.get("widget_type"),
+    datasource_key: form.get("datasource_key"),
+    question: form.get("question"),
+    result_mode: form.get("result_mode") || "data",
+    position: Number(form.get("position") || 100),
+    grid_width: Number(form.get("grid_width") || 1),
+    active: form.get("active") === "on"
+  };
+  try {
+    if (mode === "create") {
+      await api("/api/v1/admin/overview/widgets", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      state.selectedOverviewWidgetKey = widgetKey;
+      state.overviewPlacementSlot = null;
+      setMessage("success", "Widget created.");
+    } else {
+      await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      setMessage("success", "Widget saved.");
+    }
+    await loadOverviewWidgetConfigs(false);
+    await loadOverview();
+    if (state.section !== "overview") {
+      render();
+    }
+  } catch (error) {
+    setMessage("error", error.message);
+  }
 }
 async function updateBusinessLogicSuggestion(event) {
-    const input = event.currentTarget;
-    const id = input.dataset.businessLogicToggle;
-    if (!id) return;
-    try {
-        await api(`/api/v1/admin/business-logic-suggestions/${encodeURIComponent(id)}`, {
-            method: "PUT",
-            body: JSON.stringify({
-                enabled: input.checked
-            })
-        });
-        setMessage("success", input.checked ? "Business logic enabled." : "Business logic disabled.");
-        await loadBusinessLogicSuggestions();
-    } catch (error) {
-        setMessage("error", error.message);
-        await loadBusinessLogicSuggestions();
-    }
+  const input = event.currentTarget;
+  const id = input.dataset.businessLogicToggle;
+  if (!id) return;
+  try {
+    await api(`/api/v1/admin/business-logic-suggestions/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: input.checked })
+    });
+    setMessage("success", input.checked ? "Business logic enabled." : "Business logic disabled.");
+    await loadBusinessLogicSuggestions();
+  } catch (error) {
+    setMessage("error", error.message);
+    await loadBusinessLogicSuggestions();
+  }
 }
 async function saveBusinessLogicSuggestion(event) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const id = formElement.dataset.businessLogicForm;
-    if (!id) return;
-    const form = new FormData(formElement);
-    try {
-        await api(`/api/v1/admin/business-logic-suggestions/${encodeURIComponent(id)}`, {
-            method: "PUT",
-            body: JSON.stringify({
-                title: form.get("title"),
-                rule_text: form.get("rule_text")
-            })
-        });
-        setMessage("success", "Business logic suggestion updated.");
-        state.businessLogicEditorId = null;
-        await loadBusinessLogicSuggestions();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  const id = formElement.dataset.businessLogicForm;
+  if (!id) return;
+  const form = new FormData(formElement);
+  try {
+    await api(`/api/v1/admin/business-logic-suggestions/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: form.get("title"),
+        rule_text: form.get("rule_text")
+      })
+    });
+    setMessage("success", "Business logic suggestion updated.");
+    state.businessLogicEditorId = null;
+    await loadBusinessLogicSuggestions();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
 }
 async function deleteBusinessLogicSuggestion(event) {
-    const button = event.currentTarget;
-    const id = button.dataset.businessLogicDelete;
-    if (!id) return;
-    try {
-        await api(`/api/v1/admin/business-logic-suggestions/${encodeURIComponent(id)}`, {
-            method: "DELETE"
-        });
-        setMessage("success", "Business logic suggestion deleted.");
-        await loadBusinessLogicSuggestions();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
+  const button = event.currentTarget;
+  const id = button.dataset.businessLogicDelete;
+  if (!id) return;
+  try {
+    await api(`/api/v1/admin/business-logic-suggestions/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    });
+    setMessage("success", "Business logic suggestion deleted.");
+    await loadBusinessLogicSuggestions();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
 }
 async function saveLlmConfig(event) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    try {
-        const extraBody = JSON.parse(String(form.get("extra_body") || "{}"));
-        if (extraBody === null || Array.isArray(extraBody) || typeof extraBody !== "object") {
-            throw new Error("Extra body JSON must be an object.");
-        }
-        const result = await api("/api/v1/admin/llm-config", {
-            method: "PUT",
-            body: JSON.stringify({
-                provider: form.get("provider"),
-                base_url: form.get("base_url"),
-                api_key: form.get("api_key"),
-                clear_api_key: form.get("clear_api_key") === "on",
-                model: form.get("model"),
-                timeout_seconds: Number(form.get("timeout_seconds") || 60),
-                intent_classification_mode: form.get("intent_classification_mode"),
-                sql_generation_mode: form.get("sql_generation_mode"),
-                result_interpretation_mode: form.get("result_interpretation_mode"),
-                output_classification_mode: form.get("output_classification_mode"),
-                investigation_mode: form.get("investigation_mode"),
-                investigation_ambiguity_mode: form.get("investigation_ambiguity_mode"),
-                query_max_rows: Number(form.get("query_max_rows") || 100),
-                query_timeout_seconds: Number(form.get("query_timeout_seconds") || 30),
-                extra_body: extraBody
-            })
-        });
-        state.llmConfig = result.item;
-        setMessage("success", "LLM configuration saved.");
-        render();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
+  event.preventDefault();
+  try {
+    const result = await api("/api/v1/admin/llm-config", {
+      method: "PUT",
+      body: JSON.stringify(getLlmConfigPayload())
+    });
+    state.llmConfig = result.item;
+    setMessage("success", "LLM configuration saved.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function testLlmConfig() {
+  try {
+    setMessage("success", "Testing LLM configuration...");
+    const result = await api("/api/v1/admin/llm-config/test", {
+      method: "POST",
+      body: JSON.stringify(getLlmConfigPayload())
+    });
+    setMessage("success", result.item?.model ? `OK \u2014 model: ${result.item.model}.` : "OK.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+function getLlmConfigPayload() {
+  const formElement = document.querySelector("#llm-config-form");
+  if (!formElement)
+    throw new Error("LLM configuration form is not available.");
+  const form = new FormData(formElement);
+  const extraBody = JSON.parse(String(form.get("extra_body") || "{}"));
+  if (extraBody === null || Array.isArray(extraBody) || typeof extraBody !== "object") {
+    throw new Error("Extra body JSON must be an object.");
+  }
+  return {
+    provider: form.get("provider"),
+    base_url: form.get("base_url"),
+    api_key: form.get("api_key"),
+    clear_api_key: false,
+    model: form.get("model"),
+    timeout_seconds: Number(form.get("timeout_seconds") || 60),
+    extra_body: extraBody
+  };
+}
+async function saveReasoningConfig(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    const result = await api("/api/v1/admin/reasoning-config", {
+      method: "PUT",
+      body: JSON.stringify({
+        intent_classification_mode: form.get("intent_classification_mode"),
+        sql_generation_mode: form.get("sql_generation_mode"),
+        result_interpretation_mode: form.get("result_interpretation_mode"),
+        output_classification_mode: form.get("output_classification_mode"),
+        investigation_mode: form.get("investigation_mode"),
+        investigation_ambiguity_mode: form.get("investigation_ambiguity_mode"),
+        query_max_rows: Number(form.get("query_max_rows") || 100),
+        query_timeout_seconds: Number(form.get("query_timeout_seconds") || 30)
+      })
+    });
+    state.reasoningConfig = result.item;
+    setMessage("success", "Reasoning configuration saved.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
 }
 async function saveGovernancePolicy(event) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    try {
-        const forbiddenColumns = JSON.parse(String(form.get("forbidden_columns") || "{}"));
-        const piiColumnNames = JSON.parse(String(form.get("pii_column_names") || "{}"));
-        if (forbiddenColumns === null || Array.isArray(forbiddenColumns) || typeof forbiddenColumns !== "object") {
-            throw new Error("Forbidden columns JSON must be an object.");
-        }
-        if (piiColumnNames === null || typeof piiColumnNames !== "object") {
-            throw new Error("PII column names JSON must be an object or list.");
-        }
-        const result = await api("/api/v1/admin/governance-policy", {
-            method: "PUT",
-            body: JSON.stringify({
-                final_answer: {
-                    record_level_pii_allowed: form.get("record_level_pii_allowed") === "on",
-                    prefer_aggregates_for_sensitive_domains: form.get("prefer_aggregates_for_sensitive_domains") === "on"
-                },
-                sql: {
-                    read_only: form.get("sql_read_only") === "on",
-                    select_star_allowed: form.get("select_star_allowed") === "on",
-                    tenant_filter_required: form.get("tenant_filter_required") === "on",
-                    tenant_column: String(form.get("tenant_column") || "").trim() || null
-                },
-                privacy: {
-                    record_level_forbidden: form.get("record_level_forbidden") === "on",
-                    forbidden_columns: forbiddenColumns
-                },
-                pii_column_names: piiColumnNames
-            })
-        });
-        state.governancePolicy = result.item;
-        setMessage("success", "Governance policy saved.");
-        render();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    const forbiddenColumns = JSON.parse(String(form.get("forbidden_columns") || "{}"));
+    const piiColumnNames = JSON.parse(String(form.get("pii_column_names") || "{}"));
+    if (forbiddenColumns === null || Array.isArray(forbiddenColumns) || typeof forbiddenColumns !== "object") {
+      throw new Error("Forbidden columns JSON must be an object.");
     }
+    if (piiColumnNames === null || typeof piiColumnNames !== "object") {
+      throw new Error("PII column names JSON must be an object or list.");
+    }
+    const result = await api("/api/v1/admin/governance-policy", {
+      method: "PUT",
+      body: JSON.stringify({
+        final_answer: {
+          record_level_pii_allowed: form.get("record_level_pii_allowed") === "on",
+          prefer_aggregates_for_sensitive_domains: form.get("prefer_aggregates_for_sensitive_domains") === "on"
+        },
+        sql: {
+          read_only: form.get("sql_read_only") === "on",
+          select_star_allowed: form.get("select_star_allowed") === "on",
+          tenant_filter_required: form.get("tenant_filter_required") === "on",
+          tenant_column: String(form.get("tenant_column") || "").trim() || null
+        },
+        privacy: {
+          record_level_forbidden: form.get("record_level_forbidden") === "on",
+          forbidden_columns: forbiddenColumns
+        },
+        pii_column_names: piiColumnNames
+      })
+    });
+    state.governancePolicy = result.item;
+    setMessage("success", "Governance policy saved.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
 }
 async function saveRetention(event) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    try {
-        await api("/api/v1/admin/audit/settings", {
-            method: "PUT",
-            body: JSON.stringify({
-                data_query_retention_days: Number(form.get("retention"))
-            })
-        });
-        setMessage("success", "Audit retention saved.");
-        await loadDataAudit();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await api("/api/v1/admin/audit/settings", { method: "PUT", body: JSON.stringify({ data_query_retention_days: Number(form.get("retention")) }) });
+    setMessage("success", "Audit retention saved.");
+    await loadDataAudit();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
 }
 async function savePrompt(event) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const promptKey = String(form.get("prompt_key"));
-    try {
-        await api(`/api/v1/admin/prompts/${encodeURIComponent(promptKey)}`, {
-            method: "PUT",
-            body: JSON.stringify({
-                name: form.get("name"),
-                description: form.get("description"),
-                system_prompt: form.get("system_prompt"),
-                user_prompt_template: form.get("user_prompt_template"),
-                active: form.get("active") === "on"
-            })
-        });
-        setMessage("success", "Prompt saved.");
-        await loadPrompts();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const promptKey = String(form.get("prompt_key"));
+  try {
+    await api(`/api/v1/admin/prompts/${encodeURIComponent(promptKey)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: form.get("name"),
+        description: form.get("description"),
+        system_prompt: form.get("system_prompt"),
+        user_prompt_template: form.get("user_prompt_template"),
+        active: form.get("active") === "on"
+      })
+    });
+    setMessage("success", "Prompt saved.");
+    await loadPrompts();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
 }
 async function saveDatasource(event) {
-    event.preventDefault();
-    const selected = getSelectedDatasource();
-    if (selected?.system_managed) return;
-    const form = new FormData(event.currentTarget);
-    const id = String(form.get("id") || "");
-    const payload = {
-        connector_key: form.get("connector_key"),
-        name: form.get("name"),
-        database_type: form.get("database_type"),
-        database_url: form.get("database_url"),
-        sql_dialect: form.get("sql_dialect"),
-        active: form.get("active") === "on"
-    };
-    try {
-        const result = await api(id ? `/api/v1/admin/datasources/${id}` : "/api/v1/admin/datasources", {
-            method: id ? "PUT" : "POST",
-            body: JSON.stringify(id ? {
-                ...payload,
-                connector_key: undefined
-            } : payload)
-        });
-        state.selectedDatasourceId = result.item.id;
-        setMessage("success", "Datasource saved.");
-        await loadDatasources();
-    } catch (error) {
-        setMessage("error", error.message);
-    }
+  event.preventDefault();
+  const selected = getSelectedDatasource();
+  if (selected?.system_managed) return;
+  const form = new FormData(event.currentTarget);
+  const id = String(form.get("id") || "");
+  const payload = {
+    connector_key: form.get("connector_key"),
+    name: form.get("name"),
+    database_type: form.get("database_type"),
+    database_url: form.get("database_url"),
+    sql_dialect: form.get("sql_dialect"),
+    active: form.get("active") === "on"
+  };
+  try {
+    const result = await api(id ? `/api/v1/admin/datasources/${id}` : "/api/v1/admin/datasources", {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(id ? { ...payload, connector_key: void 0 } : payload)
+    });
+    state.selectedDatasourceId = result.item.id;
+    setMessage("success", "Datasource saved.");
+    await loadDatasources();
+  } catch (error) {
+    setMessage("error", error.message);
+  }
 }
 async function testDatasource() {
-    const selected = getSelectedDatasource();
-    const form = document.querySelector("#datasource-form");
-    const formData = form ? new FormData(form) : null;
-    try {
-        if (selected) {
-            await api(`/api/v1/admin/datasources/${selected.id}/test`, {
-                method: "POST"
-            });
-        } else if (formData) {
-            await api("/api/v1/admin/datasources/test", {
-                method: "POST",
-                body: JSON.stringify({
-                    database_type: formData.get("database_type"),
-                    database_url: formData.get("database_url")
-                })
-            });
-        } else {
-            return;
-        }
-        setMessage("success", "Connection test succeeded.");
-    } catch (error) {
-        setMessage("error", extractErrorMessage(error));
+  const selected = getSelectedDatasource();
+  const form = document.querySelector("#datasource-form");
+  const formData = form ? new FormData(form) : null;
+  try {
+    if (selected) {
+      await api(`/api/v1/admin/datasources/${selected.id}/test`, { method: "POST" });
+    } else if (formData) {
+      await api("/api/v1/admin/datasources/test", {
+        method: "POST",
+        body: JSON.stringify({
+          database_type: formData.get("database_type"),
+          database_url: formData.get("database_url")
+        })
+      });
+    } else {
+      return;
     }
+    setMessage("success", "Connection test succeeded.");
+  } catch (error) {
+    setMessage("error", extractErrorMessage(error));
+  }
 }
 async function introspectDatasource() {
-    const selected = getSelectedDatasource();
-    if (!selected) return;
-    try {
-        state.datasourceSchemaLoading = true;
-        state.datasourceSchemaError = "";
-        render();
-        state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/introspect`, {
-            method: "POST"
-        });
-        state.datasourceSchemaSelectedObjectName = "";
-        state.datasourceSchemaDraftTables = null;
-        state.datasourceSchemaLoading = false;
-        setMessage("success", "Schema introspection completed.");
-        render();
-    } catch (error) {
-        state.datasourceSchemaLoading = false;
-        state.datasourceSchemaError = error.message;
-        setMessage("error", error.message);
-        render();
-    }
-}
-async function activateDatasource() {
-    const selected = getSelectedDatasource();
-    if (!selected) return;
-    try {
-        await api(`/api/v1/admin/datasources/${selected.id}/activate`, {
-            method: "POST"
-        });
-        setMessage("success", "Datasource activated.");
-        await loadDatasources();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
-}
-function syncDatasourceSchemaDraftFromForm() {
-    const form = document.querySelector("#datasource-schema-form");
-    const rawTables = state.datasourceSchema?.item?.raw_schema?.tables || [];
-    const tableSettings = state.datasourceSchema?.item?.table_settings?.tables || {};
-    if (!form || !rawTables.length) return;
-    const draftTables = getDatasourceSchemaDraftTables(rawTables, tableSettings);
-    form.querySelectorAll("[data-schema-object-enabled]").forEach((input)=>{
-        const name = input.dataset.schemaObjectEnabled;
-        if (!name || !draftTables[name]) return;
-        draftTables[name].selected = input.checked;
-    });
-    const selectedName = state.datasourceSchemaSelectedObjectName;
-    const selectedSettings = selectedName ? draftTables[selectedName] : null;
-    if (!selectedSettings) return;
-    selectedSettings.description = form.querySelector("[data-schema-detail='description']")?.value || "";
-    selectedSettings.primary_key_prompt = form.querySelector("[data-schema-detail='primary_key_prompt']")?.value || "";
-    selectedSettings.foreign_key_prompt = form.querySelector("[data-schema-detail='foreign_key_prompt']")?.value || "";
-    selectedSettings.join_logic = form.querySelector("[data-schema-detail='join_logic']")?.value || "";
-}
-async function saveDatasourceSchema(event) {
-    event.preventDefault();
-    const selected = getSelectedDatasource();
-    if (!selected || !state.datasourceSchema?.item) return;
-    const rawTables = state.datasourceSchema.item.raw_schema.tables || [];
-    const tableSettings = state.datasourceSchema.item.table_settings?.tables || {};
-    syncDatasourceSchemaDraftFromForm();
-    const draftTables = getDatasourceSchemaDraftTables(rawTables, tableSettings);
-    const tables = {};
-    for (const table of rawTables){
-        const draft = draftTables[table.name] || {};
-        tables[table.name] = {
-            selected: draft.selected !== false,
-            description: draft.description || "",
-            primary_key_prompt: draft.primary_key_prompt || "",
-            foreign_key_prompt: draft.foreign_key_prompt || "",
-            join_logic: draft.join_logic || ""
-        };
-    }
-    try {
-        state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema/tables`, {
-            method: "PUT",
-            body: JSON.stringify({
-                tables
-            })
-        });
-        setMessage("success", "Schema settings saved.");
-        state.datasourceSchemaSelectedObjectName = "";
-        state.datasourceSchemaDraftTables = null;
-        render();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
-}
-async function saveSchemaCacheTtl(event) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    try {
-        await api("/api/v1/admin/schema-cache", {
-            method: "PUT",
-            body: JSON.stringify({
-                ttl_seconds: Number(form.get("ttl_seconds"))
-            })
-        });
-        setMessage("success", "Schema cache TTL saved.");
-        await loadSchemaCache();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
-}
-async function invalidateSchemaCache() {
-    try {
-        await api("/api/v1/admin/schema-cache/invalidate", {
-            method: "POST"
-        });
-        setMessage("success", "Schema cache invalidated.");
-        await loadSchemaCache();
-    } catch (error) {
-        setMessage("error", error.message);
-        render();
-    }
-}
-async function loadCurrentSection() {
-    if (!state.token || state.mustChangePassword) return;
-    if (state.section === "overview") await loadOverview();
-    if (state.section === "widgets") await loadOverviewWidgetConfigs();
-    if (state.section === "data-audit") await loadDataAudit();
-    if (state.section === "prompts") await loadPrompts();
-    if (state.section === "schema-cache") await loadSchemaCache();
-    if (state.section === "business-logic") await loadBusinessLogicSuggestions();
-    if (state.section === "llm-config") await loadLlmConfig();
-    if (state.section === "governance-policy") await loadGovernancePolicy();
-    if (state.section === "datasources") await loadDatasources();
-    if (state.section === "license") await loadLicense();
-    if (state.section === "admin-audit") await loadAdminAudit();
-}
-async function loadOverview() {
-    state.overviewLoading = true;
-    if (state.section === "overview") {
-        render();
-    }
-    try {
-        const [overview, widgetConfig] = await Promise.all([
-            api("/api/v1/admin/overview"),
-            api("/api/v1/admin/overview/widgets")
-        ]);
-        state.overview = overview;
-        state.overviewWidgetConfigs = widgetConfig.items || [];
-        state.overviewWidgetDatasources = widgetConfig.datasources || [];
-    } finally{
-        state.overviewLoading = false;
-        if (state.section === "overview") {
-            render();
-        }
-    }
-}
-async function loadOverviewWidgetConfigs(shouldRender = true) {
-    const payload = await api("/api/v1/admin/overview/widgets");
-    state.overviewWidgetConfigs = payload.items || [];
-    state.overviewWidgetDatasources = payload.datasources || [];
-    if (state.selectedOverviewWidgetKey !== "__new__" && !state.overviewWidgetConfigs.some((widget)=>widget.widget_key === state.selectedOverviewWidgetKey)) {
-        state.selectedOverviewWidgetKey = state.overviewWidgetConfigs[0]?.widget_key || "";
-    }
-    if (shouldRender) {
-        render();
-    }
-}
-async function refreshOverview() {
-    if (state.overviewRefreshing || state.overviewLoading) return;
-    state.overviewRefreshing = true;
-    setMessage("success", "");
-    render();
-    try {
-        state.overview = await api("/api/v1/admin/overview");
-    } catch (error) {
-        setMessage("error", error.message);
-    } finally{
-        state.overviewRefreshing = false;
-        render();
-    }
-}
-async function loadDataAudit() {
-    state.auditSettings = await api("/api/v1/admin/audit/settings");
-    const params = new URLSearchParams();
-    if (state.dataAuditType) params.set("audit_type", state.dataAuditType);
-    if (state.dataAuditOutputClassification) {
-        params.set("output_classification", state.dataAuditOutputClassification);
-    }
-    if (state.dataAuditSqlContains.trim()) {
-        params.set("sql_contains", state.dataAuditSqlContains.trim());
-    }
-    const query = params.toString() ? `?${params.toString()}` : "";
-    const logs = await api(`/api/v1/admin/audit/data-queries${query}`);
-    state.dataAudit = logs.items || [];
-    render();
-}
-async function loadPrompts() {
-    const result = await api("/api/v1/admin/prompts");
-    state.prompts = result.items || [];
-    state.selectedPromptKey = state.selectedPromptKey || state.prompts[0]?.prompt_key || "";
-    render();
-}
-async function loadDatasources() {
-    const [datasources, datasourceTypes] = await Promise.all([
-        api("/api/v1/admin/datasources"),
-        api("/api/v1/admin/datasource-types")
-    ]);
-    state.datasources = datasources.items || [];
-    state.datasourceTypes = datasourceTypes.items || [];
-    if (!state.selectedDatasourceId || state.selectedDatasourceId === "new") {
-        state.selectedDatasourceId = state.datasources[0]?.id || null;
-    }
-    render();
-    void loadDatasourceSchema();
-}
-async function loadDatasourceSchema() {
-    const selected = getSelectedDatasource();
-    if (!selected) {
-        state.datasourceSchema = null;
-        state.datasourceSchemaSelectedObjectName = "";
-        state.datasourceSchemaDraftTables = null;
-        state.datasourceSchemaLoading = false;
-        state.datasourceSchemaError = "";
-        render();
-        return;
-    }
+  const selected = getSelectedDatasource();
+  if (!selected) return;
+  try {
     state.datasourceSchemaLoading = true;
     state.datasourceSchemaError = "";
     render();
-    try {
-        state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema`);
-        state.datasourceSchemaSelectedObjectName = "";
-        state.datasourceSchemaDraftTables = null;
-    } catch (error) {
-        state.datasourceSchema = null;
-        state.datasourceSchemaError = error.message;
-    } finally {
-        state.datasourceSchemaLoading = false;
-        render();
+    state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/introspect`, { method: "POST" });
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+    state.datasourceSchemaLoading = false;
+    setMessage("success", "Schema introspection completed.");
+    render();
+  } catch (error) {
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = error.message;
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function activateDatasource() {
+  const selected = getSelectedDatasource();
+  if (!selected) return;
+  try {
+    await api(`/api/v1/admin/datasources/${selected.id}/activate`, { method: "POST" });
+    setMessage("success", "Datasource activated.");
+    await loadDatasources();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+function syncDatasourceSchemaDraftFromForm() {
+  const form = document.querySelector("#datasource-schema-form");
+  const rawTables = state.datasourceSchema?.item?.raw_schema?.tables || [];
+  const tableSettings = state.datasourceSchema?.item?.table_settings?.tables || {};
+  if (!form || !rawTables.length) return;
+  const draftTables = getDatasourceSchemaDraftTables(rawTables, tableSettings);
+  form.querySelectorAll("[data-schema-object-enabled]").forEach((input) => {
+    const name = input.dataset.schemaObjectEnabled;
+    if (!name || !draftTables[name]) return;
+    draftTables[name].selected = input.checked;
+  });
+  const selectedName = state.datasourceSchemaSelectedObjectName;
+  const selectedSettings = selectedName ? draftTables[selectedName] : null;
+  if (!selectedSettings) return;
+  selectedSettings.description = form.querySelector("[data-schema-detail='description']")?.value || "";
+  selectedSettings.primary_key_prompt = form.querySelector("[data-schema-detail='primary_key_prompt']")?.value || "";
+  selectedSettings.foreign_key_prompt = form.querySelector("[data-schema-detail='foreign_key_prompt']")?.value || "";
+  selectedSettings.join_logic = form.querySelector("[data-schema-detail='join_logic']")?.value || "";
+}
+async function saveDatasourceSchema(event) {
+  event.preventDefault();
+  const selected = getSelectedDatasource();
+  if (!selected || !state.datasourceSchema?.item) return;
+  const rawTables = state.datasourceSchema.item.raw_schema.tables || [];
+  const tableSettings = state.datasourceSchema.item.table_settings?.tables || {};
+  syncDatasourceSchemaDraftFromForm();
+  const draftTables = getDatasourceSchemaDraftTables(rawTables, tableSettings);
+  const tables = {};
+  for (const table of rawTables) {
+    const draft = draftTables[table.name] || {};
+    tables[table.name] = {
+      selected: draft.selected !== false,
+      description: draft.description || "",
+      primary_key_prompt: draft.primary_key_prompt || "",
+      foreign_key_prompt: draft.foreign_key_prompt || "",
+      join_logic: draft.join_logic || ""
+    };
+  }
+  try {
+    state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema/tables`, {
+      method: "PUT",
+      body: JSON.stringify({ tables })
+    });
+    setMessage("success", "Schema settings saved.");
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function saveSchemaCacheTtl(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await api("/api/v1/admin/schema-cache", { method: "PUT", body: JSON.stringify({ ttl_seconds: Number(form.get("ttl_seconds")) }) });
+    setMessage("success", "Schema cache TTL saved.");
+    await loadSchemaCache();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function invalidateSchemaCache() {
+  try {
+    await api("/api/v1/admin/schema-cache/invalidate", { method: "POST" });
+    setMessage("success", "Schema cache invalidated.");
+    await loadSchemaCache();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function loadCurrentSection() {
+  if (!state.token || state.mustChangePassword) return;
+  if (!state.extensionsLoaded) {
+    await loadExtensions(false);
+  }
+  if (isExtensionSection(state.section)) {
+    render();
+    return;
+  }
+  if (state.section === "overview") await loadOverview();
+  if (state.section === "widgets") await loadOverviewWidgetConfigs();
+  if (state.section === "data-audit") await loadDataAudit();
+  if (state.section === "prompts") await loadPrompts();
+  if (state.section === "schema-cache") await loadSchemaCache();
+  if (state.section === "business-logic") await loadBusinessLogicSuggestions();
+  if (state.section === "llm-config") await loadLlmConfig();
+  if (state.section === "reasoning") await loadReasoningConfig();
+  if (state.section === "governance-policy") await loadGovernancePolicy();
+  if (state.section === "datasources") await loadDatasources();
+  if (state.section === "license") await loadLicense();
+  if (state.section === "admin-audit") await loadAdminAudit();
+}
+async function loadExtensions(shouldRender = true) {
+  const result = await api("/api/v1/admin/extensions");
+  state.extensionSections = (result.admin_sections || []).sort((left, right) => {
+    if (left.order !== right.order) return left.order - right.order;
+    return left.label.localeCompare(right.label);
+  });
+  state.extensionsLoaded = true;
+  if (isExtensionSection(state.section) && !getExtensionSection(state.section)) {
+    state.section = "overview";
+  }
+  if (shouldRender) {
+    render();
+  }
+}
+async function loadOverview() {
+  state.overviewLoading = true;
+  if (state.section === "overview") {
+    render();
+  }
+  try {
+    const [overview, widgetConfig] = await Promise.all([
+      api("/api/v1/admin/overview"),
+      api("/api/v1/admin/overview/widgets")
+    ]);
+    state.overview = overview;
+    state.overviewWidgetConfigs = widgetConfig.items || [];
+    state.overviewWidgetDatasources = widgetConfig.datasources || [];
+  } finally {
+    state.overviewLoading = false;
+    if (state.section === "overview") {
+      render();
     }
+  }
+}
+async function loadOverviewWidgetConfigs(shouldRender = true) {
+  const payload = await api("/api/v1/admin/overview/widgets");
+  state.overviewWidgetConfigs = payload.items || [];
+  state.overviewWidgetDatasources = payload.datasources || [];
+  if (state.selectedOverviewWidgetKey !== "__new__" && !state.overviewWidgetConfigs.some((widget) => widget.widget_key === state.selectedOverviewWidgetKey)) {
+    state.selectedOverviewWidgetKey = state.overviewWidgetConfigs[0]?.widget_key || "";
+  }
+  if (shouldRender) {
+    render();
+  }
+}
+async function refreshOverview() {
+  if (state.overviewRefreshing || state.overviewLoading) return;
+  state.overviewRefreshing = true;
+  setMessage("success", "");
+  render();
+  try {
+    state.overview = await api("/api/v1/admin/overview");
+  } catch (error) {
+    setMessage("error", error.message);
+  } finally {
+    state.overviewRefreshing = false;
+    render();
+  }
+}
+async function loadDataAudit() {
+  state.auditSettings = await api("/api/v1/admin/audit/settings");
+  const params = new URLSearchParams();
+  if (state.dataAuditType) params.set("audit_type", state.dataAuditType);
+  if (state.dataAuditOutputClassification) {
+    params.set("output_classification", state.dataAuditOutputClassification);
+  }
+  if (state.dataAuditSqlContains.trim()) {
+    params.set("sql_contains", state.dataAuditSqlContains.trim());
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
+  const logs = await api(`/api/v1/admin/audit/data-queries${query}`);
+  state.dataAudit = logs.items || [];
+  render();
+}
+async function loadPrompts() {
+  const result = await api("/api/v1/admin/prompts");
+  state.prompts = result.items || [];
+  state.selectedPromptKey = state.selectedPromptKey || state.prompts[0]?.prompt_key || "";
+  render();
+}
+async function loadDatasources() {
+  const [datasources, datasourceTypes] = await Promise.all([
+    api("/api/v1/admin/datasources"),
+    api("/api/v1/admin/datasource-types")
+  ]);
+  state.datasources = datasources.items || [];
+  state.datasourceTypes = datasourceTypes.items || [];
+  if (!state.selectedDatasourceId || state.selectedDatasourceId === "new") {
+    state.selectedDatasourceId = state.datasources[0]?.id || null;
+  }
+  render();
+  void loadDatasourceSchema();
+}
+async function loadDatasourceSchema() {
+  const selected = getSelectedDatasource();
+  if (!selected) {
+    state.datasourceSchema = null;
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = "";
+    render();
+    return;
+  }
+  state.datasourceSchemaLoading = true;
+  state.datasourceSchemaError = "";
+  render();
+  try {
+    state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema`);
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+  } catch (error) {
+    state.datasourceSchema = null;
+    state.datasourceSchemaError = error.message;
+  } finally {
+    state.datasourceSchemaLoading = false;
+    render();
+  }
 }
 async function loadSchemaCache() {
-    state.schemaCache = await api("/api/v1/admin/schema-cache");
-    render();
+  state.schemaCache = await api("/api/v1/admin/schema-cache");
+  render();
 }
 async function loadBusinessLogicSuggestions() {
-    const result = await api("/api/v1/admin/business-logic-suggestions");
-    state.businessLogic = result.items || [];
-    state.businessLogicDatasource = result.datasource || null;
-    render();
+  const result = await api("/api/v1/admin/business-logic-suggestions");
+  state.businessLogic = result.items || [];
+  state.businessLogicDatasource = result.datasource || null;
+  render();
 }
 async function loadLlmConfig() {
-    const result = await api("/api/v1/admin/llm-config");
-    state.llmConfig = result.item || null;
-    render();
+  const result = await api("/api/v1/admin/llm-config");
+  state.llmConfig = result.item || null;
+  render();
+}
+async function loadReasoningConfig() {
+  const result = await api("/api/v1/admin/reasoning-config");
+  state.reasoningConfig = result.item || null;
+  render();
 }
 async function loadGovernancePolicy() {
-    const result = await api("/api/v1/admin/governance-policy");
-    state.governancePolicy = result.item || null;
-    render();
+  const result = await api("/api/v1/admin/governance-policy");
+  state.governancePolicy = result.item || null;
+  render();
 }
 async function loadLicense() {
-    state.license = await api("/api/v1/admin/license");
-    render();
+  state.license = await api("/api/v1/admin/license");
+  render();
 }
 async function loadAdminAudit() {
-    const result = await api("/api/v1/admin/audit/admin-events");
-    state.adminAudit = result.items || [];
-    render();
+  const result = await api("/api/v1/admin/audit/admin-events");
+  state.adminAudit = result.items || [];
+  render();
 }
 async function bootstrap() {
+  render();
+  if (!state.token) return;
+  try {
+    const me = await api("/api/v1/admin/me");
+    state.username = me.username;
+    state.mustChangePassword = me.must_change_password;
+    localStorage.setItem("gaard_admin_must_change", String(state.mustChangePassword));
     render();
-    if (!state.token) return;
-    try {
-        const me = await api("/api/v1/admin/me");
-        state.username = me.username;
-        state.mustChangePassword = me.must_change_password;
-        localStorage.setItem("gaard_admin_must_change", String(state.mustChangePassword));
-        render();
-        await loadCurrentSection();
-    } catch (error) {
-        state.overviewLoading = false;
-        setMessage("error", error.message);
-        render();
-    }
+    await loadCurrentSection();
+  } catch (error) {
+    state.overviewLoading = false;
+    setMessage("error", error.message);
+    render();
+  }
 }
 void bootstrap();

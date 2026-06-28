@@ -1,4 +1,4 @@
-type Section =
+type BuiltInSection =
   | "overview"
   | "widgets"
   | "data-audit"
@@ -6,11 +6,38 @@ type Section =
   | "schema-cache"
   | "business-logic"
   | "llm-config"
+  | "reasoning"
   | "governance-policy"
   | "identity"
   | "datasources"
   | "license"
   | "admin-audit";
+
+type ExtensionSectionId = `extension:${string}:${string}`;
+type Section = BuiltInSection | ExtensionSectionId;
+type MenuGroupKey = "dashboards" | "governance" | "configuration" | "extensions";
+
+type MenuSection = {
+  key: Section;
+  label: string;
+};
+
+type MenuGroup = {
+  key: MenuGroupKey;
+  label: string;
+  sections: MenuSection[];
+  emptyLabel?: string;
+};
+
+type AdminExtensionSection = {
+  section_id: ExtensionSectionId;
+  extension_id: string;
+  section_key: string;
+  label: string;
+  description: string;
+  path: string;
+  order: number;
+};
 
 type PromptTemplate = {
   prompt_key: string;
@@ -98,6 +125,7 @@ type State = {
   username: string;
   mustChangePassword: boolean;
   mobileMenuOpen: boolean;
+  openMenuGroups: Partial<Record<MenuGroupKey, boolean>>;
   section: Section;
   error: string;
   success: string;
@@ -123,6 +151,7 @@ type State = {
   businessLogicDatasource: any | null;
   businessLogicEditorId: number | null;
   llmConfig: any | null;
+  reasoningConfig: any | null;
   governancePolicy: any | null;
   datasources: DatasourceConnector[];
   datasourceTypes: DatasourceType[];
@@ -133,31 +162,35 @@ type State = {
   datasourceSchemaSelectedObjectName: string;
   datasourceSchemaShowEnabledOnly: boolean;
   datasourceSchemaDraftTables: Record<string, any> | null;
+  extensionSections: AdminExtensionSection[];
+  extensionsLoaded: boolean;
   license: any | null;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
-const sections: Array<{ key: Section; label: string }> = [
-  { key: "overview", label: "Overview" },
-  { key: "widgets", label: "Widgets" },
-  { key: "data-audit", label: "Data audit" },
-  { key: "prompts", label: "Prompts" },
-  { key: "schema-cache", label: "Schema cache" },
-  { key: "business-logic", label: "Business logic suggestions" },
-  { key: "llm-config", label: "LLM configuration" },
-  { key: "governance-policy", label: "Governance policy" },
-  { key: "identity", label: "Identity connector" },
-  { key: "datasources", label: "Datasource connector" },
-  { key: "license", label: "License" },
-  { key: "admin-audit", label: "Admin audit" },
-];
+const builtInSectionLabels: Record<BuiltInSection, string> = {
+  overview: "Overview",
+  widgets: "Widgets",
+  "data-audit": "Data audit",
+  prompts: "Prompts",
+  "schema-cache": "Schema cache",
+  "business-logic": "Business logic suggestions",
+  "llm-config": "LLM",
+  reasoning: "Reasoning",
+  "governance-policy": "Governance policy",
+  identity: "Identities",
+  datasources: "Data sources",
+  license: "License",
+  "admin-audit": "Admin audit",
+};
 
 const state: State = {
   token: localStorage.getItem("gaard_admin_token"),
   username: localStorage.getItem("gaard_admin_username") || "",
   mustChangePassword: localStorage.getItem("gaard_admin_must_change") === "true",
   mobileMenuOpen: false,
+  openMenuGroups: {},
   section: "overview",
   error: "",
   success: "",
@@ -183,6 +216,7 @@ const state: State = {
   businessLogicDatasource: null,
   businessLogicEditorId: null,
   llmConfig: null,
+  reasoningConfig: null,
   governancePolicy: null,
   datasources: [],
   datasourceTypes: [],
@@ -193,6 +227,8 @@ const state: State = {
   datasourceSchemaSelectedObjectName: "",
   datasourceSchemaShowEnabledOnly: false,
   datasourceSchemaDraftTables: null,
+  extensionSections: [],
+  extensionsLoaded: false,
   license: null,
 };
 
@@ -217,6 +253,116 @@ const OVERVIEW_GRID_COLUMNS = 4;
 const OVERVIEW_MIN_GRID_SLOTS = 8;
 const ALLOWED_WIDGET_HTML_TAGS = new Set(["A", "B", "I", "UL", "LI"]);
 const DROPPED_WIDGET_HTML_TAGS = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE", "SVG", "MATH"]);
+
+function getMenuGroups(): MenuGroup[] {
+  return [
+    {
+      key: "dashboards",
+      label: "Dashboards",
+      sections: [
+        { key: "overview", label: builtInSectionLabels.overview },
+      ],
+    },
+    {
+      key: "governance",
+      label: "Governance",
+      sections: [
+        { key: "data-audit", label: builtInSectionLabels["data-audit"] },
+        { key: "business-logic", label: builtInSectionLabels["business-logic"] },
+        { key: "admin-audit", label: builtInSectionLabels["admin-audit"] },
+        { key: "license", label: builtInSectionLabels.license },
+      ],
+    },
+    {
+      key: "configuration",
+      label: "Configuration",
+      sections: [
+        { key: "llm-config", label: builtInSectionLabels["llm-config"] },
+        { key: "reasoning", label: builtInSectionLabels.reasoning },
+        { key: "datasources", label: builtInSectionLabels.datasources },
+        { key: "prompts", label: builtInSectionLabels.prompts },
+        { key: "widgets", label: builtInSectionLabels.widgets },
+        { key: "identity", label: builtInSectionLabels.identity },
+        { key: "governance-policy", label: builtInSectionLabels["governance-policy"] },
+      ],
+    },
+    {
+      key: "extensions",
+      label: "Extensions",
+      sections: state.extensionSections.map(section => ({
+        key: section.section_id,
+        label: section.label,
+      })),
+      emptyLabel: "No active extensions",
+    },
+  ];
+}
+
+function getSections(): MenuSection[] {
+  return getMenuGroups().flatMap(group => group.sections);
+}
+
+function getSectionLabel(section: Section): string {
+  const menuSection = getSections().find(item => item.key === section);
+  if (menuSection) return menuSection.label;
+  if (isExtensionSection(section)) return getExtensionSection(section)?.label || "Extension";
+  return builtInSectionLabels[section];
+}
+
+function isExtensionSection(section: Section): section is ExtensionSectionId {
+  return section.startsWith("extension:");
+}
+
+function getExtensionSection(section: Section): AdminExtensionSection | null {
+  if (!isExtensionSection(section)) return null;
+  return state.extensionSections.find(item => item.section_id === section) || null;
+}
+
+function isMenuGroupActive(group: MenuGroup): boolean {
+  return group.sections.some(section => section.key === state.section);
+}
+
+function renderNavigation(): string {
+  return getMenuGroups().map(group => renderMenuGroup(group)).join("");
+}
+
+function renderMenuGroup(group: MenuGroup): string {
+  const isOpen = Boolean(state.openMenuGroups[group.key]);
+  const isActive = isMenuGroupActive(group);
+  const submenu = isOpen ? renderSubmenu(group) : "";
+
+  return `
+    <div class="nav-group${isActive ? " active" : ""}">
+      <button
+        type="button"
+        class="nav-group-button${isActive ? " active" : ""}"
+        data-menu-group="${escapeHtml(group.key)}"
+        aria-expanded="${isOpen}"
+      >
+        <span>${escapeHtml(group.label)}</span>
+        <span class="nav-chevron" aria-hidden="true">${isOpen ? "▾" : "▸"}</span>
+      </button>
+      ${submenu}
+    </div>`;
+}
+
+function renderSubmenu(group: MenuGroup): string {
+  if (group.sections.length === 0) {
+    return `<div class="submenu"><div class="nav-empty">${escapeHtml(group.emptyLabel || "No items")}</div></div>`;
+  }
+
+  return `
+    <div class="submenu">
+      ${group.sections.map(section => `
+        <button
+          type="button"
+          data-section="${escapeHtml(section.key)}"
+          class="submenu-button${section.key === state.section ? " active" : ""}"
+        >
+          ${escapeHtml(section.label)}
+        </button>`).join("")}
+    </div>`;
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -384,6 +530,9 @@ function logout(): void {
   state.overviewLoading = false;
   state.overviewRefreshing = false;
   state.overviewEditorWidgetKey = null;
+  state.openMenuGroups = {};
+  state.extensionSections = [];
+  state.extensionsLoaded = false;
   localStorage.removeItem("gaard_admin_token");
   localStorage.removeItem("gaard_admin_username");
   localStorage.removeItem("gaard_admin_must_change");
@@ -476,7 +625,7 @@ function renderPasswordChange(): void {
 }
 
 function renderShell(): void {
-  const active = sections.find(section => section.key === state.section);
+  const activeLabel = getSectionLabel(state.section);
   app!.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
@@ -487,13 +636,13 @@ function renderShell(): void {
           </button>
         </div>
         <nav class="nav" id="admin-navigation">
-          ${sections.map(section => `<button data-section="${section.key}" class="${section.key === state.section ? "active" : ""}">${section.label}</button>`).join("")}
+          ${renderNavigation()}
         </nav>
         <div class="sidebar-footer"><span>${escapeHtml(state.username)}</span><button id="logout-button">Sign out</button></div>
       </aside>
       <main class="main">
         <header class="topbar">
-          <h1>${escapeHtml(active?.label || "Admin")}</h1>
+          <h1>${escapeHtml(activeLabel || "Admin")}</h1>
           <div class="topbar-actions"><span>${escapeHtml(state.username)}</span><button id="top-logout-button">Sign out</button></div>
         </header>
         <section class="content">
@@ -503,6 +652,15 @@ function renderShell(): void {
       </main>
     </div>
     ${renderOverviewWidgetModal()}`;
+
+  document.querySelectorAll<HTMLButtonElement>("[data-menu-group]").forEach(button => {
+    button.addEventListener("click", () => {
+      const groupKey = button.dataset.menuGroup as MenuGroupKey | undefined;
+      if (!groupKey) return;
+      state.openMenuGroups[groupKey] = !state.openMenuGroups[groupKey];
+      render();
+    });
+  });
 
   document.querySelectorAll<HTMLButtonElement>("[data-section]").forEach(button => {
     button.addEventListener("click", async () => {
@@ -522,6 +680,7 @@ function renderShell(): void {
   document.querySelector("#logout-button")?.addEventListener("click", logout);
   document.querySelector("#top-logout-button")?.addEventListener("click", logout);
   attachSectionHandlers();
+  resizeExtensionFrames();
 }
 
 function renderSection(): string {
@@ -532,13 +691,75 @@ function renderSection(): string {
   if (state.section === "schema-cache") return renderSchemaCache();
   if (state.section === "business-logic") return renderBusinessLogicSuggestions();
   if (state.section === "llm-config") return renderLlmConfig();
+  if (state.section === "reasoning") return renderReasoningConfig();
   if (state.section === "governance-policy") return renderGovernancePolicy();
   if (state.section === "identity") return renderStub("Identity connector", "FreeIPA connector configuration is planned.");
   if (state.section === "datasources") return renderDatasources();
   if (state.section === "license") return renderLicense();
   if (state.section === "admin-audit") return renderAdminAudit();
+  if (isExtensionSection(state.section)) return renderExtensionSection();
   return "";
 }
+
+function renderExtensionSection(): string {
+  const section = getExtensionSection(state.section);
+
+  if (!section) {
+    return renderStub(
+      "Extension unavailable",
+      "This extension section is no longer available. Reinstall or enable its plugin, then refresh the admin console.",
+    );
+  }
+
+  return `
+    <iframe
+      class="extension-frame"
+      data-extension-frame="${escapeHtml(section.section_id)}"
+      title="${escapeHtml(section.label)}"
+      src="${escapeHtml(section.path)}"
+      loading="lazy"
+    ></iframe>`;
+}
+
+function resizeExtensionFrames(): void {
+  document.querySelectorAll<HTMLIFrameElement>(".extension-frame").forEach(frame => {
+    frame.addEventListener("load", () => resizeExtensionFrame(frame), { once: true });
+    resizeExtensionFrame(frame);
+  });
+}
+
+function resizeExtensionFrame(frame: HTMLIFrameElement): void {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    const height = Math.max(
+      doc.documentElement?.scrollHeight || 0,
+      doc.body?.scrollHeight || 0,
+      doc.documentElement?.offsetHeight || 0,
+      doc.body?.offsetHeight || 0,
+    );
+    if (height > 0) {
+      frame.style.height = `${Math.ceil(height)}px`;
+    }
+  } catch {
+    // Extension pages are expected to be same-origin, but ignore if a browser blocks access.
+  }
+}
+
+window.addEventListener("message", event => {
+  if (event.origin !== window.location.origin) return;
+  const data = event.data as { type?: string; height?: number } | null;
+  if (!data || data.type !== "gaard:extension:height") return;
+
+  const height = Number(data.height);
+  if (!Number.isFinite(height) || height <= 0) return;
+
+  const frame = Array.from(document.querySelectorAll<HTMLIFrameElement>(".extension-frame"))
+    .find(item => item.contentWindow === event.source);
+  if (!frame) return;
+
+  frame.style.height = `${Math.ceil(height)}px`;
+});
 
 function renderOverview(): string {
   const overview = state.overview;
@@ -1418,9 +1639,31 @@ function renderLlmConfig(): string {
           <label>Provider<input name="provider" value="${escapeHtml(config.provider || "openai-compatible")}" /></label>
           <label>Base URL<input name="base_url" value="${escapeHtml(config.base_url || "")}" /></label>
           <label>API key <span class="muted">${apiKeyStatus}</span><input name="api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>
-          <label class="checkbox-row"><input name="clear_api_key" type="checkbox" /> Clear API key</label>
           <label>Model<input name="model" value="${escapeHtml(config.model || "")}" /></label>
           <label>LLM timeout seconds<input name="timeout_seconds" type="number" min="1" max="600" value="${escapeHtml(config.timeout_seconds || 60)}" /></label>
+          <label>Extra body JSON<textarea name="extra_body">${escapeHtml(config.extra_body_json || "{}")}</textarea></label>
+          <div class="form-actions">
+            <button
+              aria-label="Test LLM configuration"
+              class="icon-button"
+              id="test-llm-config"
+              title="Test LLM configuration"
+              type="button"
+            >🧪</button>
+            <button class="primary" type="submit">Save LLM configuration</button>
+          </div>
+        </form>
+      </div>
+    </section>`;
+}
+
+function renderReasoningConfig(): string {
+  const config = state.reasoningConfig || {};
+  return `
+    <section class="panel">
+      <div class="panel-header"><h2>Reasoning</h2></div>
+      <div class="panel-body">
+        <form id="reasoning-config-form" class="form-grid">
           <div class="subgrid">
             <label>Intent mode<select name="intent_classification_mode">${renderModeOptions(config.intent_classification_mode || "auto", ["auto", "llm"])}</select></label>
             <label>SQL generation<select name="sql_generation_mode">${renderModeOptions(config.sql_generation_mode || "llm", ["llm"])}</select></label>
@@ -1437,9 +1680,8 @@ function renderLlmConfig(): string {
             <label>Query max rows<input name="query_max_rows" type="number" min="1" max="100000" value="${escapeHtml(config.query_max_rows || 100)}" /></label>
             <label>Query timeout seconds<input name="query_timeout_seconds" type="number" min="1" max="3600" value="${escapeHtml(config.query_timeout_seconds || 30)}" /></label>
           </div>
-          <label>Extra body JSON<textarea name="extra_body">${escapeHtml(config.extra_body_json || "{}")}</textarea></label>
           <div class="mono muted">${escapeHtml(JSON.stringify(config.sources || {}, null, 2))}</div>
-          <div class="form-actions"><button class="primary" type="submit">Save LLM configuration</button></div>
+          <div class="form-actions"><button class="primary" type="submit">Save reasoning configuration</button></div>
         </form>
       </div>
     </section>`;
@@ -1621,6 +1863,8 @@ function attachSectionHandlers(): void {
   document.querySelector<HTMLFormElement>("#prompt-form")?.addEventListener("submit", savePrompt);
   document.querySelector<HTMLFormElement>("#schema-cache-form")?.addEventListener("submit", saveSchemaCacheTtl);
   document.querySelector<HTMLFormElement>("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
+  document.querySelector<HTMLButtonElement>("#test-llm-config")?.addEventListener("click", testLlmConfig);
+  document.querySelector<HTMLFormElement>("#reasoning-config-form")?.addEventListener("submit", saveReasoningConfig);
   document.querySelector<HTMLFormElement>("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
   document.querySelector<HTMLFormElement>("#datasource-form")?.addEventListener("submit", saveDatasource);
   document.querySelector<HTMLSelectElement>("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
@@ -1958,23 +2202,64 @@ async function deleteBusinessLogicSuggestion(event: Event): Promise<void> {
 
 async function saveLlmConfig(event: Event): Promise<void> {
   event.preventDefault();
+
+  try {
+    const result = await api<any>("/api/v1/admin/llm-config", {
+      method: "PUT",
+      body: JSON.stringify(getLlmConfigPayload()),
+    });
+    state.llmConfig = result.item;
+    setMessage("success", "LLM configuration saved.");
+    render();
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+    render();
+  }
+}
+
+async function testLlmConfig(): Promise<void> {
+  try {
+    setMessage("success", "Testing LLM configuration...");
+    const result = await api<any>("/api/v1/admin/llm-config/test", {
+      method: "POST",
+      body: JSON.stringify(getLlmConfigPayload()),
+    });
+    setMessage("success", result.item?.model ? `OK — model: ${result.item.model}.` : "OK.");
+    render();
+  } catch (error) {
+    setMessage("error", (error as Error).message);
+    render();
+  }
+}
+
+function getLlmConfigPayload(): Record<string, unknown> {
+  const formElement = document.querySelector<HTMLFormElement>("#llm-config-form");
+  if (!formElement) throw new Error("LLM configuration form is not available.");
+  const form = new FormData(formElement);
+  const extraBody = JSON.parse(String(form.get("extra_body") || "{}"));
+  if (extraBody === null || Array.isArray(extraBody) || typeof extraBody !== "object") {
+    throw new Error("Extra body JSON must be an object.");
+  }
+
+  return {
+    provider: form.get("provider"),
+    base_url: form.get("base_url"),
+    api_key: form.get("api_key"),
+    clear_api_key: false,
+    model: form.get("model"),
+    timeout_seconds: Number(form.get("timeout_seconds") || 60),
+    extra_body: extraBody,
+  };
+}
+
+async function saveReasoningConfig(event: Event): Promise<void> {
+  event.preventDefault();
   const form = new FormData(event.currentTarget as HTMLFormElement);
 
   try {
-    const extraBody = JSON.parse(String(form.get("extra_body") || "{}"));
-    if (extraBody === null || Array.isArray(extraBody) || typeof extraBody !== "object") {
-      throw new Error("Extra body JSON must be an object.");
-    }
-
-    const result = await api<any>("/api/v1/admin/llm-config", {
+    const result = await api<any>("/api/v1/admin/reasoning-config", {
       method: "PUT",
       body: JSON.stringify({
-        provider: form.get("provider"),
-        base_url: form.get("base_url"),
-        api_key: form.get("api_key"),
-        clear_api_key: form.get("clear_api_key") === "on",
-        model: form.get("model"),
-        timeout_seconds: Number(form.get("timeout_seconds") || 60),
         intent_classification_mode: form.get("intent_classification_mode"),
         sql_generation_mode: form.get("sql_generation_mode"),
         result_interpretation_mode: form.get("result_interpretation_mode"),
@@ -1983,11 +2268,10 @@ async function saveLlmConfig(event: Event): Promise<void> {
         investigation_ambiguity_mode: form.get("investigation_ambiguity_mode"),
         query_max_rows: Number(form.get("query_max_rows") || 100),
         query_timeout_seconds: Number(form.get("query_timeout_seconds") || 30),
-        extra_body: extraBody,
       }),
     });
-    state.llmConfig = result.item;
-    setMessage("success", "LLM configuration saved.");
+    state.reasoningConfig = result.item;
+    setMessage("success", "Reasoning configuration saved.");
     render();
   } catch (error) {
     setMessage("error", (error as Error).message);
@@ -2248,6 +2532,13 @@ async function invalidateSchemaCache(): Promise<void> {
 
 async function loadCurrentSection(): Promise<void> {
   if (!state.token || state.mustChangePassword) return;
+  if (!state.extensionsLoaded) {
+    await loadExtensions(false);
+  }
+  if (isExtensionSection(state.section)) {
+    render();
+    return;
+  }
   if (state.section === "overview") await loadOverview();
   if (state.section === "widgets") await loadOverviewWidgetConfigs();
   if (state.section === "data-audit") await loadDataAudit();
@@ -2255,10 +2546,28 @@ async function loadCurrentSection(): Promise<void> {
   if (state.section === "schema-cache") await loadSchemaCache();
   if (state.section === "business-logic") await loadBusinessLogicSuggestions();
   if (state.section === "llm-config") await loadLlmConfig();
+  if (state.section === "reasoning") await loadReasoningConfig();
   if (state.section === "governance-policy") await loadGovernancePolicy();
   if (state.section === "datasources") await loadDatasources();
   if (state.section === "license") await loadLicense();
   if (state.section === "admin-audit") await loadAdminAudit();
+}
+
+async function loadExtensions(shouldRender = true): Promise<void> {
+  const result = await api<{ admin_sections: AdminExtensionSection[] }>("/api/v1/admin/extensions");
+  state.extensionSections = (result.admin_sections || []).sort((left, right) => {
+    if (left.order !== right.order) return left.order - right.order;
+    return left.label.localeCompare(right.label);
+  });
+  state.extensionsLoaded = true;
+
+  if (isExtensionSection(state.section) && !getExtensionSection(state.section)) {
+    state.section = "overview";
+  }
+
+  if (shouldRender) {
+    render();
+  }
 }
 
 async function loadOverview(): Promise<void> {
@@ -2398,6 +2707,12 @@ async function loadBusinessLogicSuggestions(): Promise<void> {
 async function loadLlmConfig(): Promise<void> {
   const result = await api<any>("/api/v1/admin/llm-config");
   state.llmConfig = result.item || null;
+  render();
+}
+
+async function loadReasoningConfig(): Promise<void> {
+  const result = await api<any>("/api/v1/admin/reasoning-config");
+  state.reasoningConfig = result.item || null;
   render();
 }
 

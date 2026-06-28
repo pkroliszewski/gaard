@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from gaard_plugin_api import ExtensionRecord
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -88,6 +89,7 @@ from gaard_api.admin.services import (
     set_setting,
     set_active_datasource_connector,
     test_datasource_connection,
+    test_llm_runtime_config,
     update_business_logic_suggestion_content,
     update_schema_table_settings,
     validate_datasource_url,
@@ -96,7 +98,7 @@ from gaard_api.admin.services import (
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
-from gaard_api.extensions import get_connector_registry
+from gaard_api.extensions import get_api_registry, get_connector_registry, get_extension_manager
 
 router = APIRouter()
 
@@ -176,6 +178,17 @@ class LlmConfigRequest(BaseModel):
         ge=1,
         le=3_600,
     )
+
+
+class ReasoningConfigRequest(BaseModel):
+    intent_classification_mode: str = Field(pattern=r"^(auto|llm)$")
+    sql_generation_mode: str = Field(pattern=r"^llm$")
+    result_interpretation_mode: str = Field(pattern=r"^llm$")
+    output_classification_mode: str = Field(pattern=r"^(auto|llm)$")
+    investigation_mode: str = Field(pattern=r"^llm$")
+    investigation_ambiguity_mode: str = Field(pattern=r"^(clarify|safe_aggregate)$")
+    query_max_rows: int = Field(ge=1, le=100_000)
+    query_timeout_seconds: int = Field(ge=1, le=3_600)
 
 
 class GovernancePolicyRequest(BaseModel):
@@ -304,6 +317,21 @@ def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
     }
 
 
+def serialize_extension_record(record: ExtensionRecord) -> dict[str, Any]:
+    manifest = record.manifest
+    return {
+        "entry_point_name": record.entry_point_name,
+        "id": manifest.id if manifest else None,
+        "version": manifest.version if manifest else None,
+        "extension_api_version": manifest.extension_api_version if manifest else None,
+        "status": record.status.value,
+        "error": record.error,
+        "requires": dict(manifest.requires) if manifest else {},
+        "contributions": sorted(manifest.contributions) if manifest else [],
+        "active_capabilities": sorted(record.active_capabilities),
+    }
+
+
 def serialize_llm_config(session: Session) -> dict[str, Any]:
     llm_config = get_llm_runtime_config(session)
     query_config = get_query_runtime_config(session)
@@ -327,6 +355,35 @@ def serialize_llm_config(session: Session) -> dict[str, Any]:
         "query_max_rows": query_config.query_max_rows,
         "query_timeout_seconds": query_config.query_timeout_seconds,
         "sources": get_llm_config_sources(session),
+    }
+
+
+def serialize_reasoning_config(session: Session) -> dict[str, Any]:
+    query_config = get_query_runtime_config(session)
+    sources = get_llm_config_sources(session)
+
+    return {
+        "intent_classification_mode": query_config.intent_classification_mode,
+        "sql_generation_mode": query_config.sql_generation_mode,
+        "result_interpretation_mode": query_config.result_interpretation_mode,
+        "output_classification_mode": query_config.output_classification_mode,
+        "investigation_mode": query_config.investigation_mode,
+        "investigation_ambiguity_mode": query_config.investigation_ambiguity_mode,
+        "query_max_rows": query_config.query_max_rows,
+        "query_timeout_seconds": query_config.query_timeout_seconds,
+        "sources": {
+            field: sources[field]
+            for field in (
+                "intent_classification_mode",
+                "sql_generation_mode",
+                "result_interpretation_mode",
+                "output_classification_mode",
+                "investigation_mode",
+                "investigation_ambiguity_mode",
+                "query_max_rows",
+                "query_timeout_seconds",
+            )
+        },
     }
 
 
@@ -1518,6 +1575,23 @@ def get_datasource_types(
     }
 
 
+@router.get("/extensions")
+def get_extensions(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "items": [
+            serialize_extension_record(record)
+            for record in get_extension_manager().records
+        ],
+        "admin_sections": [
+            section.serialize()
+            for section in get_api_registry().list_admin_sections()
+        ],
+        "viewer": user.username,
+    }
+
+
 @router.post("/datasources")
 def create_datasource(
     request: DatasourceConnectorRequest,
@@ -2052,6 +2126,75 @@ def update_llm_config(
     session.commit()
 
     return {"item": serialize_llm_config(session)}
+
+
+@router.post("/llm-config/test")
+def test_llm_config(
+    request: LlmConfigRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return {
+            "item": test_llm_runtime_config(
+                session,
+                provider=request.provider,
+                base_url=request.base_url,
+                api_key=request.api_key,
+                clear_api_key=request.clear_api_key,
+                model=request.model,
+                timeout_seconds=request.timeout_seconds,
+                extra_body=request.extra_body,
+            ),
+            "viewer": user.username,
+        }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/reasoning-config")
+def get_reasoning_config(
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return {
+        "item": serialize_reasoning_config(session),
+        "viewer": user.username,
+    }
+
+
+@router.put("/reasoning-config")
+def update_reasoning_config(
+    request: ReasoningConfigRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    set_query_runtime_config(
+        session=session,
+        intent_classification_mode=request.intent_classification_mode,
+        sql_generation_mode=request.sql_generation_mode,
+        result_interpretation_mode=request.result_interpretation_mode,
+        output_classification_mode=request.output_classification_mode,
+        investigation_mode=request.investigation_mode,
+        investigation_ambiguity_mode=request.investigation_ambiguity_mode,
+        query_max_rows=request.query_max_rows,
+        query_timeout_seconds=request.query_timeout_seconds,
+        actor=user.username,
+    )
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="reasoning_config.update",
+        resource_type="admin_setting",
+        resource_id="reasoning_config",
+        details=request.model_dump(mode="json"),
+    )
+    session.commit()
+
+    return {"item": serialize_reasoning_config(session)}
 
 
 @router.get("/governance-policy")

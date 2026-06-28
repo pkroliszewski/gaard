@@ -818,6 +818,104 @@ def set_llm_runtime_config(
     return get_llm_runtime_config(session)
 
 
+def build_llm_runtime_config(
+    session: Session,
+    *,
+    provider: str,
+    base_url: str,
+    api_key: str | None,
+    clear_api_key: bool,
+    model: str,
+    timeout_seconds: int | None,
+    extra_body: dict[str, Any],
+) -> LlmRuntimeConfig:
+    if provider != "openai-compatible":
+        raise ValueError("Only openai-compatible LLM provider is supported.")
+
+    current_config = get_llm_runtime_config(session)
+    normalized_base_url = str(base_url or "").strip()
+    normalized_model = str(model or "").strip()
+    if not normalized_base_url:
+        raise ValueError("LLM Base URL is required.")
+    if not normalized_model:
+        raise ValueError("LLM model is required.")
+    if timeout_seconds is not None and timeout_seconds < 1:
+        raise ValueError("LLM timeout seconds must be greater than 0.")
+    if not isinstance(extra_body, dict):
+        raise ValueError("LLM Extra body JSON must be an object.")
+
+    next_api_key = current_config.api_key
+    if clear_api_key:
+        next_api_key = "change-me"
+    elif api_key is not None and api_key.strip():
+        next_api_key = api_key.strip()
+
+    return LlmRuntimeConfig(
+        provider=provider,
+        base_url=normalized_base_url,
+        api_key=next_api_key,
+        model=normalized_model,
+        timeout_seconds=timeout_seconds or current_config.timeout_seconds,
+        extra_body=extra_body,
+    )
+
+
+def test_llm_runtime_config(
+    session: Session,
+    *,
+    provider: str,
+    base_url: str,
+    api_key: str | None,
+    clear_api_key: bool,
+    model: str,
+    timeout_seconds: int | None,
+    extra_body: dict[str, Any],
+) -> dict[str, Any]:
+    config = build_llm_runtime_config(
+        session,
+        provider=provider,
+        base_url=base_url,
+        api_key=api_key,
+        clear_api_key=clear_api_key,
+        model=model,
+        timeout_seconds=timeout_seconds,
+        extra_body=extra_body,
+    )
+    if not config.api_key or config.api_key == "change-me":
+        raise ValueError("LLM API key is required for the connection test.")
+
+    client = OpenAICompatibleClient(
+        base_url=config.base_url,
+        api_key=config.api_key,
+        timeout_seconds=config.timeout_seconds,
+    )
+
+    try:
+        response = client.create_chat_completion(
+            ChatCompletionRequest(
+                model=config.model,
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content="GAARD LLM connection test. Reply with OK.",
+                    )
+                ],
+                temperature=0,
+                extra_body=config.extra_body,
+            )
+        )
+    except LlmProviderError as exc:
+        raise ValueError(str(exc)) from exc
+
+    if not response.content.strip():
+        raise ValueError("LLM provider returned an empty response.")
+
+    return {
+        "ok": True,
+        "model": response.model or config.model,
+    }
+
+
 def get_data_query_audit_retention_days(session: Session) -> int:
     value = get_setting(
         session,

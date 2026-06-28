@@ -11,14 +11,15 @@ and activates the contributions supported by the current host.
 
 ## Current scope
 
-The extension runtime and datasource connector contributions are implemented
-today. The public example is located at:
+The extension runtime, datasource connector contributions, and API/Admin UI
+host contributions are implemented today. The public connector example is
+located at:
 
 ```text
 examples/extensions/gaard-example-custom-connector/
 ```
 
-The `core`, `llm`, `api`, and `client` contribution areas are reserved for the
+The `core`, `llm`, and `client` contribution areas are reserved for the
 extension platform but are **not activated by the current GAARD host yet**. Do
 not rely on them as a public integration contract until their registries and
 lifecycle hooks are implemented and documented here.
@@ -26,9 +27,9 @@ lifecycle hooks are implemented and documented here.
 | Contribution | Status | Current integration |
 | --- | --- | --- |
 | `connectors` | Implemented | Adds datasource types to the Admin datasource page and query runtime. |
+| `api` | Implemented | Adds namespaced FastAPI routers, static Admin assets, and Admin menu sections. |
 | `core` | Reserved | No public registry or activation hook yet. |
 | `llm` | Reserved | No public provider registry or activation hook yet. |
-| `api` | Reserved | No router or Admin-menu extension hook yet. |
 | `client` | Reserved | No custom navigation or frontend-module extension hook yet. |
 
 ## How discovery and activation work
@@ -41,9 +42,17 @@ lifecycle hooks are implemented and documented here.
    - contribution import targets.
 4. The API creates its built-in `ConnectorRegistry` and activates the
    `connectors` contribution of every compatible extension.
-5. The Admin API exposes all active connector definitions at
+5. The API creates an `ApiRegistry` and activates the `api` contribution of
+   every compatible extension. API routes are mounted below
+   `/api/v1/extensions/<extension-id>/...`; Admin pages and assets are mounted
+   below `/admin/extensions/<extension-id>/...`.
+6. The Admin API exposes all active connector definitions at
    `GET /api/v1/admin/datasource-types`.
-6. The Admin UI loads that endpoint when the **Datasource connector** section
+7. The Admin API exposes extension diagnostics and Admin menu declarations at
+   `GET /api/v1/admin/extensions`.
+8. The Admin UI loads that endpoint after sign-in and renders extension menu
+   sections generically.
+9. The Admin UI loads datasource types when the **Datasource connector** section
    opens. It renders the connector label, description, supported SQL dialects,
    and URL guidance dynamically.
 
@@ -194,15 +203,67 @@ editing instead of silently changing it to a built-in connector.
 
 ### Menu extensions
 
-The Admin menu itself is not extensible yet. In particular, an extension cannot
-currently add an arbitrary Admin navigation item, FastAPI router, or frontend
-module. The existing datasource page is generic and obtains connector choices
-from the backend registry.
+An extension can add an Admin navigation item through the `api` contribution.
+The contribution receives an `ExtensionContext`; its `registry` is a
+`gaard_api.api_registry.ApiRegistry`.
 
-Future API and client extension points will document their menu identifier,
-route namespace, frontend asset lifecycle, authorization boundary, and config
-schema here before they are supported. Until then, use the generic datasource
-integration rather than undocumented imports or monkey-patching.
+```python
+from fastapi import APIRouter
+from gaard_api.api_registry import ApiRegistry
+from gaard_plugin_api import ExtensionContext
+
+
+router = APIRouter()
+
+
+@router.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def register_api(context: ExtensionContext) -> None:
+    if not isinstance(context.registry, ApiRegistry):
+        raise RuntimeError("This contribution requires ApiRegistry")
+
+    context.registry.register_router(
+        extension_id=context.extension_id,
+        router=router,
+    )
+    context.registry.register_admin_page(
+        extension_id=context.extension_id,
+        section_key="extract",
+        label="Extract",
+        html_path="/path/to/extension/admin/index.html",
+        description="Private structured extraction workflow.",
+    )
+```
+
+The router above is mounted at:
+
+```text
+/api/v1/extensions/<extension-id>/health
+```
+
+Extension routers registered through `ApiRegistry.register_router()` require
+the standard GAARD Admin bearer token by default. Use `require_admin=False`
+only for deliberately public endpoints such as a minimal health probe.
+
+The Admin page above is mounted at:
+
+```text
+/admin/extensions/<extension-id>/extract
+```
+
+The public Admin UI obtains menu items from
+`GET /api/v1/admin/extensions`, places them under the **Extensions** menu
+group, and renders each extension page in a same-origin frame. The extension
+page is trusted installed code, but it must still call GAARD APIs through
+documented endpoints and include the standard Admin bearer token.
+
+Admin paths must stay below `/admin/extensions/<extension-id>/...`. API routes
+must stay below `/api/v1/extensions/<extension-id>/...`. This prevents route
+collisions between GAARD core endpoints and independently installed
+extensions.
 
 ## Install an extension
 

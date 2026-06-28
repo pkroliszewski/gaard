@@ -338,7 +338,7 @@ label {
 
 .nav {
   display: grid;
-  gap: 4px;
+  gap: 8px;
 }
 
 .nav button {
@@ -351,10 +351,60 @@ label {
   padding: 0 10px;
 }
 
-.nav button.active,
 .nav button:hover {
   background: rgba(255, 255, 255, 0.1);
   color: white;
+}
+
+.nav-group {
+  display: grid;
+  gap: 4px;
+}
+
+.nav-group-button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-radius: 8px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.nav-group-button.active,
+.nav-group-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+}
+
+.nav-chevron {
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 12px;
+}
+
+.submenu {
+  display: grid;
+  gap: 3px;
+  padding-left: 10px;
+}
+
+.submenu-button {
+  min-height: 34px !important;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.68) !important;
+  font-weight: 650;
+}
+
+.submenu-button.active,
+.submenu-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white !important;
+}
+
+.nav-empty {
+  padding: 8px 10px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .sidebar-footer {
@@ -446,6 +496,16 @@ label {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+
+.extension-frame {
+  display: block;
+  width: 100%;
+  height: 1px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  overflow: hidden;
 }
 
 .panel-header {

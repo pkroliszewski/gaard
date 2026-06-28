@@ -107,11 +107,35 @@ def test_admin_lists_datasource_types_from_connector_registry(admin_client: Test
     assert definitions["mysql"]["config_schema"]["required"] == ["database_url"]
 
 
+def test_admin_lists_extensions_inventory(admin_client: TestClient) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    response = admin_client.get(
+        "/api/v1/admin/extensions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+    assert "admin_sections" in payload
+    assert payload["viewer"] == "admin"
+
+
 def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: TestClient) -> None:
     response = admin_client.get("/admin/assets/main.js")
 
     assert response.status_code == 200
     assert 'api("/api/v1/admin/datasource-types")' in response.text
+    assert 'api("/api/v1/admin/extensions")' in response.text
+    assert "data-menu-group" in response.text
+    assert "Dashboards" in response.text
+    assert "Governance" in response.text
+    assert "Configuration" in response.text
+    assert "Extensions" in response.text
+    assert "Data sources" in response.text
+    assert "extension-frame" in response.text
     assert "plugin unavailable" in response.text
     assert "renderDatabaseTypeOptions" not in response.text
 
@@ -470,6 +494,208 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
     assert runtime_config.base_url == "http://metadata-llm-3.test/v1"
     assert runtime_config.api_key == "change-me"
     assert runtime_config.model == "metadata-model-3"
+
+
+def test_llm_config_can_be_tested_without_saving(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    class FakeOpenAICompatibleClient:
+        init_kwargs: dict | None = None
+        requests = []
+
+        def __init__(self, **kwargs) -> None:
+            self.__class__.init_kwargs = kwargs
+
+        def create_chat_completion(self, request):
+            self.__class__.requests.append(request)
+            return ChatCompletionResponse(content="OK", model=request.model)
+
+    monkeypatch.setattr(
+        "gaard_api.admin.services.OpenAICompatibleClient",
+        FakeOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/llm-config/test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "https://llm.example/v1",
+            "api_key": "test-secret",
+            "model": "chat-test",
+            "timeout_seconds": 45,
+            "extra_body": {"temperature": 0},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"] == {"ok": True, "model": "chat-test"}
+    assert FakeOpenAICompatibleClient.init_kwargs == {
+        "base_url": "https://llm.example/v1",
+        "api_key": "test-secret",
+        "timeout_seconds": 45,
+    }
+    request = FakeOpenAICompatibleClient.requests[0]
+    assert request.model == "chat-test"
+    assert request.messages[0].role == "user"
+    assert "connection test" in request.messages[0].content
+    assert request.extra_body == {"temperature": 0}
+
+    runtime_config = get_llm_runtime_config_safe()
+    assert runtime_config.base_url == "https://api.openai.com/v1"
+    assert runtime_config.api_key == "change-me"
+    assert runtime_config.model == "gpt-4.1-mini"
+
+
+def test_llm_config_test_can_reuse_saved_api_key(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    update_response = admin_client.put(
+        "/api/v1/admin/llm-config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "https://saved-llm.example/v1",
+            "api_key": "saved-secret",
+            "model": "saved-model",
+            "timeout_seconds": 30,
+            "extra_body": {},
+        },
+    )
+    assert update_response.status_code == 200
+
+    class FakeOpenAICompatibleClient:
+        init_kwargs: dict | None = None
+
+        def __init__(self, **kwargs) -> None:
+            self.__class__.init_kwargs = kwargs
+
+        def create_chat_completion(self, request):
+            return ChatCompletionResponse(content="OK", model=request.model)
+
+    monkeypatch.setattr(
+        "gaard_api.admin.services.OpenAICompatibleClient",
+        FakeOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/llm-config/test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "https://llm.example/v1",
+            "api_key": "",
+            "model": "chat-test",
+            "timeout_seconds": 45,
+            "extra_body": {},
+        },
+    )
+
+    assert response.status_code == 200
+    assert FakeOpenAICompatibleClient.init_kwargs == {
+        "base_url": "https://llm.example/v1",
+        "api_key": "saved-secret",
+        "timeout_seconds": 45,
+    }
+
+
+def test_llm_config_test_requires_api_key(admin_client: TestClient) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    response = admin_client.post(
+        "/api/v1/admin/llm-config/test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "https://llm.example/v1",
+            "api_key": "",
+            "model": "chat-test",
+            "timeout_seconds": 45,
+            "extra_body": {},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "LLM API key is required" in response.json()["detail"]
+
+
+def test_reasoning_config_defaults_to_metadata_and_can_be_overridden(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    get_response = admin_client.get(
+        "/api/v1/admin/reasoning-config",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert get_response.status_code == 200
+    item = get_response.json()["item"]
+    assert item["intent_classification_mode"] == "auto"
+    assert item["sql_generation_mode"] == "mock"
+    assert item["result_interpretation_mode"] == "mock"
+    assert item["output_classification_mode"] == "auto"
+    assert item["investigation_mode"] == "llm"
+    assert item["investigation_ambiguity_mode"] == "clarify"
+    assert item["query_max_rows"] == 100
+    assert item["query_timeout_seconds"] == 30
+    assert set(item["sources"].values()) == {"metadata"}
+
+    update_response = admin_client.put(
+        "/api/v1/admin/reasoning-config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "intent_classification_mode": "llm",
+            "sql_generation_mode": "llm",
+            "result_interpretation_mode": "llm",
+            "output_classification_mode": "llm",
+            "investigation_mode": "llm",
+            "investigation_ambiguity_mode": "safe_aggregate",
+            "query_max_rows": 250,
+            "query_timeout_seconds": 20,
+        },
+    )
+
+    assert update_response.status_code == 200
+    updated_item = update_response.json()["item"]
+    assert updated_item["intent_classification_mode"] == "llm"
+    assert updated_item["sql_generation_mode"] == "llm"
+    assert updated_item["result_interpretation_mode"] == "llm"
+    assert updated_item["output_classification_mode"] == "llm"
+    assert updated_item["investigation_mode"] == "llm"
+    assert updated_item["investigation_ambiguity_mode"] == "safe_aggregate"
+    assert updated_item["query_max_rows"] == 250
+    assert updated_item["query_timeout_seconds"] == 20
+
+    with create_session() as session:
+        query_config = get_query_runtime_config(session)
+        assert query_config.intent_classification_mode == "llm"
+        assert query_config.investigation_ambiguity_mode == "safe_aggregate"
+        assert query_config.query_max_rows == 250
+        assert query_config.query_timeout_seconds == 20
+
+    audit_response = admin_client.get(
+        "/api/v1/admin/audit/admin-events",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert audit_response.status_code == 200
+    audit_item = next(
+        item
+        for item in audit_response.json()["items"]
+        if item["action"] == "reasoning_config.update"
+    )
+    assert audit_item["details"]["query_max_rows"] == 250
 
 
 def test_governance_policy_defaults_to_metadata_and_can_be_overridden(

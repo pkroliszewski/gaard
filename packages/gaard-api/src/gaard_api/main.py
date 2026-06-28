@@ -7,6 +7,7 @@ from gaard_api.api.v1.prompts import router as prompts_router
 from gaard_api.api.v1.query import router as query_router
 from gaard_api.api.v1.schema import router as schema_router
 from gaard_api.core.error_handlers import register_error_handlers
+from gaard_api.extensions import get_api_registry
 from importlib.resources import files
 
 app = FastAPI(
@@ -41,6 +42,8 @@ app.include_router(query_router, prefix="/api/v1", tags=["query"])
 app.include_router(schema_router, prefix="/api/v1", tags=["schema"])
 app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+
+get_api_registry().apply_to(app)
 
 
 @app.get("/admin", include_in_schema=False)
