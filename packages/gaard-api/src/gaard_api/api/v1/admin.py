@@ -164,14 +164,6 @@ class LlmConfigRequest(BaseModel):
         default=None,
         pattern=r"^(auto|llm)$",
     )
-    investigation_mode: str | None = Field(
-        default=None,
-        pattern=r"^llm$",
-    )
-    investigation_ambiguity_mode: str | None = Field(
-        default=None,
-        pattern=r"^(clarify|safe_aggregate)$",
-    )
     query_max_rows: int | None = Field(default=None, ge=1, le=100_000)
     query_timeout_seconds: int | None = Field(
         default=None,
@@ -185,10 +177,10 @@ class ReasoningConfigRequest(BaseModel):
     sql_generation_mode: str = Field(pattern=r"^llm$")
     result_interpretation_mode: str = Field(pattern=r"^llm$")
     output_classification_mode: str = Field(pattern=r"^(auto|llm)$")
-    investigation_mode: str = Field(pattern=r"^llm$")
-    investigation_ambiguity_mode: str = Field(pattern=r"^(clarify|safe_aggregate)$")
     query_max_rows: int = Field(ge=1, le=100_000)
     query_timeout_seconds: int = Field(ge=1, le=3_600)
+    analysis_loop_count: int | None = Field(default=None, ge=1, le=25)
+    analysis_auto_enable_business_logic: bool | None = None
 
 
 class GovernancePolicyRequest(BaseModel):
@@ -203,7 +195,9 @@ class OverviewWidgetUpdateRequest(BaseModel):
     widget_type: str = Field(pattern=r"^(scalar|timeseries|table)$")
     datasource_key: str = Field(min_length=1, max_length=255)
     question: str = Field(min_length=1)
-    result_mode: str = Field(default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$")
+    result_mode: str = Field(
+        default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
+    )
     position: int | None = Field(default=None, ge=10)
     grid_width: int | None = Field(default=None, ge=1, le=4)
     active: bool | None = None
@@ -228,7 +222,9 @@ class OverviewWidgetFromQueryRequest(BaseModel):
     datasource_key: str = Field(default="default", min_length=1, max_length=255)
     question: str = Field(min_length=1)
     sql: str = Field(min_length=1)
-    result_mode: str = Field(default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$")
+    result_mode: str = Field(
+        default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
+    )
 
 
 class DatasourceConnectorRequest(BaseModel):
@@ -350,8 +346,6 @@ def serialize_llm_config(session: Session) -> dict[str, Any]:
         "sql_generation_mode": query_config.sql_generation_mode,
         "result_interpretation_mode": query_config.result_interpretation_mode,
         "output_classification_mode": query_config.output_classification_mode,
-        "investigation_mode": query_config.investigation_mode,
-        "investigation_ambiguity_mode": query_config.investigation_ambiguity_mode,
         "query_max_rows": query_config.query_max_rows,
         "query_timeout_seconds": query_config.query_timeout_seconds,
         "sources": get_llm_config_sources(session),
@@ -367,10 +361,12 @@ def serialize_reasoning_config(session: Session) -> dict[str, Any]:
         "sql_generation_mode": query_config.sql_generation_mode,
         "result_interpretation_mode": query_config.result_interpretation_mode,
         "output_classification_mode": query_config.output_classification_mode,
-        "investigation_mode": query_config.investigation_mode,
-        "investigation_ambiguity_mode": query_config.investigation_ambiguity_mode,
         "query_max_rows": query_config.query_max_rows,
         "query_timeout_seconds": query_config.query_timeout_seconds,
+        "analysis_loop_count": query_config.analysis_loop_count,
+        "analysis_auto_enable_business_logic": (
+            query_config.analysis_auto_enable_business_logic
+        ),
         "sources": {
             field: sources[field]
             for field in (
@@ -378,10 +374,10 @@ def serialize_reasoning_config(session: Session) -> dict[str, Any]:
                 "sql_generation_mode",
                 "result_interpretation_mode",
                 "output_classification_mode",
-                "investigation_mode",
-                "investigation_ambiguity_mode",
                 "query_max_rows",
                 "query_timeout_seconds",
+                "analysis_loop_count",
+                "analysis_auto_enable_business_logic",
             )
         },
     }
@@ -450,7 +446,7 @@ def build_client_widget_key(session: Session, label: str, question: str) -> str:
 
     while get_overview_widget(session, widget_key) is not None:
         suffix_text = f"_{suffix}"
-        widget_key = f"{base_key[:255 - len(suffix_text)]}{suffix_text}"
+        widget_key = f"{base_key[: 255 - len(suffix_text)]}{suffix_text}"
         suffix += 1
 
     return widget_key
@@ -894,8 +890,7 @@ def get_overview(
     prompts = list_prompt_templates(session)
     retention_days = get_data_query_audit_retention_days(session)
     widgets = [
-        serialize_overview_widget(session, widget)
-        for widget in list_overview_widgets(session)
+        serialize_overview_widget(session, widget) for widget in list_overview_widgets(session)
     ]
 
     return {
@@ -922,22 +917,14 @@ def get_overview(
         ],
         "widgets": widgets,
         "info_widgets": [
-            widget
-            for widget in widgets
-            if widget["widget_type"] == OVERVIEW_WIDGET_SCALAR
+            widget for widget in widgets if widget["widget_type"] == OVERVIEW_WIDGET_SCALAR
         ][:4],
         "runtime_widget": next(
-            (
-                widget
-                for widget in widgets
-                if widget["widget_type"] == OVERVIEW_WIDGET_TIMESERIES
-            ),
+            (widget for widget in widgets if widget["widget_type"] == OVERVIEW_WIDGET_TIMESERIES),
             None,
         ),
         "table_widgets": [
-            widget
-            for widget in widgets
-            if widget["widget_type"] == OVERVIEW_WIDGET_TABLE
+            widget for widget in widgets if widget["widget_type"] == OVERVIEW_WIDGET_TABLE
         ],
     }
 
@@ -1386,9 +1373,7 @@ def get_data_query_audit(
 
     try:
         parsed_output_classification = (
-            OutputClassification(output_classification)
-            if output_classification
-            else None
+            OutputClassification(output_classification) if output_classification else None
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1558,8 +1543,7 @@ def get_datasources(
 ) -> dict[str, Any]:
     return {
         "items": [
-            serialize_datasource(connector)
-            for connector in list_datasource_connectors(session)
+            serialize_datasource(connector) for connector in list_datasource_connectors(session)
         ],
         "viewer": user.username,
     }
@@ -1580,13 +1564,9 @@ def get_extensions(
     user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
     return {
-        "items": [
-            serialize_extension_record(record)
-            for record in get_extension_manager().records
-        ],
+        "items": [serialize_extension_record(record) for record in get_extension_manager().records],
         "admin_sections": [
-            section.serialize()
-            for section in get_api_registry().list_admin_sections()
+            section.serialize() for section in get_api_registry().list_admin_sections()
         ],
         "viewer": user.username,
     }
@@ -2051,27 +2031,18 @@ def update_llm_config(
     current_query_config = get_query_runtime_config(session)
     timeout_seconds = request.timeout_seconds or current_llm_config.timeout_seconds
     intent_classification_mode = (
-        request.intent_classification_mode
-        or current_query_config.intent_classification_mode
+        request.intent_classification_mode or current_query_config.intent_classification_mode
     )
     sql_generation_mode = request.sql_generation_mode or current_query_config.sql_generation_mode
     result_interpretation_mode = (
-        request.result_interpretation_mode
-        or current_query_config.result_interpretation_mode
+        request.result_interpretation_mode or current_query_config.result_interpretation_mode
     )
     output_classification_mode = (
-        request.output_classification_mode
-        or current_query_config.output_classification_mode
-    )
-    investigation_mode = request.investigation_mode or current_query_config.investigation_mode
-    investigation_ambiguity_mode = (
-        request.investigation_ambiguity_mode
-        or current_query_config.investigation_ambiguity_mode
+        request.output_classification_mode or current_query_config.output_classification_mode
     )
     query_max_rows = request.query_max_rows or current_query_config.query_max_rows
     query_timeout_seconds = (
-        request.query_timeout_seconds
-        or current_query_config.query_timeout_seconds
+        request.query_timeout_seconds or current_query_config.query_timeout_seconds
     )
     api_key = None
     if request.clear_api_key:
@@ -2095,8 +2066,6 @@ def update_llm_config(
         sql_generation_mode=sql_generation_mode,
         result_interpretation_mode=result_interpretation_mode,
         output_classification_mode=output_classification_mode,
-        investigation_mode=investigation_mode,
-        investigation_ambiguity_mode=investigation_ambiguity_mode,
         query_max_rows=query_max_rows,
         query_timeout_seconds=query_timeout_seconds,
         actor=user.username,
@@ -2117,8 +2086,6 @@ def update_llm_config(
             "sql_generation_mode": sql_generation_mode,
             "result_interpretation_mode": result_interpretation_mode,
             "output_classification_mode": output_classification_mode,
-            "investigation_mode": investigation_mode,
-            "investigation_ambiguity_mode": investigation_ambiguity_mode,
             "query_max_rows": query_max_rows,
             "query_timeout_seconds": query_timeout_seconds,
         },
@@ -2178,11 +2145,11 @@ def update_reasoning_config(
         sql_generation_mode=request.sql_generation_mode,
         result_interpretation_mode=request.result_interpretation_mode,
         output_classification_mode=request.output_classification_mode,
-        investigation_mode=request.investigation_mode,
-        investigation_ambiguity_mode=request.investigation_ambiguity_mode,
         query_max_rows=request.query_max_rows,
         query_timeout_seconds=request.query_timeout_seconds,
         actor=user.username,
+        analysis_loop_count=request.analysis_loop_count,
+        analysis_auto_enable_business_logic=request.analysis_auto_enable_business_logic,
     )
     record_admin_audit(
         session=session,

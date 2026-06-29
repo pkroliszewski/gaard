@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 import json
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.engine import Engine
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,6 +24,7 @@ from gaard_api.core.settings import settings
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
 _engine_url: str | None = None
+LEGACY_PROMPT_KEYS = {"investigation_readiness"}
 
 
 def get_engine() -> Engine:
@@ -105,10 +106,12 @@ def seed_settings(session: Session) -> None:
         "gaard_sql_generation_mode": settings.gaard_sql_generation_mode,
         "gaard_result_interpretation_mode": settings.gaard_result_interpretation_mode,
         "gaard_output_classification_mode": settings.gaard_output_classification_mode,
-        "gaard_investigation_mode": settings.gaard_investigation_mode,
-        "gaard_investigation_ambiguity_mode": settings.gaard_investigation_ambiguity_mode,
         "gaard_query_max_rows": str(settings.gaard_query_max_rows),
         "gaard_query_timeout_seconds": str(settings.gaard_query_timeout_seconds),
+        "gaard_analysis_loop_count": str(settings.gaard_analysis_loop_count),
+        "gaard_analysis_auto_enable_business_logic": (
+            "true" if settings.gaard_analysis_auto_enable_business_logic else "false"
+        ),
         "gaard_llm_provider": settings.gaard_llm_provider,
         "gaard_llm_base_url": settings.gaard_llm_base_url,
         "gaard_llm_api_key": settings.gaard_llm_api_key,
@@ -154,6 +157,10 @@ def apply_runtime_settings(session: Session) -> None:
 
 
 def seed_prompts(session: Session) -> None:
+    session.execute(
+        delete(PromptTemplate).where(PromptTemplate.prompt_key.in_(LEGACY_PROMPT_KEYS))
+    )
+
     for prompt in DEFAULT_PROMPTS:
         existing = session.scalar(
             select(PromptTemplate).where(PromptTemplate.prompt_key == prompt["prompt_key"])

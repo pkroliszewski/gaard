@@ -29,10 +29,19 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "sql_generation_mode" in response.text
     assert "result_interpretation_mode" in response.text
     assert "output_classification_mode" in response.text
-    assert "/api/query/stream" in response.text
+    assert "/api/analysis/stream" in response.text
     assert "/api/widgets/from-query" in response.text
     assert "data-save-widget" in response.text
-    assert "data_question" in response.text
+    assert "analysis-progress" in response.text
+    assert "analysis-log" in response.text
+    assert "analysis-reply-question" in response.text
+    assert "data-analysis-progress" in response.text
+    assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
+        response.text
+    )
+    assert "user_question" in response.text
+    assert "Investigation" not in response.text
+    assert "investigation" not in response.text
 
 
 def test_client_app_proxies_query(monkeypatch) -> None:
@@ -90,8 +99,46 @@ def test_client_app_proxies_query(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_query_mode(monkeypatch) -> None:
+def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     captured = {}
+
+    class FakeStreamResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def aiter_text(self):
+            yield json.dumps(
+                {
+                    "event": "analysis_step",
+                    "session_id": "abc",
+                    "analysis_step": {
+                        "iteration": 1,
+                        "visible_question": "Czy mam wszystko?",
+                        "visible_reasoning": "Sprawdzam dostępną wiedzę.",
+                    },
+                }
+            ) + "\n"
+            yield json.dumps(
+                {
+                    "event": "final",
+                    "session_id": "abc",
+                    "final": {
+                        "question": "q",
+                        "answer": "Analysis answer.",
+                        "sql": "",
+                        "rows": [],
+                        "metadata": {
+                            "analysis_mode": "analysis",
+                            "analysis_session_id": "abc",
+                        },
+                    },
+                }
+            ) + "\n"
 
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs) -> None:
@@ -103,42 +150,32 @@ def test_client_app_proxies_query_mode(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, traceback) -> None:
             pass
 
-        async def post(self, url, json):
+        def stream(self, method, url, json):
+            captured["method"] = method
+            captured["url"] = url
             captured["json"] = json
-            request = httpx.Request("POST", url)
-
-            return httpx.Response(
-                status_code=200,
-                request=request,
-                json={
-                    "question": json["question"],
-                    "answer": "Investigation answer.",
-                    "sql": "",
-                    "rows": [],
-                    "metadata": {
-                        "query_mode": "investigation",
-                    },
-                },
-            )
+            return FakeStreamResponse()
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     client = TestClient(app)
 
     response = client.post(
-        "/api/query",
+        "/api/analysis/stream",
         json={
             "question": "gdzie uciekajo mi pinionżki",
             "backend_url": "http://backend.example/",
-            "mode": "investigation",
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["metadata"]["query_mode"] == "investigation"
+    lines = [json.loads(line) for line in response.text.strip().splitlines()]
+    assert lines[0]["event"] == "analysis_step"
+    assert lines[1]["final"]["metadata"]["analysis_mode"] == "analysis"
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://backend.example/api/v1/analysis/stream"
     assert captured["json"] == {
         "question": "gdzie uciekajo mi pinionżki",
         "user_id": "client",
-        "mode": "investigation",
     }
 
 
@@ -202,7 +239,7 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
     }
 
 
-def test_client_app_streams_investigation_progress(monkeypatch) -> None:
+def test_client_app_streams_analysis_user_question(monkeypatch) -> None:
     captured = {}
 
     class FakeStreamResponse:
@@ -217,19 +254,19 @@ def test_client_app_streams_investigation_progress(monkeypatch) -> None:
         async def aiter_text(self):
             yield json.dumps(
                 {
-                    "data_question": "What evidence is needed?",
-                    "decisions": ["Planning governed evidence."],
+                    "event": "session_started",
+                    "session_id": "session-1",
+                    "session_started": {
+                        "session_id": "session-1",
+                        "status": "running",
+                    },
                 }
             ) + "\n"
             yield json.dumps(
                 {
-                    "final": {
-                        "question": "q",
-                        "answer": "done",
-                        "sql": "",
-                        "rows": [],
-                        "metadata": {"query_mode": "investigation"},
-                    }
+                    "event": "user_question",
+                    "session_id": "session-1",
+                    "user_question": {"question": "Jaki zakres?"},
                 }
             ) + "\n"
 
@@ -253,29 +290,88 @@ def test_client_app_streams_investigation_progress(monkeypatch) -> None:
     client = TestClient(app)
 
     response = client.post(
-        "/api/query/stream",
+        "/api/analysis/stream",
         json={
             "question": "q",
             "backend_url": "http://backend.example/",
-            "mode": "investigation",
         },
     )
 
     assert response.status_code == 200
     lines = [json.loads(line) for line in response.text.strip().splitlines()]
-    assert lines[0] == {
-        "data_question": "What evidence is needed?",
-        "decisions": ["Planning governed evidence."],
-    }
-    assert set(lines[0]) == {"data_question", "decisions"}
-    assert lines[1]["final"]["answer"] == "done"
+    assert lines[0]["event"] == "session_started"
+    assert lines[1]["event"] == "user_question"
+    assert lines[1]["user_question"]["question"] == "Jaki zakres?"
     assert captured["method"] == "POST"
-    assert captured["url"] == "http://backend.example/api/v1/query/stream"
+    assert captured["url"] == "http://backend.example/api/v1/analysis/stream"
     assert captured["json"] == {
         "question": "q",
         "user_id": "client",
-        "mode": "investigation",
     }
+
+
+def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
+    captured = {}
+
+    class FakeStreamResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def aiter_text(self):
+            yield json.dumps(
+                {
+                    "event": "final",
+                    "session_id": "session-1",
+                    "final": {
+                        "question": "q",
+                        "answer": "done",
+                        "sql": "SELECT 1",
+                        "rows": [{"value": 1}],
+                        "metadata": {"analysis_session_id": "session-1"},
+                    },
+                }
+            ) + "\n"
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        def stream(self, method, url, json):
+            captured["method"] = method
+            captured["url"] = url
+            captured["json"] = json
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/analysis/session-1/messages/stream",
+        json={
+            "message": "ostatni miesiąc",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    lines = [json.loads(line) for line in response.text.strip().splitlines()]
+    assert lines[0]["final"]["answer"] == "done"
+    assert captured["method"] == "POST"
+    assert captured["url"] == (
+        "http://backend.example/api/v1/analysis/session-1/messages/stream"
+    )
+    assert captured["json"] == {"message": "ostatni miesiąc"}
 
 
 def test_client_app_rejects_invalid_backend_url() -> None:

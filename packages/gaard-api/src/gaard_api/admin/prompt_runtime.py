@@ -1,5 +1,4 @@
 from gaard_core.errors import ConfigurationError
-from gaard_core.investigation.models import InvestigationContext
 from gaard_core.json_utils import json_dumps
 from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.schema_formatter import SchemaPromptFormatter
@@ -54,9 +53,7 @@ class MetadataSqlGenerationPromptCompiler:
             return request.formatted_schema
 
         if request.database_schema is None:
-            raise ConfigurationError(
-                "Either database_schema or formatted_schema must be provided."
-            )
+            raise ConfigurationError("Either database_schema or formatted_schema must be provided.")
 
         return self.schema_formatter.format(request.database_schema)
 
@@ -80,37 +77,6 @@ class MetadataIntentClassificationPromptCompiler:
                 question=request.question,
                 datasource_id=request.datasource_id,
                 user_id=request.user_id,
-            ),
-            metadata={
-                "prompt_key": self.prompt_template.prompt_key,
-                "prompt_version": self.prompt_template.version,
-            },
-        )
-
-
-class MetadataInvestigationReadinessPromptCompiler:
-    def __init__(self, prompt_template: PromptTemplate) -> None:
-        self.prompt_template = prompt_template
-
-    def compile(self, context: InvestigationContext) -> CompiledPrompt:
-        payload = {
-            "question": context.question,
-            "datasource_id": context.datasource_id,
-            "user_id": context.user_id,
-            "schema": context.formatted_schema,
-            "business_logic": context.business_logic,
-        }
-        payload_json = json_dumps(payload, ensure_ascii=False, indent=2)
-
-        return CompiledPrompt(
-            system_prompt=self.prompt_template.system_prompt,
-            user_prompt=self.prompt_template.user_prompt_template.format(
-                payload=payload_json,
-                question=context.question,
-                datasource_id=context.datasource_id,
-                user_id=context.user_id,
-                schema=context.formatted_schema,
-                business_logic=context.business_logic,
             ),
             metadata={
                 "prompt_key": self.prompt_template.prompt_key,
@@ -202,17 +168,6 @@ def get_intent_classification_prompt_compiler() -> (
         return None
 
     return MetadataIntentClassificationPromptCompiler(prompt_template=prompt_template)
-
-
-def get_investigation_readiness_prompt_compiler() -> (
-    MetadataInvestigationReadinessPromptCompiler | None
-):
-    prompt_template = get_active_prompt_template_safe("investigation_readiness")
-
-    if prompt_template is None:
-        return None
-
-    return MetadataInvestigationReadinessPromptCompiler(prompt_template=prompt_template)
 
 
 def get_result_interpretation_prompt_compiler() -> (

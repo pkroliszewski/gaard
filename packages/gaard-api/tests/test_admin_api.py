@@ -18,7 +18,11 @@ from gaard_core.query_pipeline.models import (
 )
 from gaard_llm.providers.models import ChatCompletionResponse
 
-from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
+from gaard_api.admin.database import (
+    create_session,
+    reset_metadata_store_for_tests,
+    seed_prompts,
+)
 from gaard_api.admin.models import (
     AdminSetting,
     BusinessKnowledgeClaim,
@@ -157,7 +161,6 @@ def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
         query_config = get_query_runtime_config(session)
         assert query_config.sql_generation_mode == "mock"
         assert query_config.result_interpretation_mode == "mock"
-        assert query_config.investigation_mode == "llm"
 
     monkeypatch.setattr(settings, "gaard_sql_generation_mode", "llm")
     monkeypatch.setattr(settings, "gaard_result_interpretation_mode", "llm")
@@ -167,13 +170,12 @@ def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
         query_config = get_query_runtime_config(session)
         assert query_config.sql_generation_mode == "llm"
         assert query_config.result_interpretation_mode == "llm"
-        assert query_config.investigation_mode == "llm"
         assert session.get(AdminSetting, "gaard_sql_generation_mode").updated_by == "system"
 
     reset_metadata_store_for_tests()
 
 
-def test_only_investigation_readiness_prompt_is_seeded(
+def test_investigation_prompts_are_not_seeded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -190,12 +192,28 @@ def test_only_investigation_readiness_prompt_is_seeded(
                 PromptTemplate.prompt_key.like("investigation_%")
             )
         ).all()
-        assert [prompt.prompt_key for prompt in investigation_prompts] == [
-            "investigation_readiness"
-        ]
-        assert "Assume nothing. Verify continuously." in (
-            investigation_prompts[0].system_prompt
+        assert investigation_prompts == []
+
+        session.add(
+            PromptTemplate(
+                prompt_key="investigation_readiness",
+                name="Investigation: readiness",
+                description="Legacy prompt",
+                system_prompt="system",
+                user_prompt_template="user",
+            )
         )
+        session.commit()
+
+        seed_prompts(session)
+        session.commit()
+
+        investigation_prompts = session.scalars(
+            select(PromptTemplate).where(
+                PromptTemplate.prompt_key.like("investigation_%")
+            )
+        ).all()
+        assert investigation_prompts == []
 
     reset_metadata_store_for_tests()
 
@@ -380,7 +398,6 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
     assert item["result_interpretation_mode"] == "mock"
     assert item["intent_classification_mode"] == "auto"
     assert item["output_classification_mode"] == "auto"
-    assert item["investigation_mode"] == "llm"
     assert item["query_max_rows"] == 100
     assert set(item["sources"].values()) == {"metadata"}
 
@@ -397,7 +414,6 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
             "sql_generation_mode": "llm",
             "result_interpretation_mode": "llm",
             "output_classification_mode": "llm",
-            "investigation_mode": "llm",
             "query_max_rows": 250,
             "query_timeout_seconds": 20,
             "extra_body": {"temperature": 0, "chat_template_kwargs": {"enable_thinking": True}},
@@ -416,7 +432,6 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
     assert updated_item["sql_generation_mode"] == "llm"
     assert updated_item["result_interpretation_mode"] == "llm"
     assert updated_item["output_classification_mode"] == "llm"
-    assert updated_item["investigation_mode"] == "llm"
     assert updated_item["query_max_rows"] == 250
     assert updated_item["query_timeout_seconds"] == 20
     assert updated_item["extra_body"] == {
@@ -645,10 +660,10 @@ def test_reasoning_config_defaults_to_metadata_and_can_be_overridden(
     assert item["sql_generation_mode"] == "mock"
     assert item["result_interpretation_mode"] == "mock"
     assert item["output_classification_mode"] == "auto"
-    assert item["investigation_mode"] == "llm"
-    assert item["investigation_ambiguity_mode"] == "clarify"
     assert item["query_max_rows"] == 100
     assert item["query_timeout_seconds"] == 30
+    assert item["analysis_loop_count"] == 5
+    assert item["analysis_auto_enable_business_logic"] is False
     assert set(item["sources"].values()) == {"metadata"}
 
     update_response = admin_client.put(
@@ -659,10 +674,10 @@ def test_reasoning_config_defaults_to_metadata_and_can_be_overridden(
             "sql_generation_mode": "llm",
             "result_interpretation_mode": "llm",
             "output_classification_mode": "llm",
-            "investigation_mode": "llm",
-            "investigation_ambiguity_mode": "safe_aggregate",
             "query_max_rows": 250,
             "query_timeout_seconds": 20,
+            "analysis_loop_count": 7,
+            "analysis_auto_enable_business_logic": True,
         },
     )
 
@@ -672,17 +687,18 @@ def test_reasoning_config_defaults_to_metadata_and_can_be_overridden(
     assert updated_item["sql_generation_mode"] == "llm"
     assert updated_item["result_interpretation_mode"] == "llm"
     assert updated_item["output_classification_mode"] == "llm"
-    assert updated_item["investigation_mode"] == "llm"
-    assert updated_item["investigation_ambiguity_mode"] == "safe_aggregate"
     assert updated_item["query_max_rows"] == 250
     assert updated_item["query_timeout_seconds"] == 20
+    assert updated_item["analysis_loop_count"] == 7
+    assert updated_item["analysis_auto_enable_business_logic"] is True
 
     with create_session() as session:
         query_config = get_query_runtime_config(session)
         assert query_config.intent_classification_mode == "llm"
-        assert query_config.investigation_ambiguity_mode == "safe_aggregate"
         assert query_config.query_max_rows == 250
         assert query_config.query_timeout_seconds == 20
+        assert query_config.analysis_loop_count == 7
+        assert query_config.analysis_auto_enable_business_logic is True
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/admin-events",
@@ -1364,15 +1380,49 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
     assert audit_log.output_classification == OutputClassification.NEUTRAL_DATA
 
 
-def test_query_endpoint_investigation_runs_normal_sql_when_ready(
+def test_query_endpoint_can_return_raw_sql_output_without_interpretation(
     admin_client: TestClient,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
-    with create_session() as session:
-        set_setting(session, "gaard_investigation_mode", "mock", "test")
-        session.commit()
+    query_response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "pokaż wartość kontrolną",
+            "user_id": "alice",
+            "interpret": False,
+        },
+    )
+
+    assert query_response.status_code == 200
+    body = query_response.json()
+    assert body["answer"] == ""
+    assert body["sql"] == "SELECT 1 AS value"
+    assert body["rows"] == [{"value": 1}]
+    assert body["metadata"]["raw_sql_output"] is True
+    assert body["metadata"]["result_interpretation_mode"] == "none"
+    assert body["metadata"]["output_classification_mode"] == "none"
+    assert body["metadata"]["output_classification"] == "unknown"
+
+    audit_response = admin_client.get(
+        "/api/v1/admin/audit/data-queries",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert audit_response.status_code == 200
+    item = audit_response.json()["items"][0]
+    assert item["answer"] == ""
+    assert item["sql"] == "SELECT 1 AS value"
+    assert item["output_classification"] == "unknown"
+    assert item["metadata"]["raw_sql_output"] is True
+
+
+def test_query_endpoint_ignores_legacy_mode_field(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
 
     query_response = admin_client.post(
         "/api/v1/query",
@@ -1388,13 +1438,7 @@ def test_query_endpoint_investigation_runs_normal_sql_when_ready(
     assert body["answer"] == "Zapytanie zwróciło wynik: {'value': 1}."
     assert body["sql"] == "SELECT 1 AS value"
     assert body["rows"] == [{"value": 1}]
-    assert body["metadata"]["query_mode"] == "investigation"
-    assert (
-        body["metadata"]["investigation_backend_status"]
-        == "readiness_gate_active"
-    )
-    assert body["metadata"]["investigation_route"] == "sql"
-    assert body["metadata"]["investigation_steps"][0]["ready_for_sql"] is True
+    assert "query_mode" not in body["metadata"]
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries",
@@ -1404,188 +1448,17 @@ def test_query_endpoint_investigation_runs_normal_sql_when_ready(
     assert audit_response.status_code == 200
     items = audit_response.json()["items"]
     assert items[0]["question"] == "pokaż wartość kontrolną"
-    assert items[0]["metadata"]["query_mode"] == "investigation"
-    assert (
-        items[0]["metadata"]["investigation_backend_status"]
-        == "readiness_gate_active"
-    )
-    assert items[0]["metadata"]["investigation_route"] == "sql"
+    assert "query_mode" not in items[0]["metadata"]
 
 
-def test_query_endpoint_investigation_stops_at_analysis_when_not_ready(
+def test_query_stream_ignores_legacy_mode_field(
     admin_client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
-
-    class NotReadyAgent:
-        name = "test_not_ready_agent"
-
-        def assess(self, context):
-            from gaard_core.investigation.models import (
-                InvestigationReadinessDecision,
-                InvestigationRoute,
-                RequiredAnalysisTask,
-            )
-
-            return InvestigationReadinessDecision(
-                ready_for_sql=False,
-                route=InvestigationRoute.ANALYSIS,
-                confidence=0.92,
-                reason="Dictionary value must be verified first.",
-                missing_information=["specialization dictionary value"],
-                required_analysis=["Inspect distinct doctors.specialization values."],
-                required_analysis_tasks=[
-                    RequiredAnalysisTask(
-                        missing_information="specialization dictionary value",
-                        required_analysis=(
-                            "Inspect distinct doctors.specialization values."
-                        ),
-                        category="dictionary_value",
-                        expected_output="Known specialization values.",
-                    )
-                ],
-            )
-
-    monkeypatch.setattr(
-        "gaard_api.api.v1.query.create_investigation_readiness_agent",
-        lambda runtime_config: NotReadyAgent(),
-    )
-
-    query_response = admin_client.post(
-        "/api/v1/query",
-        json={
-            "question": "który kardiolog leczy pacjentów",
-            "user_id": "alice",
-            "mode": "investigation",
-        },
-    )
-
-    assert query_response.status_code == 200
-    body = query_response.json()
-    assert "Ścieżka Analysis nie jest jeszcze zaimplementowana" in body["answer"]
-    assert body["sql"] == ""
-    assert body["rows"] == []
-    assert body["metadata"]["query_mode"] == "investigation"
-    assert body["metadata"]["investigation_route"] == "analysis"
-    assert body["metadata"]["analysis_mode_status"] == "not_implemented"
-    assert body["metadata"]["analysis_tasks_count"] == 1
-    assert body["metadata"]["investigation_steps"][0]["ready_for_sql"] is False
-    assert body["metadata"]["investigation_steps"][0]["missing_information"] == [
-        "specialization dictionary value"
-    ]
-    assert body["metadata"]["analysis_results"][0]["sql"] == "SELECT 1 AS value"
-    assert (
-        body["metadata"]["analysis_results"][0]["business_logic_learning"]["status"]
-        == "created"
-    )
-
-    with create_session() as session:
-        connector = session.scalar(
-            select(DatasourceConnector).where(
-                DatasourceConnector.connector_key == "default"
-            )
-        )
-        assert connector is not None
-        suggestions = list_business_logic_suggestions(session, connector.id)
-        assert len(suggestions) == 1
-        suggestion = suggestions[0]
-        assert suggestion.status == "pending"
-        assert suggestion.enabled is False
-        assert suggestion.error_category == "investigation.analysis.dictionary_value"
-        assert (
-            suggestion.failed_identifier
-            == "specialization dictionary value"
-        )
-        assert suggestion.repaired_identifier
-        assert (
-            "[dictionary_value] specialization dictionary value =>"
-            in suggestion.rule_text
-        )
-
-        audit_logs = session.scalars(
-            select(DataQueryAuditLog).order_by(DataQueryAuditLog.id)
-        ).all()
-        audit_steps = [
-            json.loads(log.metadata_json).get("investigation_step")
-            for log in audit_logs
-        ]
-        assert audit_steps == [
-            "readiness",
-            "analysis_sql",
-            "analysis_business_logic",
-            "final",
-        ]
-
-    second_response = admin_client.post(
-        "/api/v1/query",
-        json={
-            "question": "który kardiolog leczy pacjentów",
-            "user_id": "alice",
-            "mode": "investigation",
-        },
-    )
-
-    assert second_response.status_code == 200
-    second_body = second_response.json()
-    assert (
-        second_body["metadata"]["analysis_results"][0]["business_logic_learning"][
-            "status"
-        ]
-        == "existing"
-    )
-
-    with create_session() as session:
-        connector = session.scalar(
-            select(DatasourceConnector).where(
-                DatasourceConnector.connector_key == "default"
-            )
-        )
-        assert connector is not None
-        suggestions = list_business_logic_suggestions(session, connector.id)
-        assert len(suggestions) == 1
-
-
-def test_query_stream_investigation_reports_analysis_steps(
-    admin_client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class NotReadyAgent:
-        name = "test_not_ready_agent"
-
-        def assess(self, context):
-            from gaard_core.investigation.models import (
-                InvestigationReadinessDecision,
-                InvestigationRoute,
-                RequiredAnalysisTask,
-            )
-
-            return InvestigationReadinessDecision(
-                ready_for_sql=False,
-                route=InvestigationRoute.ANALYSIS,
-                confidence=0.92,
-                reason="Dictionary value must be verified first.",
-                required_analysis_tasks=[
-                    RequiredAnalysisTask(
-                        missing_information="specialization dictionary value",
-                        required_analysis=(
-                            "Inspect distinct doctors.specialization values."
-                        ),
-                        category="dictionary_value",
-                    )
-                ],
-            )
-
-    monkeypatch.setattr(
-        "gaard_api.api.v1.query.create_investigation_readiness_agent",
-        lambda runtime_config: NotReadyAgent(),
-    )
 
     response = admin_client.post(
         "/api/v1/query/stream",
         json={
-            "question": "który kardiolog leczy pacjentów",
+            "question": "pokaż wartość kontrolną",
             "user_id": "alice",
             "mode": "investigation",
         },
@@ -1593,18 +1466,9 @@ def test_query_stream_investigation_reports_analysis_steps(
 
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.strip().splitlines()]
-    progress_steps = [
-        event["progress"]["step"]
-        for event in events
-        if "progress" in event
-    ]
-    assert progress_steps == [
-        "readiness",
-        "readiness_complete",
-        "analysis_sql",
-        "analysis_sql_complete",
-    ]
-    assert events[-1]["final"]["metadata"]["analysis_mode_status"] == "not_implemented"
+    assert len(events) == 1
+    assert events[0]["final"]["sql"] == "SELECT 1 AS value"
+    assert "query_mode" not in events[0]["final"]["metadata"]
 
 
 def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
@@ -1766,7 +1630,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
     )
     monkeypatch.setattr(
         "gaard_api.api.v1.query.create_pipeline",
-        lambda datasource_context=None: FailingPipeline(),
+        lambda datasource_context=None, interpret=True: FailingPipeline(),
     )
 
     query_response = admin_client.post(
@@ -1828,7 +1692,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
     )
     monkeypatch.setattr(
         "gaard_api.api.v1.query.create_pipeline",
-        lambda datasource_context=None: FailingPipeline(),
+        lambda datasource_context=None, interpret=True: FailingPipeline(),
     )
 
     query_response = admin_client.post(
@@ -2053,9 +1917,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     assert audit_item["metadata"]["business_logic_learning"]["suggestion_id"]
     assert audit_item["metadata"]["business_logic_learning"]["admin_section"] == "business-logic"
     assert len(learning_llm.requests) == 1
-    learning_prompt = "\n".join(
-        message.content for message in learning_llm.requests[0].messages
-    )
+    learning_prompt = "\n".join(message.content for message in learning_llm.requests[0].messages)
     assert "Który pracownik zrealizował najwięcej projektów" in learning_prompt
     assert "SELECT COUNT(*) AS liczba_projektow FROM zlecenia" in learning_prompt
     assert "no such table: zlecenia" in learning_prompt
@@ -2340,9 +2202,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
     assert audit_item["metadata"]["business_logic_learning"]["status"] == "pending_approval"
     assert audit_item["metadata"]["business_logic_learning"]["suggestion_id"]
     assert len(learning_llm.requests) == 1
-    learning_prompt = "\n".join(
-        message.content for message in learning_llm.requests[0].messages
-    )
+    learning_prompt = "\n".join(message.content for message in learning_llm.requests[0].messages)
     assert "Pokaż klientów z największą liczbą zleceń" in learning_prompt
     assert bad_sql in learning_prompt
     assert "klient_nazwa" in learning_prompt

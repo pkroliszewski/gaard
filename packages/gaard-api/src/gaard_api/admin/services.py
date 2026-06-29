@@ -1,4 +1,3 @@
-import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -125,10 +124,10 @@ INTENT_CLASSIFICATION_MODE_SETTING = "gaard_intent_classification_mode"
 SQL_GENERATION_MODE_SETTING = "gaard_sql_generation_mode"
 RESULT_INTERPRETATION_MODE_SETTING = "gaard_result_interpretation_mode"
 OUTPUT_CLASSIFICATION_MODE_SETTING = "gaard_output_classification_mode"
-INVESTIGATION_MODE_SETTING = "gaard_investigation_mode"
-INVESTIGATION_AMBIGUITY_MODE_SETTING = "gaard_investigation_ambiguity_mode"
 QUERY_MAX_ROWS_SETTING = "gaard_query_max_rows"
 QUERY_TIMEOUT_SECONDS_SETTING = "gaard_query_timeout_seconds"
+ANALYSIS_LOOP_COUNT_SETTING = "gaard_analysis_loop_count"
+ANALYSIS_AUTO_ENABLE_BUSINESS_LOGIC_SETTING = "gaard_analysis_auto_enable_business_logic"
 GOVERNANCE_POLICY_SETTING = "gaard_governance_policy"
 
 SYSTEM_DATASOURCE_CONNECTOR_KEYS = {"metadata-db"}
@@ -150,10 +149,10 @@ class QueryRuntimeConfig:
     sql_generation_mode: str
     result_interpretation_mode: str
     output_classification_mode: str
-    investigation_mode: str
-    investigation_ambiguity_mode: str
     query_max_rows: int
     query_timeout_seconds: int
+    analysis_loop_count: int
+    analysis_auto_enable_business_logic: bool
 
 
 def record_data_query_audit(
@@ -324,6 +323,19 @@ def get_int_setting(
         return default
 
     return max(minimum, parsed)
+
+
+def get_bool_setting(session: Session, key: str, default: bool) -> bool:
+    value = get_setting(session, key, "true" if default else "false")
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+
+    return default
 
 
 def set_setting(session: Session, key: str, value: str, actor: str) -> AdminSetting:
@@ -642,16 +654,6 @@ def get_query_runtime_config(session: Session) -> QueryRuntimeConfig:
             OUTPUT_CLASSIFICATION_MODE_SETTING,
             settings.gaard_output_classification_mode,
         ),
-        investigation_mode=get_setting(
-            session,
-            INVESTIGATION_MODE_SETTING,
-            settings.gaard_investigation_mode,
-        ),
-        investigation_ambiguity_mode=get_setting(
-            session,
-            INVESTIGATION_AMBIGUITY_MODE_SETTING,
-            settings.gaard_investigation_ambiguity_mode,
-        ),
         query_max_rows=get_int_setting(
             session,
             QUERY_MAX_ROWS_SETTING,
@@ -662,6 +664,16 @@ def get_query_runtime_config(session: Session) -> QueryRuntimeConfig:
             QUERY_TIMEOUT_SECONDS_SETTING,
             settings.gaard_query_timeout_seconds,
         ),
+        analysis_loop_count=get_int_setting(
+            session,
+            ANALYSIS_LOOP_COUNT_SETTING,
+            settings.gaard_analysis_loop_count,
+        ),
+        analysis_auto_enable_business_logic=get_bool_setting(
+            session,
+            ANALYSIS_AUTO_ENABLE_BUSINESS_LOGIC_SETTING,
+            settings.gaard_analysis_auto_enable_business_logic,
+        ),
     )
 
 
@@ -671,10 +683,10 @@ def get_query_runtime_config_safe() -> QueryRuntimeConfig:
         sql_generation_mode=settings.gaard_sql_generation_mode,
         result_interpretation_mode=settings.gaard_result_interpretation_mode,
         output_classification_mode=settings.gaard_output_classification_mode,
-        investigation_mode=settings.gaard_investigation_mode,
-        investigation_ambiguity_mode=settings.gaard_investigation_ambiguity_mode,
         query_max_rows=settings.gaard_query_max_rows,
         query_timeout_seconds=settings.gaard_query_timeout_seconds,
+        analysis_loop_count=settings.gaard_analysis_loop_count,
+        analysis_auto_enable_business_logic=settings.gaard_analysis_auto_enable_business_logic,
     )
 
     try:
@@ -696,25 +708,36 @@ def set_query_runtime_config(
     sql_generation_mode: str,
     result_interpretation_mode: str,
     output_classification_mode: str,
-    investigation_mode: str,
-    investigation_ambiguity_mode: str,
     query_max_rows: int,
     query_timeout_seconds: int,
     actor: str,
+    analysis_loop_count: int | None = None,
+    analysis_auto_enable_business_logic: bool | None = None,
 ) -> QueryRuntimeConfig:
+    current_config = get_query_runtime_config(session)
     set_setting(session, INTENT_CLASSIFICATION_MODE_SETTING, intent_classification_mode, actor)
     set_setting(session, SQL_GENERATION_MODE_SETTING, sql_generation_mode, actor)
     set_setting(session, RESULT_INTERPRETATION_MODE_SETTING, result_interpretation_mode, actor)
     set_setting(session, OUTPUT_CLASSIFICATION_MODE_SETTING, output_classification_mode, actor)
-    set_setting(session, INVESTIGATION_MODE_SETTING, investigation_mode, actor)
-    set_setting(
-        session,
-        INVESTIGATION_AMBIGUITY_MODE_SETTING,
-        investigation_ambiguity_mode,
-        actor,
-    )
     set_setting(session, QUERY_MAX_ROWS_SETTING, str(query_max_rows), actor)
     set_setting(session, QUERY_TIMEOUT_SECONDS_SETTING, str(query_timeout_seconds), actor)
+    set_setting(
+        session,
+        ANALYSIS_LOOP_COUNT_SETTING,
+        str(analysis_loop_count or current_config.analysis_loop_count),
+        actor,
+    )
+    auto_enable = (
+        current_config.analysis_auto_enable_business_logic
+        if analysis_auto_enable_business_logic is None
+        else analysis_auto_enable_business_logic
+    )
+    set_setting(
+        session,
+        ANALYSIS_AUTO_ENABLE_BUSINESS_LOGIC_SETTING,
+        "true" if auto_enable else "false",
+        actor,
+    )
 
     return get_query_runtime_config(session)
 
@@ -785,10 +808,10 @@ def get_llm_config_sources(session: Session) -> dict[str, str]:
         "sql_generation_mode": SQL_GENERATION_MODE_SETTING,
         "result_interpretation_mode": RESULT_INTERPRETATION_MODE_SETTING,
         "output_classification_mode": OUTPUT_CLASSIFICATION_MODE_SETTING,
-        "investigation_mode": INVESTIGATION_MODE_SETTING,
-        "investigation_ambiguity_mode": INVESTIGATION_AMBIGUITY_MODE_SETTING,
         "query_max_rows": QUERY_MAX_ROWS_SETTING,
         "query_timeout_seconds": QUERY_TIMEOUT_SECONDS_SETTING,
+        "analysis_loop_count": ANALYSIS_LOOP_COUNT_SETTING,
+        "analysis_auto_enable_business_logic": ANALYSIS_AUTO_ENABLE_BUSINESS_LOGIC_SETTING,
     }
 
     return {
@@ -930,9 +953,7 @@ def apply_data_query_audit_retention(session: Session) -> None:
     retention_days = get_data_query_audit_retention_days(session)
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
-    session.execute(
-        delete(DataQueryAuditLog).where(DataQueryAuditLog.occurred_at < cutoff)
-    )
+    session.execute(delete(DataQueryAuditLog).where(DataQueryAuditLog.occurred_at < cutoff))
 
 
 def list_data_query_audit_logs(
@@ -1034,11 +1055,7 @@ def set_business_logic_suggestion_enabled(
     actor: str,
 ) -> BusinessLogicSuggestion:
     suggestion.enabled = enabled
-    suggestion.status = (
-        BUSINESS_LOGIC_STATUS_ACTIVE
-        if enabled
-        else BUSINESS_LOGIC_STATUS_PENDING
-    )
+    suggestion.status = BUSINESS_LOGIC_STATUS_ACTIVE if enabled else BUSINESS_LOGIC_STATUS_PENDING
     suggestion.updated_by = actor
 
     return suggestion
@@ -1160,8 +1177,7 @@ def learn_business_logic_from_sql_error(
             mark_business_logic_learning_skipped(
                 session=session,
                 audit_log=audit_log,
-                reason=lesson.skip_reason
-                or "LLM did not find a durable SQL-generation lesson.",
+                reason=lesson.skip_reason or "LLM did not find a durable SQL-generation lesson.",
                 llm_response=lesson.raw,
             )
             return None
@@ -1202,11 +1218,8 @@ def business_logic_learning_exclusion_reason(metadata: dict[str, Any]) -> str:
     route = str(metadata.get("route") or metadata.get("execution_route") or "")
     required_evidence_type = str(metadata.get("required_evidence_type") or "")
     primary_error_category = str(metadata.get("primary_error_category") or "")
-    failed_identifier = str(metadata.get("failed_identifier") or "")
     error_categories = {
-        str(category)
-        for category in metadata.get("error_categories", [])
-        if str(category).strip()
+        str(category) for category in metadata.get("error_categories", []) if str(category).strip()
     }
     if primary_error_category:
         error_categories.add(primary_error_category)
@@ -1241,8 +1254,7 @@ def business_logic_learning_exclusion_reason(metadata: dict[str, Any]) -> str:
         return "Business logic learning is skipped for non-record evidence outcomes."
     if pipeline_phase in pipeline_design_phases:
         return (
-            "Business logic learning is skipped for query routing, modeling, or "
-            "preflight failures."
+            "Business logic learning is skipped for query routing, modeling, or preflight failures."
         )
     if error_categories & non_business_categories:
         return (
@@ -1424,8 +1436,7 @@ def upsert_llm_business_logic_suggestion(
 
     metadata = safe_json_object(audit_log.metadata_json)
     title = truncate_text(
-        lesson.title
-        or f"SQL lesson for {lesson.error_category.replace('_', ' ')}",
+        lesson.title or f"SQL lesson for {lesson.error_category.replace('_', ' ')}",
         255,
     )
     failed_identifier = lesson.failed_identifier or str(metadata.get("failed_identifier") or "")
@@ -1486,6 +1497,74 @@ def upsert_llm_business_logic_suggestion(
     existing.failed_identifier = failed_identifier
     existing.repaired_identifier = repaired_identifier
     existing.confidence = lesson.confidence
+    existing.updated_by = actor
+
+    return existing
+
+
+def upsert_analysis_business_logic_suggestion(
+    session: Session,
+    connector_id: int,
+    source_audit_id: int | None,
+    title: str,
+    rule_text: str,
+    knowledge_type: str,
+    terms: list[str],
+    confidence: float,
+    auto_enable: bool,
+    actor: str,
+) -> BusinessLogicSuggestion:
+    normalized_title = truncate_text(title.strip() or "Analysis business logic", 255)
+    normalized_rule = rule_text.strip()
+    normalized_type = coerce_short_text(
+        f"analysis.{knowledge_type or 'finding'}",
+        "analysis.finding",
+        100,
+    )
+    failed_identifier = truncate_text(normalized_title, 255)
+
+    existing = session.scalar(
+        select(BusinessLogicSuggestion).where(
+            BusinessLogicSuggestion.connector_id == connector_id,
+            BusinessLogicSuggestion.error_category == normalized_type,
+            BusinessLogicSuggestion.failed_identifier == failed_identifier,
+        )
+    )
+
+    if existing is None:
+        existing = BusinessLogicSuggestion(
+            connector_id=connector_id,
+            source_audit_id=source_audit_id,
+            status=BUSINESS_LOGIC_STATUS_ACTIVE
+            if auto_enable
+            else BUSINESS_LOGIC_STATUS_PENDING,
+            safety=BUSINESS_LOGIC_SAFETY_SAFE
+            if auto_enable
+            else BUSINESS_LOGIC_SAFETY_REVIEW,
+            enabled=auto_enable,
+            error_category=normalized_type,
+            title=normalized_title,
+            rule_text=normalized_rule,
+            terms_json=json_dumps(terms),
+            join_hints_json=json_dumps([]),
+            failed_identifier=failed_identifier,
+            repaired_identifier="",
+            confidence=confidence,
+            updated_by=actor,
+        )
+        session.add(existing)
+        session.flush()
+        return existing
+
+    existing.source_audit_id = source_audit_id
+    existing.status = BUSINESS_LOGIC_STATUS_ACTIVE if auto_enable else BUSINESS_LOGIC_STATUS_PENDING
+    existing.safety = BUSINESS_LOGIC_SAFETY_SAFE if auto_enable else BUSINESS_LOGIC_SAFETY_REVIEW
+    existing.enabled = auto_enable
+    existing.error_category = normalized_type
+    existing.title = normalized_title
+    existing.rule_text = normalized_rule
+    existing.terms_json = json_dumps(terms)
+    existing.confidence = confidence
     existing.updated_by = actor
 
     return existing
@@ -1635,193 +1714,6 @@ def format_business_logic_prompt(
     return "\n".join(lines)
 
 
-INVESTIGATION_ANALYSIS_CATEGORIES = {
-    "dictionary_value",
-    "relationship_logic",
-    "filter_logic",
-    "aggregation_logic",
-    "entity_mapping",
-    "unknown",
-}
-
-
-def upsert_investigation_analysis_business_logic_suggestion(
-    connector_id: int | None,
-    source_audit_id: int | None,
-    missing_information: str,
-    required_analysis: str,
-    category: str,
-    analysis_response: QueryResponse,
-    actor: str = "system",
-) -> dict[str, Any]:
-    if connector_id is None:
-        return {
-            "status": "skipped",
-            "reason": "Datasource connector is unavailable.",
-        }
-
-    normalized_category = normalize_investigation_analysis_category(category)
-    normalized_missing = normalize_fingerprint_text(missing_information)
-    normalized_analysis = normalize_fingerprint_text(required_analysis)
-    result_signature = investigation_analysis_result_signature(analysis_response)
-    fingerprint = investigation_analysis_fingerprint(
-        category=normalized_category,
-        missing_information=normalized_missing,
-        required_analysis=normalized_analysis,
-        result_signature=result_signature,
-    )
-
-    try:
-        session = create_session()
-    except SQLAlchemyError:
-        return {
-            "status": "skipped",
-            "reason": "Metadata store is unavailable.",
-            "fingerprint": fingerprint,
-        }
-
-    error_category = f"investigation.analysis.{normalized_category}"
-    failed_identifier = truncate_text(normalized_missing, 255)
-
-    try:
-        existing = session.scalar(
-            select(BusinessLogicSuggestion).where(
-                BusinessLogicSuggestion.connector_id == connector_id,
-                BusinessLogicSuggestion.error_category == error_category,
-                BusinessLogicSuggestion.failed_identifier == failed_identifier,
-                BusinessLogicSuggestion.repaired_identifier == fingerprint,
-            )
-        )
-        similar_existing = session.scalars(
-            select(BusinessLogicSuggestion).where(
-                BusinessLogicSuggestion.connector_id == connector_id,
-                BusinessLogicSuggestion.error_category == error_category,
-                BusinessLogicSuggestion.failed_identifier == failed_identifier,
-                BusinessLogicSuggestion.repaired_identifier != fingerprint,
-            )
-        ).all()
-
-        if existing is not None:
-            return {
-                "status": "existing",
-                "suggestion_id": existing.id,
-                "fingerprint": fingerprint,
-                "similar_existing_suggestion_ids": [
-                    item.id for item in similar_existing
-                ],
-            }
-
-        compact_result = compact_investigation_analysis_result(analysis_response)
-        rule_text = (
-            f"[{normalized_category}] {missing_information.strip()} => {compact_result}"
-        )
-        suggestion = BusinessLogicSuggestion(
-            connector_id=connector_id,
-            source_audit_id=source_audit_id,
-            status=BUSINESS_LOGIC_STATUS_PENDING,
-            safety=BUSINESS_LOGIC_SAFETY_REVIEW,
-            enabled=False,
-            error_category=error_category,
-            title=truncate_text(
-                f"Investigation analysis: {missing_information.strip()}",
-                255,
-            ),
-            rule_text=rule_text,
-            terms_json=json_dumps(
-                build_investigation_analysis_terms(
-                    missing_information,
-                    required_analysis,
-                    compact_result,
-                )
-            ),
-            join_hints_json=json_dumps([]),
-            failed_identifier=failed_identifier,
-            repaired_identifier=fingerprint,
-            confidence=coerce_confidence(
-                analysis_response.metadata.get("confidence")
-            ),
-            updated_by=actor,
-        )
-        session.add(suggestion)
-        session.commit()
-        return {
-            "status": "created",
-            "suggestion_id": suggestion.id,
-            "fingerprint": fingerprint,
-            "similar_existing_suggestion_ids": [
-                item.id for item in similar_existing
-            ],
-        }
-    except SQLAlchemyError:
-        session.rollback()
-        return {
-            "status": "skipped",
-            "reason": "Could not store investigation analysis business logic.",
-            "fingerprint": fingerprint,
-        }
-    finally:
-        session.close()
-
-
-def normalize_investigation_analysis_category(value: str) -> str:
-    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
-    return normalized if normalized in INVESTIGATION_ANALYSIS_CATEGORIES else "unknown"
-
-
-def normalize_fingerprint_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value.strip().lower())
-
-
-def investigation_analysis_result_signature(response: QueryResponse) -> dict[str, Any]:
-    sorted_rows = sorted(
-        response.rows,
-        key=lambda item: json_dumps(item),
-    )
-    return {
-        "row_count": len(response.rows),
-        "rows": sorted_rows[:50],
-        "answer": response.answer if not response.rows else "",
-    }
-
-
-def investigation_analysis_fingerprint(
-    category: str,
-    missing_information: str,
-    required_analysis: str,
-    result_signature: dict[str, Any],
-) -> str:
-    payload = {
-        "category": category,
-        "missing_information": missing_information,
-        "required_analysis": required_analysis,
-        "result_signature": result_signature,
-    }
-    return hashlib.sha256(json_dumps(payload).encode("utf-8")).hexdigest()
-
-
-def compact_investigation_analysis_result(response: QueryResponse) -> str:
-    if response.rows:
-        return truncate_text(json_dumps(response.rows[:20]), 2_000)
-
-    if response.answer:
-        return truncate_text(response.answer, 2_000)
-
-    return "no rows"
-
-
-def build_investigation_analysis_terms(
-    missing_information: str,
-    required_analysis: str,
-    compact_result: str,
-) -> list[str]:
-    terms: set[str] = set()
-    for value in (missing_information, required_analysis, compact_result):
-        for token in re.findall(r"[A-Za-zÀ-ž0-9_]{4,}", value.lower()):
-            terms.add(token)
-
-    return sorted(terms)
-
-
 def record_candidate_business_knowledge(
     connector_id: int | None,
     knowledge_items: list[dict[str, Any]],
@@ -1887,17 +1779,11 @@ def list_admin_audit_logs(session: Session, limit: int = 100) -> list[AdminAudit
 
 
 def list_prompt_templates(session: Session) -> list[PromptTemplate]:
-    return list(
-        session.scalars(
-            select(PromptTemplate).order_by(PromptTemplate.prompt_key)
-        )
-    )
+    return list(session.scalars(select(PromptTemplate).order_by(PromptTemplate.prompt_key)))
 
 
 def get_prompt_template(session: Session, prompt_key: str) -> PromptTemplate | None:
-    return session.scalar(
-        select(PromptTemplate).where(PromptTemplate.prompt_key == prompt_key)
-    )
+    return session.scalar(select(PromptTemplate).where(PromptTemplate.prompt_key == prompt_key))
 
 
 def get_active_prompt_template_safe(prompt_key: str) -> PromptTemplate | None:
@@ -1951,9 +1837,7 @@ def get_datasource_connector_by_key(
 
 
 def get_active_datasource_connector(session: Session) -> DatasourceConnector | None:
-    return session.scalar(
-        select(DatasourceConnector).where(DatasourceConnector.active.is_(True))
-    )
+    return session.scalar(select(DatasourceConnector).where(DatasourceConnector.active.is_(True)))
 
 
 def get_active_datasource_connector_safe() -> DatasourceConnector | None:
@@ -2020,9 +1904,7 @@ def introspect_datasource_connector(
         .introspect()
     )
     existing = get_datasource_schema_cache(session, connector.id)
-    existing_settings = (
-        json_loads(existing.table_settings_json) if existing is not None else {}
-    )
+    existing_settings = json_loads(existing.table_settings_json) if existing is not None else {}
     table_settings = build_table_settings(schema, existing_settings)
     formatted_schema = format_schema_for_prompt(schema, table_settings)
     schema_json = json_dumps(schema.model_dump())
@@ -2187,19 +2069,18 @@ def list_overview_widgets(session: Session) -> list[OverviewWidget]:
 def list_all_overview_widgets(session: Session) -> list[OverviewWidget]:
     return list(
         session.scalars(
-            select(OverviewWidget)
-            .order_by(OverviewWidget.position.asc(), OverviewWidget.id.asc())
+            select(OverviewWidget).order_by(OverviewWidget.position.asc(), OverviewWidget.id.asc())
         )
     )
 
 
 def get_overview_widget(session: Session, widget_key: str) -> OverviewWidget | None:
-    return session.scalar(
-        select(OverviewWidget).where(OverviewWidget.widget_key == widget_key)
-    )
+    return session.scalar(select(OverviewWidget).where(OverviewWidget.widget_key == widget_key))
 
 
-def get_datasource_schema_context_safe() -> tuple[DatasourceConnector, DatasourceSchemaCache] | None:
+def get_datasource_schema_context_safe() -> (
+    tuple[DatasourceConnector, DatasourceSchemaCache] | None
+):
     try:
         session = create_session()
     except SQLAlchemyError:

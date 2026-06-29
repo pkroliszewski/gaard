@@ -45,6 +45,11 @@ class FailingInterpreter:
         raise LlmProviderError("LLM provider request failed.")
 
 
+class FailingClassifier:
+    def classify(self, request: QueryRequest, answer: str):
+        raise AssertionError("classifier should not be called")
+
+
 def test_query_pipeline_wraps_llm_provider_error_during_sql_generation() -> None:
     pipeline = QueryPipeline(sql_generator=FailingSqlGenerator())
 
@@ -69,3 +74,22 @@ def test_query_pipeline_wraps_llm_provider_error_during_result_interpretation() 
     assert exc_info.value.code == "LLM_PROVIDER_ERROR"
     assert exc_info.value.phase == "result_interpretation"
     assert exc_info.value.sql == "SELECT 1 AS value"
+
+
+def test_query_pipeline_can_return_raw_sql_output_without_interpretation() -> None:
+    pipeline = QueryPipeline(
+        sql_generator=StaticSqlGenerator(),
+        executor=StaticExecutor(),
+        interpreter=FailingInterpreter(),
+        classifier=FailingClassifier(),
+    )
+
+    response = pipeline.handle(QueryRequest(question="Inspect raw value", interpret=False))
+
+    assert response.answer == ""
+    assert response.sql == "SELECT 1 AS value"
+    assert response.rows == [{"value": 1}]
+    assert response.metadata["result_interpretation_mode"] == "none"
+    assert response.metadata["output_classification_mode"] == "none"
+    assert response.metadata["output_classification"] == "unknown"
+    assert response.metadata["raw_sql_output"] is True

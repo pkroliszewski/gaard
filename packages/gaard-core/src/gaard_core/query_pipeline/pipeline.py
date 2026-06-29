@@ -73,6 +73,26 @@ class QueryPipeline:
         self.sql_validator.validate(generated_sql.sql)
 
         result = self.executor.execute(generated_sql.sql)
+        if not request.interpret:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            return QueryResponse(
+                question=request.question,
+                answer="",
+                sql=generated_sql.sql,
+                rows=result.rows,
+                metadata={
+                    "duration_ms": duration_ms,
+                    "datasource_id": request.datasource_id,
+                    "user_id": request.user_id,
+                    "confidence": generated_sql.confidence,
+                    "assumptions": generated_sql.assumptions,
+                    "sql_generation_mode": self.sql_generation_mode,
+                    "result_interpretation_mode": "none",
+                    "output_classification_mode": "none",
+                    "output_classification": OutputClassification.UNKNOWN.value,
+                    "raw_sql_output": True,
+                },
+            )
 
         try:
             answer = self.interpreter.interpret(

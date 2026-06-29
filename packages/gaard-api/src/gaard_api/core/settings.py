@@ -49,6 +49,16 @@ class Settings:
     gaard_query_timeout_seconds: int = field(
         default_factory=lambda: env_int_value("GAARD_QUERY_TIMEOUT_SECONDS", 30)
     )
+    gaard_analysis_loop_count: int = field(
+        default_factory=lambda: env_int_value("GAARD_ANALYSIS_LOOP_COUNT", 5)
+    )
+    gaard_analysis_auto_enable_business_logic: bool = field(
+        default_factory=lambda: env_value(
+            "GAARD_ANALYSIS_AUTO_ENABLE_BUSINESS_LOGIC",
+            "false",
+        ).lower()
+        in {"1", "true", "yes", "on"}
+    )
 
     gaard_schema_cache_ttl_seconds: int = field(
         default_factory=lambda: env_int_value("GAARD_SCHEMA_CACHE_TTL_SECONDS", 300)
@@ -68,12 +78,6 @@ class Settings:
     )
     gaard_output_classification_mode: str = field(
         default_factory=lambda: env_value("GAARD_OUTPUT_CLASSIFICATION_MODE", "auto")
-    )
-    gaard_investigation_mode: str = field(
-        default_factory=lambda: env_value("GAARD_INVESTIGATION_MODE", "llm")
-    )
-    gaard_investigation_ambiguity_mode: str = field(
-        default_factory=lambda: env_value("GAARD_INVESTIGATION_AMBIGUITY_MODE", "clarify")
     )
 
     gaard_llm_provider: str = field(
@@ -95,9 +99,7 @@ class Settings:
         default_factory=lambda: env_int_value("GAARD_LLM_TIMEOUT_SECONDS", 60)
     )
 
-    gaard_sql_dialect: str = field(
-        default_factory=lambda: env_value("GAARD_SQL_DIALECT", "sqlite")
-    )
+    gaard_sql_dialect: str = field(default_factory=lambda: env_value("GAARD_SQL_DIALECT", "sqlite"))
 
 
 settings = Settings()

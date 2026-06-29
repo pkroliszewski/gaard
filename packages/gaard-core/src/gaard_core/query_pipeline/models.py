@@ -19,11 +19,6 @@ class QueryIntentDecision(StrEnum):
     AMBIGUOUS = "ambiguous"
 
 
-class QueryMode(StrEnum):
-    SQL = "sql"
-    INVESTIGATION = "investigation"
-
-
 class QueryIntentClassification(BaseModel):
     decision: QueryIntentDecision = QueryIntentDecision.AMBIGUOUS
     confidence: float = 0.0
@@ -35,7 +30,7 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     datasource_id: str = "default"
     user_id: str = "local-admin"
-    mode: QueryMode = QueryMode.SQL
+    interpret: bool = True
 
 
 class GeneratedSql(BaseModel):

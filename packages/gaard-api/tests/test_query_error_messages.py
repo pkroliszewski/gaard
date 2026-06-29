@@ -8,7 +8,7 @@ from gaard_api.api.v1.query import (
 )
 
 
-def test_disallowed_column_validation_error_uses_allowlist_message() -> None:
+def test_disallowed_column_error_uses_allowlist_message() -> None:
     response = build_access_refusal_response(
         QueryRequest(question="show a restricted column"),
         ACCESS_ERROR_SQL_VALIDATION,

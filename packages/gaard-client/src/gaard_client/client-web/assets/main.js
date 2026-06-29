@@ -1,30 +1,21 @@
-const app = document.querySelector("#app");
-
-const params = new URLSearchParams(window.location.search);
-const configuredBackendUrl = (
-    params.get("backendUrl") ||
-    params.get("apiUrl") ||
-    window.GAARD_CLIENT_CONFIG?.backendUrl ||
-    "http://localhost:8000"
-).replace(/\/+$/, "");
-
-const state = {
-    backendUrl: configuredBackendUrl,
-    queryMode: normalizeQueryMode(params.get("mode")),
-    messages: [],
-    nextMessageId: 1,
-    pending: false,
-    error: ""
+// src/main.ts
+var app = document.querySelector("#app");
+var params = new URLSearchParams(window.location.search);
+var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || window.GAARD_CLIENT_CONFIG?.backendUrl || "http://localhost:8000").replace(/\/+$/, "");
+var state = {
+  backendUrl: configuredBackendUrl,
+  queryMode: normalizeQueryMode(params.get("mode")),
+  messages: [],
+  nextMessageId: 1,
+  pending: false,
+  error: ""
 };
-
 function escapeHtml(value) {
-    return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
-
 function render(options = {}) {
-    if (!app) return;
-
-    app.innerHTML = `
+  if (!app) return;
+  app.innerHTML = `
     <main class="shell">
       <header class="header">
         <h1>GAARD - Governed AI Access to Relational Data</h1>
@@ -39,9 +30,9 @@ function render(options = {}) {
             <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
             <span>SQL</span>
           </label>
-          <label class="${state.queryMode === "investigation" ? "active" : ""}">
-            <input type="radio" name="mode" value="investigation" ${state.queryMode === "investigation" ? "checked" : ""}>
-            <span>Investigation</span>
+          <label class="${state.queryMode === "analysis" ? "active" : ""}">
+            <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
+            <span>Analysis</span>
           </label>
         </fieldset>
         <textarea id="question-input" name="question" placeholder="Ask a question" rows="1" ${state.pending ? "disabled" : ""}></textarea>
@@ -53,47 +44,46 @@ function render(options = {}) {
         </button>
       </form>
     </main>`;
-
-    document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
-    document.querySelectorAll('input[name="mode"]').forEach((input) => {
-        input.addEventListener("change", handleModeChange);
-    });
-    document.querySelectorAll("[data-toggle-data]").forEach((button) => {
-        button.addEventListener("click", toggleDataTable);
-    });
-    document.querySelectorAll("[data-retry-question]").forEach((button) => {
-        button.addEventListener("click", retryQuestion);
-    });
-    document.querySelectorAll("[data-save-widget]").forEach((button) => {
-        button.addEventListener("click", saveWidgetFromMessage);
-    });
-    const input = document.querySelector("#question-input");
-    input?.addEventListener("keydown", handleQuestionKeydown);
-    input?.focus();
-
-    if (options.scrollToLatest) {
-        scrollToLatest();
-    }
+  document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
+  document.querySelectorAll('input[name="mode"]').forEach((input2) => {
+    input2.addEventListener("change", handleModeChange);
+  });
+  document.querySelectorAll("[data-toggle-data]").forEach((button) => {
+    button.addEventListener("click", toggleDataTable);
+  });
+  document.querySelectorAll("[data-retry-question]").forEach((button) => {
+    button.addEventListener("click", retryQuestion);
+  });
+  document.querySelectorAll("[data-save-widget]").forEach((button) => {
+    button.addEventListener("click", saveWidgetFromMessage);
+  });
+  document.querySelectorAll("[data-analysis-reply-form]").forEach((form) => {
+    form.addEventListener("submit", submitAnalysisReply);
+  });
+  document.querySelectorAll("[data-analysis-progress]").forEach((details) => {
+    details.addEventListener("toggle", toggleAnalysisProgress);
+  });
+  const input = document.querySelector("#question-input");
+  input?.addEventListener("keydown", handleQuestionKeydown);
+  input?.focus();
+  if (options.scrollToLatest) {
+    scrollToLatest();
+  }
 }
-
 function renderMessage(message) {
-    const rows = getRows(message.response);
-    const meta = message.status === "ok" ? renderMeta(message, rows) : "";
-    const answer = message.status === "pending"
-        ? "Processing..."
-        : message.status === "error"
-            ? message.error
-            : message.response?.answer || "";
-    const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
-    const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
-    const saveNotice = renderSaveNotice(message);
-    const progress = message.status === "pending" && message.mode === "investigation" ? renderInvestigationProgress(message) : "";
-
-    return `
+  const rows = getRows(message.response);
+  const meta = message.status === "ok" ? renderMeta(message, rows) : "";
+  const answer = message.status === "pending" ? "Processing..." : message.status === "waiting" ? "Waiting for your answer." : message.status === "error" ? message.error : message.response?.answer || "";
+  const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
+  const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
+  const saveNotice = renderSaveNotice(message);
+  const progress = message.mode === "analysis" ? renderAnalysisProgress(message) : "";
+  const analysisReply = message.status === "waiting" ? renderAnalysisReply(message) : "";
+  return `
     <article class="exchange ${message.status}">
       <div class="exchange-top">
         <div class="question">
-          <span>Question · ${escapeHtml(formatMode(message.mode))}</span>
+          <span>Question \xB7 ${escapeHtml(formatMode(message.mode))}</span>
           <p>${escapeHtml(message.question)}</p>
         </div>
         ${renderMessageActions(message)}
@@ -103,22 +93,17 @@ function renderMessage(message) {
         <p>${escapeHtml(answer)}</p>
       </div>
       ${progress}
+      ${analysisReply}
       ${mockWarning}
       ${saveNotice}
       ${meta}
       ${dataTable}
     </article>`;
 }
-
 function renderMessageActions(message) {
-    const saveDisabled = state.pending || message.saveStatus === "saving" || message.saveStatus === "saved";
-    const saveTitle = message.saveStatus === "saved"
-        ? "Saved as widget"
-        : message.saveStatus === "saving"
-            ? "Saving widget"
-            : "Save as widget";
-
-    return `
+  const saveDisabled = state.pending || message.saveStatus === "saving" || message.saveStatus === "saved";
+  const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
+  return `
     <div class="message-actions">
       <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -136,77 +121,84 @@ function renderMessageActions(message) {
         </button>` : ""}
     </div>`;
 }
-
 function canSaveWidget(message) {
-    return message.status === "ok" && Boolean(message.response?.sql?.trim());
+  return message.status === "ok" && Boolean(message.response?.sql?.trim());
 }
-
 function renderSaveNotice(message) {
-    if (message.saveStatus === "saved") {
-        return `<div class="save-notice success" role="status">Saved as inactive widget.</div>`;
-    }
-
-    if (message.saveStatus === "error") {
-        return `<div class="save-notice error" role="alert">${escapeHtml(message.saveError || "Widget could not be saved.")}</div>`;
-    }
-
+  if (message.saveStatus === "saved") {
+    return `<div class="save-notice success" role="status">Saved as inactive widget.</div>`;
+  }
+  if (message.saveStatus === "error") {
+    return `<div class="save-notice error" role="alert">${escapeHtml(message.saveError || "Widget could not be saved.")}</div>`;
+  }
+  return "";
+}
+function renderAnalysisProgress(message) {
+  if (!message.progress.length) {
     return "";
+  }
+  const latest = message.progress[message.progress.length - 1];
+  return `
+    <details class="analysis-log" data-analysis-progress="${message.id}" ${message.progressOpen ? "open" : ""}>
+      <summary>
+        <span>Analysis</span>
+        <strong>${escapeHtml(latest.title)}</strong>
+        ${latest.detail ? `<small>${escapeHtml(latest.detail)}</small>` : ""}
+      </summary>
+      <ol class="analysis-progress" aria-label="Analysis progress">
+        ${message.progress.map((update, index) => `
+          <li class="${index === message.progress.length - 1 ? "active" : "done"}">
+            <div>
+              <p>${escapeHtml(update.title)}</p>
+              ${update.detail ? `<p class="progress-detail">${escapeHtml(update.detail)}</p>` : ""}
+              ${renderProgressDecisions(update.items)}
+            </div>
+          </li>`).join("")}
+      </ol>
+    </details>`;
 }
-
-function renderInvestigationProgress(message) {
-    if (!message.progress.length) {
-        return "";
-    }
-
-    return `
-    <ol class="investigation-progress" aria-label="Investigation progress">
-      ${message.progress.map((update, index) => `
-        <li class="${index === message.progress.length - 1 ? "active" : "done"}">
-          <div>
-            <p>${escapeHtml(update.data_question)}</p>
-            ${renderProgressDecisions(update.decisions)}
-          </div>
-        </li>`).join("")}
-    </ol>`;
+function renderAnalysisReply(message) {
+  return `
+    <form class="analysis-reply" data-analysis-reply-form="${message.id}">
+      <div class="analysis-reply-question">${escapeHtml(message.userQuestion || "GAARD needs a clarification.")}</div>
+      <label>
+        <span>Your answer</span>
+        <textarea name="reply" rows="2" placeholder="Answer GAARD" ${state.pending ? "disabled" : ""}></textarea>
+      </label>
+      <button type="submit" ${state.pending ? "disabled" : ""}>Continue analysis</button>
+    </form>`;
 }
-
 function renderProgressDecisions(decisions) {
-    const visible = decisions.filter((decision) => decision.trim()).slice(0, 3);
-
-    if (!visible.length) {
-        return "";
-    }
-
-    return `<ul>${visible.map((decision) => `<li>${escapeHtml(decision)}</li>`).join("")}</ul>`;
+  const visible = decisions.filter((decision) => decision.trim()).slice(0, 3);
+  if (!visible.length) {
+    return "";
+  }
+  return `<ul>${visible.map((decision) => `<li>${escapeHtml(decision)}</li>`).join("")}</ul>`;
 }
-
 function renderMockWarning(metadata) {
-    const mockModes = [
-        ["SQL generation", metadata?.sql_generation_mode],
-        ["Result interpretation", metadata?.result_interpretation_mode],
-        ["Output classification", metadata?.output_classification_mode]
-    ].filter(([, mode]) => mode === "mock").map(([label]) => label);
-
-    if (!mockModes.length) {
-        return "";
-    }
-
-    return `
+  const mockModes = [
+    ["SQL generation", metadata?.sql_generation_mode],
+    ["Result interpretation", metadata?.result_interpretation_mode],
+    ["Output classification", metadata?.output_classification_mode]
+  ].filter(([, mode]) => mode === "mock").map(([label]) => label);
+  if (!mockModes.length) {
+    return "";
+  }
+  return `
     <div class="mock-warning" role="status">
       This response used mock data processing: ${escapeHtml(mockModes.join(", "))}.
     </div>`;
 }
-
 function renderMeta(message, rows) {
-    const metadata = message.response?.metadata || {};
-    const buttonText = message.dataOpen ? "Hide data" : `Data (${rows.length})`;
-
-    return `
+  const metadata = message.response?.metadata || {};
+  const buttonText = message.dataOpen ? "Hide data" : `Data (${rows.length})`;
+  const mode = metadata.analysis_mode === "analysis" ? "analysis" : metadata.query_mode || message.mode;
+  return `
     <div class="meta-row">
       <dl class="meta">
         <div><dt>Time</dt><dd>${escapeHtml(formatDuration(metadata.duration_ms))}</dd></div>
         <div><dt>Datasource</dt><dd>${escapeHtml(metadata.datasource_id || "-")}</dd></div>
-        <div><dt>Mode</dt><dd>${escapeHtml(formatMode(metadata.query_mode || message.mode))}</dd></div>
+        <div><dt>Mode</dt><dd>${escapeHtml(formatMode(mode))}</dd></div>
         <div><dt>Output</dt><dd>${escapeHtml(metadata.output_classification || "unknown")}</dd></div>
       </dl>
       <button class="data-toggle" type="button" data-toggle-data="${message.id}" aria-expanded="${message.dataOpen ? "true" : "false"}">
@@ -214,334 +206,425 @@ function renderMeta(message, rows) {
       </button>
     </div>`;
 }
-
 function formatDuration(value) {
-    const numeric = Number(value);
-
-    if (!Number.isFinite(numeric)) {
-        return "-";
-    }
-
-    return `${numeric} ms`;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  return `${numeric} ms`;
 }
-
 function formatMode(value) {
-    return value === "investigation" ? "Investigation" : "SQL";
+  return value === "analysis" ? "Analysis" : "SQL";
 }
-
 function normalizeQueryMode(value) {
-    return value === "investigation" ? "investigation" : "sql";
+  return value === "analysis" ? "analysis" : "sql";
 }
-
 function handleModeChange(event) {
-    state.queryMode = normalizeQueryMode(event.currentTarget.value);
-    render();
+  state.queryMode = normalizeQueryMode(event.currentTarget.value);
+  render();
 }
-
 function handleQuestionKeydown(event) {
-    if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        event.currentTarget.form?.requestSubmit();
-    }
-}
-
-function toggleDataTable(event) {
-    const id = Number(event.currentTarget.dataset.toggleData);
-    const message = state.messages.find((item) => item.id === id);
-
-    if (!message) return;
-
-    message.dataOpen = !message.dataOpen;
-    const latestMessage = state.messages[state.messages.length - 1];
-
-    render({
-        scrollToLatest: message.dataOpen && latestMessage?.id === message.id
-    });
-}
-
-function retryQuestion(event) {
-    const id = Number(event.currentTarget.dataset.retryQuestion);
-    const message = state.messages.find((item) => item.id === id);
-
-    if (!message || state.pending) return;
-
-    state.queryMode = message.mode;
-    render();
-    const input = document.querySelector("#question-input");
-
-    if (!input || input.disabled) return;
-
-    input.value = message.question;
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-}
-
-async function saveWidgetFromMessage(event) {
-    const id = Number(event.currentTarget.dataset.saveWidget);
-    const message = state.messages.find((item) => item.id === id);
-    const sql = message?.response?.sql?.trim() || "";
-
-    if (!message || !sql || message.saveStatus === "saving" || message.saveStatus === "saved") {
-        return;
-    }
-
-    message.saveStatus = "saving";
-    message.saveError = "";
-    render();
-
-    try {
-        const response = await fetch("/api/widgets/from-query", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                label: buildWidgetLabel(message.question),
-                widget_type: inferWidgetType(getRows(message.response)),
-                datasource_key: message.response?.metadata?.datasource_id || "default",
-                question: message.question,
-                sql,
-                result_mode: "data",
-                backend_url: state.backendUrl
-            })
-        });
-        const payload = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-            throw new Error(extractErrorMessage(payload));
-        }
-
-        message.saveStatus = "saved";
-    } catch (error) {
-        message.saveStatus = "error";
-        message.saveError = error.message || "Widget could not be saved.";
-    } finally {
-        render();
-    }
-}
-
-function buildWidgetLabel(question) {
-    const compact = question.replace(/\s+/g, " ").trim();
-
-    return compact.length > 64 ? `${compact.slice(0, 61)}...` : compact || "Saved query";
-}
-
-function inferWidgetType(rows) {
-    if (rows.length === 1 && Object.keys(rows[0] || {}).length === 1) {
-        return "scalar";
-    }
-
-    return "table";
-}
-
-function getSelectedMode(form) {
-    const value = new FormData(form).get("mode");
-
-    return normalizeQueryMode(value);
-}
-
-async function submitQuestion(event) {
+  if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-
-    if (state.pending) return;
-
-    const input = event.currentTarget.elements.namedItem("question");
-    const question = String(input?.value || "").trim();
-    const mode = getSelectedMode(event.currentTarget);
-
-    if (!question) return;
-
-    input.value = "";
-    state.error = "";
-    state.pending = true;
-    const message = {
-        id: state.nextMessageId,
-        question,
-        mode,
-        status: "pending",
-        response: null,
-        error: "",
-        dataOpen: false,
-        saveStatus: "idle",
-        saveError: "",
-        progress: []
-    };
-    state.nextMessageId += 1;
-    state.messages.push(message);
-    render({ scrollToLatest: true });
-
-    try {
-        if (mode === "investigation") {
-            await submitInvestigationQuestion(message, question, mode);
-        } else {
-            const response = await fetch("/api/query", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    question,
-                    mode,
-                    backend_url: state.backendUrl
-                })
-            });
-            const payload = await response.json().catch(() => ({}));
-
-            if (!response.ok) {
-                throw new Error(extractErrorMessage(payload));
-            }
-
-            message.status = "ok";
-            message.response = payload;
-        }
-    } catch (error) {
-        message.status = "error";
-        message.error = error.message || "Request failed.";
-    } finally {
-        state.pending = false;
-        render({ scrollToLatest: true });
-    }
+    event.currentTarget.form?.requestSubmit();
+  }
 }
-
-async function submitInvestigationQuestion(message, question, mode) {
-    const response = await fetch("/api/query/stream", {
+function toggleDataTable(event) {
+  const id = Number(event.currentTarget.dataset.toggleData);
+  const message = state.messages.find((item) => item.id === id);
+  if (!message) return;
+  message.dataOpen = !message.dataOpen;
+  const latestMessage = state.messages[state.messages.length - 1];
+  render({
+    scrollToLatest: message.dataOpen && latestMessage?.id === message.id
+  });
+}
+function toggleAnalysisProgress(event) {
+  const details = event.currentTarget;
+  const id = Number(details.dataset.analysisProgress);
+  const message = state.messages.find((item) => item.id === id);
+  if (message) {
+    message.progressOpen = details.open;
+  }
+}
+function retryQuestion(event) {
+  const id = Number(event.currentTarget.dataset.retryQuestion);
+  const message = state.messages.find((item) => item.id === id);
+  if (!message || state.pending) return;
+  state.queryMode = message.mode;
+  render();
+  const refreshedInput = document.querySelector("#question-input");
+  if (!refreshedInput || refreshedInput.disabled) return;
+  refreshedInput.value = message.question;
+  refreshedInput.focus();
+  refreshedInput.setSelectionRange(refreshedInput.value.length, refreshedInput.value.length);
+}
+async function saveWidgetFromMessage(event) {
+  const id = Number(event.currentTarget.dataset.saveWidget);
+  const message = state.messages.find((item) => item.id === id);
+  const sql = message?.response?.sql?.trim() || "";
+  if (!message || !sql || message.saveStatus === "saving" || message.saveStatus === "saved") {
+    return;
+  }
+  message.saveStatus = "saving";
+  message.saveError = "";
+  render();
+  try {
+    const response = await fetch("/api/widgets/from-query", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        label: buildWidgetLabel(message.question),
+        widget_type: inferWidgetType(getRows(message.response)),
+        datasource_key: message.response?.metadata?.datasource_id || "default",
+        question: message.question,
+        sql,
+        result_mode: "data",
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(extractErrorMessage(payload));
+    }
+    message.saveStatus = "saved";
+  } catch (error) {
+    message.saveStatus = "error";
+    message.saveError = error.message || "Widget could not be saved.";
+  } finally {
+    render();
+  }
+}
+function buildWidgetLabel(question) {
+  const compact = question.replace(/\s+/g, " ").trim();
+  return compact.length > 64 ? `${compact.slice(0, 61)}...` : compact || "Saved query";
+}
+function inferWidgetType(rows) {
+  if (rows.length === 1 && Object.keys(rows[0] || {}).length === 1) {
+    return "scalar";
+  }
+  return "table";
+}
+function getSelectedMode(form) {
+  const value = new FormData(form).get("mode");
+  return normalizeQueryMode(value);
+}
+async function submitQuestion(event) {
+  event.preventDefault();
+  if (state.pending) return;
+  const form = event.currentTarget;
+  const input = form.elements.namedItem("question");
+  const question = String(input?.value || "").trim();
+  const mode = getSelectedMode(form);
+  if (!question) return;
+  if (input) input.value = "";
+  state.error = "";
+  state.pending = true;
+  const message = {
+    id: state.nextMessageId,
+    question,
+    mode,
+    status: "pending",
+    response: null,
+    error: "",
+    dataOpen: false,
+    saveStatus: "idle",
+    saveError: "",
+    progress: [],
+    progressOpen: false,
+    analysisSessionId: "",
+    userQuestion: ""
+  };
+  state.nextMessageId += 1;
+  state.messages.push(message);
+  render({ scrollToLatest: true });
+  try {
+    if (mode === "analysis") {
+      await submitAnalysisQuestion(message, question);
+    } else {
+      const response = await fetch("/api/query", {
         method: "POST",
         headers: {
-            "Content-Type": "application/json"
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-            question,
-            mode,
-            backend_url: state.backendUrl
+          question,
+          mode,
+          backend_url: state.backendUrl
         })
-    });
-
-    if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
         throw new Error(extractErrorMessage(payload));
+      }
+      message.status = "ok";
+      message.response = payload;
     }
-
-    if (!response.body) {
-        throw new Error("Streaming response is not available.");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalReceived = false;
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-            finalReceived = handleStreamLine(message, line) || finalReceived;
-        }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) {
-        finalReceived = handleStreamLine(message, buffer) || finalReceived;
-    }
-
-    if (!finalReceived) {
-        throw new Error("Investigation stream ended without a final response.");
-    }
+  } catch (error) {
+    message.status = "error";
+    message.error = error.message || "Request failed.";
+  } finally {
+    state.pending = false;
+    render({ scrollToLatest: true });
+  }
 }
-
-function handleStreamLine(message, line) {
-    const trimmed = line.trim();
-
-    if (!trimmed) return false;
-
-    const payload = JSON.parse(trimmed);
-
-    if (payload?.error?.message) {
-        throw new Error(payload.error.message);
+async function submitAnalysisQuestion(message, question) {
+  const response = await fetch("/api/analysis/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      question,
+      backend_url: state.backendUrl
+    })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(extractErrorMessage(payload));
+  }
+  await readAnalysisStream(message, response);
+}
+async function submitAnalysisReply(event) {
+  event.preventDefault();
+  if (state.pending) return;
+  const form = event.currentTarget;
+  const id = Number(form.dataset.analysisReplyForm);
+  const message = state.messages.find((item) => item.id === id);
+  const input = form.elements.namedItem("reply");
+  const reply = String(input?.value || "").trim();
+  if (!message || !message.analysisSessionId || !reply) return;
+  state.pending = true;
+  message.status = "pending";
+  message.userQuestion = "";
+  render({ scrollToLatest: true });
+  try {
+    await continueAnalysis(message, reply);
+  } catch (error) {
+    message.status = "error";
+    message.error = error.message || "Request failed.";
+  } finally {
+    state.pending = false;
+    render({ scrollToLatest: true });
+  }
+}
+async function continueAnalysis(message, reply) {
+  const response = await fetch(`/api/analysis/${encodeURIComponent(message.analysisSessionId)}/messages/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      message: reply,
+      backend_url: state.backendUrl
+    })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(extractErrorMessage(payload));
+  }
+  await readAnalysisStream(message, response);
+}
+async function readAnalysisStream(message, response) {
+  if (!response.body) {
+    throw new Error("Streaming response is not available.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalReceived = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      finalReceived = handleAnalysisStreamLine(message, line) || finalReceived;
     }
-
-    if (payload?.final) {
-        message.status = "ok";
-        message.response = payload.final;
-        render({ scrollToLatest: true });
-        return true;
-    }
-
-    if (isProgressUpdate(payload)) {
-        message.progress = [
-            ...message.progress,
-            payload
-        ];
-        render({ scrollToLatest: true });
-    }
-
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    finalReceived = handleAnalysisStreamLine(message, buffer) || finalReceived;
+  }
+  if (!finalReceived && message.status !== "waiting") {
+    throw new Error("Analysis stream ended without a final response.");
+  }
+}
+function handleAnalysisStreamLine(message, line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  const payload = JSON.parse(trimmed);
+  if (payload?.error?.message) {
+    throw new Error(payload.error.message);
+  }
+  if (payload?.final) {
+    message.status = "ok";
+    message.response = payload.final;
+    message.dataOpen = message.mode === "analysis" && getRows(payload.final).length > 0;
+    message.userQuestion = "";
+    render({ scrollToLatest: true });
+    return true;
+  }
+  if (payload?.session_id && !message.analysisSessionId) {
+    message.analysisSessionId = String(payload.session_id);
+  }
+  if (payload?.event === "user_question") {
+    const question = extractUserQuestion(payload);
+    message.status = "waiting";
+    message.userQuestion = question;
+    message.progress = [
+      ...message.progress,
+      {
+        event: "user_question",
+        title: "GAARD needs your clarification",
+        detail: question,
+        items: []
+      }
+    ];
+    render({ scrollToLatest: true });
     return false;
+  }
+  const progress = progressFromAnalysisEvent(payload);
+  if (progress) {
+    message.progress = [...message.progress, progress];
+    render({ scrollToLatest: true });
+  }
+  return false;
 }
-
-function isProgressUpdate(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-        return false;
-    }
-
-    return (typeof value.data_question === "string" &&
-        Array.isArray(value.decisions) &&
-        value.decisions.every((decision) => typeof decision === "string"));
+function firstText(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
 }
-
+function extractUserQuestion(payload) {
+  const userQuestion = payload?.user_question;
+  return firstText(
+    typeof userQuestion === "string" ? userQuestion : "",
+    userQuestion?.question,
+    userQuestion?.message,
+    userQuestion?.visible_question,
+    payload?.question,
+    payload?.decision?.user_question,
+    payload?.decision?.visible_question,
+    "GAARD needs a clarification."
+  );
+}
+function progressFromAnalysisEvent(payload) {
+  const event = String(payload?.event || "");
+  if (event === "analysis_step") {
+    const step = payload.analysis_step || {};
+    return {
+      event,
+      title: step.visible_question || "GAARD is checking the next analysis step.",
+      detail: step.visible_reasoning || "",
+      items: [`Iteration ${step.iteration || payload.sequence || ""}`].filter(Boolean)
+    };
+  }
+  if (event === "decision") {
+    const decision = payload.decision || {};
+    return {
+      event,
+      title: `Decision: ${formatAnalysisAction(decision.action)}`,
+      detail: decision.visible_reasoning || decision.visible_question || "",
+      items: [
+        decision.user_question ? `Question for you: ${decision.user_question}` : "",
+        decision.database_question ? `Database question: ${decision.database_question}` : "",
+        decision.final_question ? `Final query question: ${decision.final_question}` : "",
+        decision.answer ? `Context answer prepared.` : ""
+      ].filter(Boolean)
+    };
+  }
+  if (event === "database_question") {
+    const question = payload.database_question || {};
+    return {
+      event,
+      title: question.final ? "GAARD asks the final database question" : "GAARD asks the database",
+      detail: question.question || "",
+      items: []
+    };
+  }
+  if (event === "database_result") {
+    const result = payload.database_result || {};
+    return {
+      event,
+      title: "Database result received",
+      detail: result.answer || "",
+      items: [
+        result.sql ? `SQL: ${result.sql}` : "",
+        Array.isArray(result.rows) ? `Rows: ${result.rows.length}` : ""
+      ].filter(Boolean)
+    };
+  }
+  if (event === "business_logic_suggestion") {
+    const suggestion = payload.business_logic_suggestion || {};
+    return {
+      event,
+      title: suggestion.enabled ? "Business logic finding enabled" : "Business logic finding saved for review",
+      detail: suggestion.title || suggestion.rule_text || "",
+      items: [
+        suggestion.error_category ? `Type: ${suggestion.error_category}` : "",
+        suggestion.confidence !== void 0 ? `Confidence: ${suggestion.confidence}` : ""
+      ].filter(Boolean)
+    };
+  }
+  if (event === "limit_reached") {
+    return {
+      event,
+      title: "Analysis loop limit reached",
+      detail: `Limit: ${payload.limit_reached?.analysis_loop_count || "-"}`,
+      items: []
+    };
+  }
+  if (event === "session_started" || event === "session_resumed") {
+    return null;
+  }
+  return null;
+}
+function formatAnalysisAction(value) {
+  return String(value || "unknown").replaceAll("_", " ");
+}
 function extractErrorMessage(payload) {
-    const detail = payload?.detail;
-
-    if (typeof detail === "string") {
-        return detail;
-    }
-
-    if (detail?.error?.message) {
-        return detail.error.message;
-    }
-
-    if (payload?.error?.message) {
-        return payload.error.message;
-    }
-
-    return "Request failed.";
+  const detail = payload?.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail?.error?.message) {
+    return detail.error.message;
+  }
+  if (payload?.error?.message) {
+    return payload.error.message;
+  }
+  return "Request failed.";
 }
-
 function getRows(response) {
-    return Array.isArray(response?.rows) ? response.rows : [];
+  return Array.isArray(response?.rows) ? response.rows : [];
 }
-
 function getColumns(rows) {
-    const columns = [];
-
-    rows.forEach((row) => {
-        if (!row || typeof row !== "object" || Array.isArray(row)) return;
-
-        Object.keys(row).forEach((column) => {
-            if (!columns.includes(column)) {
-                columns.push(column);
-            }
-        });
+  const columns = [];
+  rows.forEach((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return;
+    Object.keys(row).forEach((column) => {
+      if (!columns.includes(column)) {
+        columns.push(column);
+      }
     });
-
-    return columns;
+  });
+  return columns;
 }
-
 function renderDataTable(rows) {
-    const columns = getColumns(rows);
-
-    if (!rows.length) {
-        return `<div class="data-table-empty">No rows returned.</div>`;
-    }
-
-    if (!columns.length) {
-        return `<div class="data-table-empty">Rows are not table-shaped.</div>`;
-    }
-
-    return `
+  const columns = getColumns(rows);
+  if (!rows.length) {
+    return `<div class="data-table-empty">No rows returned.</div>`;
+  }
+  if (!columns.length) {
+    return `<div class="data-table-empty">Rows are not table-shaped.</div>`;
+  }
+  return `
     <div class="data-table-wrap" tabindex="0">
       <table class="data-table">
         <thead>
@@ -556,35 +639,27 @@ function renderDataTable(rows) {
       </table>
     </div>`;
 }
-
 function formatCellValue(value) {
-    if (value === null) {
-        return "null";
-    }
-
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    return String(value ?? "");
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value ?? "");
 }
-
 function scrollToLatest() {
-    const scroll = () => {
-        const history = document.querySelector(".history");
-
-        if (!history) return;
-
-        history.scrollTo({
-            top: history.scrollHeight,
-            behavior: "auto"
-        });
-    };
-
-    requestAnimationFrame(() => {
-        scroll();
-        requestAnimationFrame(scroll);
+  const scroll = () => {
+    const history = document.querySelector(".history");
+    if (!history) return;
+    history.scrollTo({
+      top: history.scrollHeight,
+      behavior: "auto"
     });
+  };
+  requestAnimationFrame(() => {
+    scroll();
+    requestAnimationFrame(scroll);
+  });
 }
-
 render();

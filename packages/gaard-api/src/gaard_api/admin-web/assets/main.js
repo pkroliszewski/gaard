@@ -1250,12 +1250,12 @@ function renderReasoningConfig() {
             <label>Output classification<select name="output_classification_mode">${renderModeOptions(config.output_classification_mode || "auto", ["auto", "llm"])}</select></label>
           </div>
           <div class="subgrid">
-            <label>Investigation mode<select name="investigation_mode">${renderModeOptions(config.investigation_mode || "llm", ["llm"])}</select></label>
-            <label>Ambiguity handling<select name="investigation_ambiguity_mode">${renderModeOptions(config.investigation_ambiguity_mode || "clarify", ["clarify", "safe_aggregate"])}</select></label>
-          </div>
-          <div class="subgrid">
             <label>Query max rows<input name="query_max_rows" type="number" min="1" max="100000" value="${escapeHtml(config.query_max_rows || 100)}" /></label>
             <label>Query timeout seconds<input name="query_timeout_seconds" type="number" min="1" max="3600" value="${escapeHtml(config.query_timeout_seconds || 30)}" /></label>
+          </div>
+          <div class="subgrid">
+            <label>Analysis loop count<input name="analysis_loop_count" type="number" min="1" max="25" value="${escapeHtml(config.analysis_loop_count || 5)}" /></label>
+            <label><input name="analysis_auto_enable_business_logic" type="checkbox" ${config.analysis_auto_enable_business_logic ? "checked" : ""} /> Auto-enable analysis findings</label>
           </div>
           <div class="mono muted">${escapeHtml(JSON.stringify(config.sources || {}, null, 2))}</div>
           <div class="form-actions"><button class="primary" type="submit">Save reasoning configuration</button></div>
@@ -1750,8 +1750,7 @@ async function testLlmConfig() {
 }
 function getLlmConfigPayload() {
   const formElement = document.querySelector("#llm-config-form");
-  if (!formElement)
-    throw new Error("LLM configuration form is not available.");
+  if (!formElement) throw new Error("LLM configuration form is not available.");
   const form = new FormData(formElement);
   const extraBody = JSON.parse(String(form.get("extra_body") || "{}"));
   if (extraBody === null || Array.isArray(extraBody) || typeof extraBody !== "object") {
@@ -1778,10 +1777,10 @@ async function saveReasoningConfig(event) {
         sql_generation_mode: form.get("sql_generation_mode"),
         result_interpretation_mode: form.get("result_interpretation_mode"),
         output_classification_mode: form.get("output_classification_mode"),
-        investigation_mode: form.get("investigation_mode"),
-        investigation_ambiguity_mode: form.get("investigation_ambiguity_mode"),
         query_max_rows: Number(form.get("query_max_rows") || 100),
-        query_timeout_seconds: Number(form.get("query_timeout_seconds") || 30)
+        query_timeout_seconds: Number(form.get("query_timeout_seconds") || 30),
+        analysis_loop_count: Number(form.get("analysis_loop_count") || 5),
+        analysis_auto_enable_business_logic: form.get("analysis_auto_enable_business_logic") === "on"
       })
     });
     state.reasoningConfig = result.item;

@@ -251,3 +251,22 @@ class BusinessKnowledgeClaim(Base):
         onupdate=utc_now,
     )
     updated_by: Mapped[str] = mapped_column(String(255), default="system")
+
+
+class AnalysisSessionRecord(Base):
+    __tablename__ = "analysis_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), index=True, default="running")
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
+    datasource_id: Mapped[str] = mapped_column(String(255), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[str] = mapped_column(Text, default="{}")
+    events_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )

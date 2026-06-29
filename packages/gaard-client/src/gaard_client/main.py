@@ -34,6 +34,11 @@ class ClientQueryRequest(BaseModel):
     mode: str = "sql"
 
 
+class ClientAnalysisMessageRequest(BaseModel):
+    message: str = Field(min_length=1)
+    backend_url: str | None = None
+
+
 class ClientWidgetFromQueryRequest(BaseModel):
     label: str = Field(min_length=1, max_length=255)
     widget_type: str = "table"
@@ -189,6 +194,77 @@ async def query_backend_stream(request: ClientQueryRequest) -> StreamingResponse
             ) + "\n"
 
     return StreamingResponse(stream_backend(), media_type="application/x-ndjson")
+
+
+@app.post("/api/analysis/stream")
+async def analysis_backend_stream(request: ClientQueryRequest) -> StreamingResponse:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    analysis_url = f"{backend_url}/api/v1/analysis/stream"
+
+    async def stream_backend():
+        async for chunk in proxy_stream(
+            url=analysis_url,
+            payload={
+                "question": request.question,
+                "user_id": "client",
+            },
+        ):
+            yield chunk
+
+    return StreamingResponse(stream_backend(), media_type="application/x-ndjson")
+
+
+@app.post("/api/analysis/{session_id}/messages/stream")
+async def analysis_message_backend_stream(
+    session_id: str,
+    request: ClientAnalysisMessageRequest,
+) -> StreamingResponse:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    analysis_url = f"{backend_url}/api/v1/analysis/{session_id}/messages/stream"
+
+    async def stream_backend():
+        async for chunk in proxy_stream(
+            url=analysis_url,
+            payload={
+                "message": request.message,
+            },
+        ):
+            yield chunk
+
+    return StreamingResponse(stream_backend(), media_type="application/x-ndjson")
+
+
+async def proxy_stream(url: str, payload: dict[str, Any]):
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    detail = body.decode("utf-8", errors="replace")
+                    yield json.dumps(
+                        {
+                            "error": {
+                                "code": "BACKEND_REQUEST_FAILED",
+                                "message": detail,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                    return
+
+                async for chunk in response.aiter_text():
+                    if chunk:
+                        yield chunk
+    except httpx.HTTPError as exc:
+        yield json.dumps(
+            {
+                "error": {
+                    "code": "BACKEND_REQUEST_FAILED",
+                    "message": f"Backend request failed: {exc}",
+                }
+            },
+            ensure_ascii=False,
+        ) + "\n"
 
 
 @app.get("/", include_in_schema=False)

@@ -1,14 +1,20 @@
 type QueryMetadata = {
   duration_ms?: number;
   datasource_id?: string;
-  query_mode?: QueryMode;
+  query_mode?: string;
+  analysis_mode?: string;
+  analysis_session_id?: string;
+  analysis_status?: string;
+  analysis_supporting_data?: boolean;
+  analysis_supporting_question?: string;
+  analysis_supporting_step?: string;
   output_classification?: string;
   output_classification_mode?: string;
   result_interpretation_mode?: string;
   sql_generation_mode?: string;
 };
 
-type QueryMode = "sql" | "investigation";
+type QueryMode = "sql" | "analysis";
 
 type QueryResponse = {
   answer: string;
@@ -18,21 +24,26 @@ type QueryResponse = {
 };
 
 type ProgressUpdate = {
-  data_question: string;
-  decisions: string[];
+  event: string;
+  title: string;
+  detail: string;
+  items: string[];
 };
 
 type Message = {
   id: number;
   question: string;
   mode: QueryMode;
-  status: "pending" | "ok" | "error";
+  status: "pending" | "waiting" | "ok" | "error";
   response: QueryResponse | null;
   error: string;
   dataOpen: boolean;
   saveStatus: "idle" | "saving" | "saved" | "error";
   saveError: string;
   progress: ProgressUpdate[];
+  progressOpen: boolean;
+  analysisSessionId: string;
+  userQuestion: string;
 };
 
 declare global {
@@ -96,9 +107,9 @@ function render(options: { scrollToLatest?: boolean } = {}): void {
             <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
             <span>SQL</span>
           </label>
-          <label class="${state.queryMode === "investigation" ? "active" : ""}">
-            <input type="radio" name="mode" value="investigation" ${state.queryMode === "investigation" ? "checked" : ""}>
-            <span>Investigation</span>
+          <label class="${state.queryMode === "analysis" ? "active" : ""}">
+            <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
+            <span>Analysis</span>
           </label>
         </fieldset>
         <textarea id="question-input" name="question" placeholder="Ask a question" rows="1" ${state.pending ? "disabled" : ""}></textarea>
@@ -124,6 +135,12 @@ function render(options: { scrollToLatest?: boolean } = {}): void {
   document.querySelectorAll<HTMLButtonElement>("[data-save-widget]").forEach((button) => {
     button.addEventListener("click", saveWidgetFromMessage);
   });
+  document.querySelectorAll<HTMLFormElement>("[data-analysis-reply-form]").forEach((form) => {
+    form.addEventListener("submit", submitAnalysisReply);
+  });
+  document.querySelectorAll<HTMLDetailsElement>("[data-analysis-progress]").forEach((details) => {
+    details.addEventListener("toggle", toggleAnalysisProgress);
+  });
   const input = document.querySelector<HTMLTextAreaElement>("#question-input");
   input?.addEventListener("keydown", handleQuestionKeydown);
   input?.focus();
@@ -138,15 +155,18 @@ function renderMessage(message: Message): string {
   const meta = message.status === "ok" ? renderMeta(message, rows) : "";
   const answer = message.status === "pending"
     ? "Processing..."
+    : message.status === "waiting"
+      ? "Waiting for your answer."
     : message.status === "error"
       ? message.error
       : message.response?.answer || "";
   const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
   const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
   const saveNotice = renderSaveNotice(message);
-  const progress = message.status === "pending" && message.mode === "investigation"
-    ? renderInvestigationProgress(message)
+  const progress = message.mode === "analysis"
+    ? renderAnalysisProgress(message)
     : "";
+  const analysisReply = message.status === "waiting" ? renderAnalysisReply(message) : "";
 
   return `
     <article class="exchange ${message.status}">
@@ -162,6 +182,7 @@ function renderMessage(message: Message): string {
         <p>${escapeHtml(answer)}</p>
       </div>
       ${progress}
+      ${analysisReply}
       ${mockWarning}
       ${saveNotice}
       ${meta}
@@ -212,21 +233,42 @@ function renderSaveNotice(message: Message): string {
   return "";
 }
 
-function renderInvestigationProgress(message: Message): string {
+function renderAnalysisProgress(message: Message): string {
   if (!message.progress.length) {
     return "";
   }
 
+  const latest = message.progress[message.progress.length - 1];
   return `
-    <ol class="investigation-progress" aria-label="Investigation progress">
-      ${message.progress.map((update, index) => `
-        <li class="${index === message.progress.length - 1 ? "active" : "done"}">
-          <div>
-            <p>${escapeHtml(update.data_question)}</p>
-            ${renderProgressDecisions(update.decisions)}
-          </div>
-        </li>`).join("")}
-    </ol>`;
+    <details class="analysis-log" data-analysis-progress="${message.id}" ${message.progressOpen ? "open" : ""}>
+      <summary>
+        <span>Analysis</span>
+        <strong>${escapeHtml(latest.title)}</strong>
+        ${latest.detail ? `<small>${escapeHtml(latest.detail)}</small>` : ""}
+      </summary>
+      <ol class="analysis-progress" aria-label="Analysis progress">
+        ${message.progress.map((update, index) => `
+          <li class="${index === message.progress.length - 1 ? "active" : "done"}">
+            <div>
+              <p>${escapeHtml(update.title)}</p>
+              ${update.detail ? `<p class="progress-detail">${escapeHtml(update.detail)}</p>` : ""}
+              ${renderProgressDecisions(update.items)}
+            </div>
+          </li>`).join("")}
+      </ol>
+    </details>`;
+}
+
+function renderAnalysisReply(message: Message): string {
+  return `
+    <form class="analysis-reply" data-analysis-reply-form="${message.id}">
+      <div class="analysis-reply-question">${escapeHtml(message.userQuestion || "GAARD needs a clarification.")}</div>
+      <label>
+        <span>Your answer</span>
+        <textarea name="reply" rows="2" placeholder="Answer GAARD" ${state.pending ? "disabled" : ""}></textarea>
+      </label>
+      <button type="submit" ${state.pending ? "disabled" : ""}>Continue analysis</button>
+    </form>`;
 }
 
 function renderProgressDecisions(decisions: string[]): string {
@@ -261,13 +303,14 @@ function renderMockWarning(metadata?: QueryMetadata): string {
 function renderMeta(message: Message, rows: Record<string, unknown>[]): string {
   const metadata = message.response?.metadata || {};
   const buttonText = message.dataOpen ? "Hide data" : `Data (${rows.length})`;
+  const mode = metadata.analysis_mode === "analysis" ? "analysis" : metadata.query_mode || message.mode;
 
   return `
     <div class="meta-row">
       <dl class="meta">
         <div><dt>Time</dt><dd>${escapeHtml(formatDuration(metadata.duration_ms))}</dd></div>
         <div><dt>Datasource</dt><dd>${escapeHtml(metadata.datasource_id || "-")}</dd></div>
-        <div><dt>Mode</dt><dd>${escapeHtml(formatMode(metadata.query_mode || message.mode))}</dd></div>
+        <div><dt>Mode</dt><dd>${escapeHtml(formatMode(mode))}</dd></div>
         <div><dt>Output</dt><dd>${escapeHtml(metadata.output_classification || "unknown")}</dd></div>
       </dl>
       <button class="data-toggle" type="button" data-toggle-data="${message.id}" aria-expanded="${message.dataOpen ? "true" : "false"}">
@@ -287,11 +330,11 @@ function formatDuration(value: unknown): string {
 }
 
 function formatMode(value: unknown): string {
-  return value === "investigation" ? "Investigation" : "SQL";
+  return value === "analysis" ? "Analysis" : "SQL";
 }
 
 function normalizeQueryMode(value: unknown): QueryMode {
-  return value === "investigation" ? "investigation" : "sql";
+  return value === "analysis" ? "analysis" : "sql";
 }
 
 function handleModeChange(event: Event): void {
@@ -318,6 +361,16 @@ function toggleDataTable(event: Event): void {
   render({
     scrollToLatest: message.dataOpen && latestMessage?.id === message.id,
   });
+}
+
+function toggleAnalysisProgress(event: Event): void {
+  const details = event.currentTarget as HTMLDetailsElement;
+  const id = Number(details.dataset.analysisProgress);
+  const message = state.messages.find((item) => item.id === id);
+
+  if (message) {
+    message.progressOpen = details.open;
+  }
 }
 
 function retryQuestion(event: Event): void {
@@ -428,14 +481,17 @@ async function submitQuestion(event: Event): Promise<void> {
     saveStatus: "idle",
     saveError: "",
     progress: [],
+    progressOpen: false,
+    analysisSessionId: "",
+    userQuestion: "",
   };
   state.nextMessageId += 1;
   state.messages.push(message);
   render({ scrollToLatest: true });
 
   try {
-    if (mode === "investigation") {
-      await submitInvestigationQuestion(message, question, mode);
+    if (mode === "analysis") {
+      await submitAnalysisQuestion(message, question);
     } else {
       const response = await fetch("/api/query", {
         method: "POST",
@@ -466,19 +522,17 @@ async function submitQuestion(event: Event): Promise<void> {
   }
 }
 
-async function submitInvestigationQuestion(
+async function submitAnalysisQuestion(
   message: Message,
   question: string,
-  mode: QueryMode,
 ): Promise<void> {
-  const response = await fetch("/api/query/stream", {
+  const response = await fetch("/api/analysis/stream", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       question,
-      mode,
       backend_url: state.backendUrl,
     }),
   });
@@ -488,6 +542,59 @@ async function submitInvestigationQuestion(
     throw new Error(extractErrorMessage(payload));
   }
 
+  await readAnalysisStream(message, response);
+}
+
+async function submitAnalysisReply(event: Event): Promise<void> {
+  event.preventDefault();
+
+  if (state.pending) return;
+
+  const form = event.currentTarget as HTMLFormElement;
+  const id = Number(form.dataset.analysisReplyForm);
+  const message = state.messages.find((item) => item.id === id);
+  const input = form.elements.namedItem("reply") as HTMLTextAreaElement | null;
+  const reply = String(input?.value || "").trim();
+
+  if (!message || !message.analysisSessionId || !reply) return;
+
+  state.pending = true;
+  message.status = "pending";
+  message.userQuestion = "";
+  render({ scrollToLatest: true });
+
+  try {
+    await continueAnalysis(message, reply);
+  } catch (error) {
+    message.status = "error";
+    message.error = (error as Error).message || "Request failed.";
+  } finally {
+    state.pending = false;
+    render({ scrollToLatest: true });
+  }
+}
+
+async function continueAnalysis(message: Message, reply: string): Promise<void> {
+  const response = await fetch(`/api/analysis/${encodeURIComponent(message.analysisSessionId)}/messages/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message: reply,
+      backend_url: state.backendUrl,
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(extractErrorMessage(payload));
+  }
+
+  await readAnalysisStream(message, response);
+}
+
+async function readAnalysisStream(message: Message, response: Response): Promise<void> {
   if (!response.body) {
     throw new Error("Streaming response is not available.");
   }
@@ -506,21 +613,21 @@ async function submitInvestigationQuestion(
     buffer = lines.pop() || "";
 
     for (const line of lines) {
-      finalReceived = handleStreamLine(message, line) || finalReceived;
+      finalReceived = handleAnalysisStreamLine(message, line) || finalReceived;
     }
   }
 
   buffer += decoder.decode();
   if (buffer.trim()) {
-    finalReceived = handleStreamLine(message, buffer) || finalReceived;
+    finalReceived = handleAnalysisStreamLine(message, buffer) || finalReceived;
   }
 
-  if (!finalReceived) {
-    throw new Error("Investigation stream ended without a final response.");
+  if (!finalReceived && message.status !== "waiting") {
+    throw new Error("Analysis stream ended without a final response.");
   }
 }
 
-function handleStreamLine(message: Message, line: string): boolean {
+function handleAnalysisStreamLine(message: Message, line: string): boolean {
   const trimmed = line.trim();
 
   if (!trimmed) return false;
@@ -534,30 +641,150 @@ function handleStreamLine(message: Message, line: string): boolean {
   if (payload?.final) {
     message.status = "ok";
     message.response = payload.final;
+    message.dataOpen = message.mode === "analysis" && getRows(payload.final).length > 0;
+    message.userQuestion = "";
     render({ scrollToLatest: true });
     return true;
   }
 
-  if (isProgressUpdate(payload)) {
-    message.progress = [...message.progress, payload];
+  if (payload?.session_id && !message.analysisSessionId) {
+    message.analysisSessionId = String(payload.session_id);
+  }
+
+  if (payload?.event === "user_question") {
+    const question = extractUserQuestion(payload);
+    message.status = "waiting";
+    message.userQuestion = question;
+    message.progress = [
+      ...message.progress,
+      {
+        event: "user_question",
+        title: "GAARD needs your clarification",
+        detail: question,
+        items: [],
+      },
+    ];
+    render({ scrollToLatest: true });
+    return false;
+  }
+
+  const progress = progressFromAnalysisEvent(payload);
+  if (progress) {
+    message.progress = [...message.progress, progress];
     render({ scrollToLatest: true });
   }
 
   return false;
 }
 
-function isProgressUpdate(value: unknown): value is ProgressUpdate {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
   }
 
-  const payload = value as Record<string, unknown>;
+  return "";
+}
 
-  return (
-    typeof payload.data_question === "string" &&
-    Array.isArray(payload.decisions) &&
-    payload.decisions.every((decision) => typeof decision === "string")
+function extractUserQuestion(payload: any): string {
+  const userQuestion = payload?.user_question;
+
+  return firstText(
+    typeof userQuestion === "string" ? userQuestion : "",
+    userQuestion?.question,
+    userQuestion?.message,
+    userQuestion?.visible_question,
+    payload?.question,
+    payload?.decision?.user_question,
+    payload?.decision?.visible_question,
+    "GAARD needs a clarification.",
   );
+}
+
+function progressFromAnalysisEvent(payload: any): ProgressUpdate | null {
+  const event = String(payload?.event || "");
+
+  if (event === "analysis_step") {
+    const step = payload.analysis_step || {};
+    return {
+      event,
+      title: step.visible_question || "GAARD is checking the next analysis step.",
+      detail: step.visible_reasoning || "",
+      items: [`Iteration ${step.iteration || payload.sequence || ""}`].filter(Boolean),
+    };
+  }
+
+  if (event === "decision") {
+    const decision = payload.decision || {};
+    return {
+      event,
+      title: `Decision: ${formatAnalysisAction(decision.action)}`,
+      detail: decision.visible_reasoning || decision.visible_question || "",
+      items: [
+        decision.user_question ? `Question for you: ${decision.user_question}` : "",
+        decision.database_question ? `Database question: ${decision.database_question}` : "",
+        decision.final_question ? `Final query question: ${decision.final_question}` : "",
+        decision.answer ? `Context answer prepared.` : "",
+      ].filter(Boolean),
+    };
+  }
+
+  if (event === "database_question") {
+    const question = payload.database_question || {};
+    return {
+      event,
+      title: question.final ? "GAARD asks the final database question" : "GAARD asks the database",
+      detail: question.question || "",
+      items: [],
+    };
+  }
+
+  if (event === "database_result") {
+    const result = payload.database_result || {};
+    return {
+      event,
+      title: "Database result received",
+      detail: result.answer || "",
+      items: [
+        result.sql ? `SQL: ${result.sql}` : "",
+        Array.isArray(result.rows) ? `Rows: ${result.rows.length}` : "",
+      ].filter(Boolean),
+    };
+  }
+
+  if (event === "business_logic_suggestion") {
+    const suggestion = payload.business_logic_suggestion || {};
+    return {
+      event,
+      title: suggestion.enabled
+        ? "Business logic finding enabled"
+        : "Business logic finding saved for review",
+      detail: suggestion.title || suggestion.rule_text || "",
+      items: [
+        suggestion.error_category ? `Type: ${suggestion.error_category}` : "",
+        suggestion.confidence !== undefined ? `Confidence: ${suggestion.confidence}` : "",
+      ].filter(Boolean),
+    };
+  }
+
+  if (event === "limit_reached") {
+    return {
+      event,
+      title: "Analysis loop limit reached",
+      detail: `Limit: ${payload.limit_reached?.analysis_loop_count || "-"}`,
+      items: [],
+    };
+  }
+
+  if (event === "session_started" || event === "session_resumed") {
+    return null;
+  }
+
+  return null;
+}
+
+function formatAnalysisAction(value: unknown): string {
+  return String(value || "unknown").replaceAll("_", " ");
 }
 
 function extractErrorMessage(payload: any): string {

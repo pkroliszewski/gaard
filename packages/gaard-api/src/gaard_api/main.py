@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from gaard_api.api.v1.analysis import router as analysis_router
 from gaard_api.api.v1.admin import router as admin_router
 from gaard_api.api.v1.prompts import router as prompts_router
 from gaard_api.api.v1.query import router as query_router
@@ -39,6 +40,7 @@ def api_health() -> dict[str, str]:
 
 
 app.include_router(query_router, prefix="/api/v1", tags=["query"])
+app.include_router(analysis_router, prefix="/api/v1", tags=["analysis"])
 app.include_router(schema_router, prefix="/api/v1", tags=["schema"])
 app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])

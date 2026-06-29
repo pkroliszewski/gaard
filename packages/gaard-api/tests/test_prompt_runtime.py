@@ -1,11 +1,9 @@
 from decimal import Decimal
 
-from gaard_core.investigation.models import InvestigationContext
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 
 from gaard_api.admin.models import PromptTemplate
 from gaard_api.admin.prompt_runtime import (
-    MetadataInvestigationReadinessPromptCompiler,
     MetadataIntentClassificationPromptCompiler,
     MetadataResultClassificationPromptCompiler,
     MetadataResultInterpretationPromptCompiler,
@@ -59,35 +57,6 @@ def test_metadata_intent_classification_prompt_compiler_serializes_question() ->
     assert "zmodufikuj zlecenia" in compiled.user_prompt
     assert '"datasource_id": "design_db"' in compiled.user_prompt
     assert compiled.metadata["prompt_key"] == "intent_classification"
-
-
-def test_metadata_investigation_readiness_prompt_compiler_serializes_context() -> None:
-    compiler = MetadataInvestigationReadinessPromptCompiler(
-        prompt_template=PromptTemplate(
-            prompt_key="investigation_readiness",
-            name="Investigation readiness",
-            system_prompt="system",
-            user_prompt_template="{payload}\n{question}\n{schema}\n{business_logic}",
-            version=1,
-            active=True,
-        )
-    )
-
-    compiled = compiler.compile(
-        InvestigationContext(
-            question="który kardiolog leczy pacjentów",
-            datasource_id="medical",
-            user_id="alice",
-            formatted_schema="Table: doctors",
-            business_logic="Use doctors.specialization for medical specialty.",
-        )
-    )
-
-    assert "który kardiolog" in compiled.user_prompt
-    assert '"datasource_id": "medical"' in compiled.user_prompt
-    assert "Table: doctors" in compiled.user_prompt
-    assert "doctors.specialization" in compiled.user_prompt
-    assert compiled.metadata["prompt_key"] == "investigation_readiness"
 
 
 def test_metadata_result_classification_prompt_compiler_serializes_answer() -> None:
