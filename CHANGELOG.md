@@ -1,3 +1,8 @@
+### v.0.2.0 - Big step for GAARD. Data closer to people
+- The new Analysis mode is available. It has its own endpoint.
+- The investigation mode is not available anymore. 
+- The Analysis works better than I expected. Ask Medical POC Data: **why** Cardiology has so low profit?!
+
 ### v.0.1.1 - GAARD Modularization
 - Main packages will be modularized so all can be easily extended by extrernal code
 - Extensions are smoothly integarted into Admin UI and metadata
