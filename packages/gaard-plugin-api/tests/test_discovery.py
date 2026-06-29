@@ -23,12 +23,12 @@ def test_discovery_validates_manifests_and_package_compatibility() -> None:
     manifest = ExtensionManifest(
         id="acme-warehouse",
         version="1.2.3",
-        requires={"gaard-connectors": ">=0.1,<0.2"},
+        requires={"gaard-connectors": ">=0.2,<0.3"},
     )
 
     records = discover_extensions(
         [FakeEntryPoint("acme", manifest)],
-        package_version=lambda package_name: "0.1.0",
+        package_version=lambda package_name: "0.2.0",
     )
 
     assert len(records) == 1

@@ -6,8 +6,8 @@ def extension() -> ExtensionManifest:
         id="example-custom-connector",
         version="0.1.0",
         requires={
-            "gaard-connectors": ">=0.1.0,<0.2.0",
-            "gaard-plugin-api": ">=0.1.0,<0.2.0",
+            "gaard-connectors": ">=0.2.0,<0.3.0",
+            "gaard-plugin-api": ">=0.2.0,<0.3.0",
         },
         contributions={
             "connectors": "gaard_example_custom_connector.connector:register",

@@ -85,8 +85,8 @@ name = "my-gaard-connector"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-  "gaard-connectors>=0.1.0,<0.2.0",
-  "gaard-plugin-api>=0.1.0,<0.2.0",
+  "gaard-connectors>=0.2.0,<0.3.0",
+  "gaard-plugin-api>=0.2.0,<0.3.0",
 ]
 
 [project.entry-points."gaard.extensions"]
@@ -111,8 +111,8 @@ def extension() -> ExtensionManifest:
         id="my-connector",
         version="0.1.0",
         requires={
-            "gaard-connectors": ">=0.1.0,<0.2.0",
-            "gaard-plugin-api": ">=0.1.0,<0.2.0",
+            "gaard-connectors": ">=0.2.0,<0.3.0",
+            "gaard-plugin-api": ">=0.2.0,<0.3.0",
         },
         contributions={
             "connectors": "my_connector.connector:register",

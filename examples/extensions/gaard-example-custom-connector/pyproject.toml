@@ -9,8 +9,8 @@ description = "Public example datasource connector for the GAARD extension platf
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "gaard-connectors>=0.1.0,<0.2.0",
-    "gaard-plugin-api>=0.1.0,<0.2.0",
+    "gaard-connectors>=0.2.0,<0.3.0",
+    "gaard-plugin-api>=0.2.0,<0.3.0",
     "sqlalchemy>=2.0.0",
 ]
 
