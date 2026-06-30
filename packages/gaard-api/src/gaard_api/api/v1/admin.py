@@ -1692,6 +1692,50 @@ def update_datasource(
     return {"item": serialize_datasource(connector)}
 
 
+@router.delete("/datasources/{connector_id}")
+def delete_datasource(
+    connector_id: int,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    if is_system_datasource_connector(connector):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The metadata datasource is managed by GAARD.",
+        )
+
+    connector_key = connector.connector_key
+    database_type = connector.database_type
+    was_active = connector.active
+    schema_cache = get_datasource_schema_cache(session, connector.id)
+    if schema_cache is not None:
+        session.delete(schema_cache)
+    session.delete(connector)
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.delete",
+        resource_type="datasource_connector",
+        resource_id=connector_key,
+        details={
+            "database_type": database_type,
+            "active": was_active,
+        },
+    )
+    session.commit()
+
+    return {"status": "deleted"}
+
+
 @router.post("/datasources/{connector_id}/activate")
 def activate_datasource(
     connector_id: int,

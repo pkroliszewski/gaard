@@ -908,6 +908,11 @@ label {
   background: #edf8fb;
 }
 
+.datasource-list {
+  max-height: min(520px, calc(100vh - 240px));
+  overflow-y: auto;
+}
+
 .table-wrap {
   overflow: auto;
 }
@@ -1069,6 +1074,10 @@ code {
 
   .schema-object-list-body {
     max-height: 280px;
+  }
+
+  .datasource-list {
+    max-height: 300px;
   }
 }
 

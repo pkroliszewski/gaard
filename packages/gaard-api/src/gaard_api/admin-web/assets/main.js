@@ -991,7 +991,7 @@ function renderDatasources() {
     <div class="split">
       <section class="panel">
         <div class="panel-header"><h2>Datasources</h2><button id="new-datasource">New</button></div>
-        <div class="panel-body list">${state.datasources.map((connector) => `<button data-datasource="${connector.id}" class="${selected?.id === connector.id ? "active" : ""}"><strong>${escapeHtml(connector.name)}</strong><br /><span>${escapeHtml(connector.database_type)} ${connector.active ? "active" : ""}</span></button>`).join("")}</div>
+        <div class="panel-body list datasource-list">${state.datasources.map((connector) => `<button data-datasource="${connector.id}" class="${selected?.id === connector.id ? "active" : ""}"><strong>${escapeHtml(connector.name)}</strong><br /><span>${escapeHtml(connector.database_type)} ${connector.active ? "active" : ""}</span></button>`).join("")}</div>
       </section>
       <section class="panel">
         <div class="panel-header"><h2>${selected ? escapeHtml(selected.name) : "New datasource"}</h2></div>
@@ -1031,6 +1031,7 @@ function renderDatasourceForm(connector) {
         <button type="button" id="test-datasource" ${disabled}>Test</button>
         <button type="button" id="introspect-datasource" ${connector ? "" : "disabled"}>Schema introspection</button>
         <button type="button" id="activate-datasource" ${connector && !connector.active && !systemManaged ? "" : "disabled"}>Activate</button>
+        ${connector && !systemManaged ? `<button type="button" class="danger" id="delete-datasource">Delete</button>` : ""}
         <button class="primary" type="submit" ${systemManaged ? "disabled" : ""}>${connector ? "Save" : "Create"}</button>
       </div>
     </form>`;
@@ -1455,6 +1456,7 @@ function attachSectionHandlers() {
   document.querySelector("#test-datasource")?.addEventListener("click", testDatasource);
   document.querySelector("#introspect-datasource")?.addEventListener("click", introspectDatasource);
   document.querySelector("#activate-datasource")?.addEventListener("click", activateDatasource);
+  document.querySelector("#delete-datasource")?.addEventListener("click", deleteDatasource);
   document.querySelectorAll("[data-open-business-logic]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.section = "business-logic";
@@ -1940,6 +1942,25 @@ async function activateDatasource() {
   try {
     await api(`/api/v1/admin/datasources/${selected.id}/activate`, { method: "POST" });
     setMessage("success", "Datasource activated.");
+    await loadDatasources();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function deleteDatasource() {
+  const selected = getSelectedDatasource();
+  if (!selected || selected.system_managed) return;
+  if (!confirm(`Delete datasource "${selected.name}"?`)) return;
+  try {
+    await api(`/api/v1/admin/datasources/${selected.id}`, { method: "DELETE" });
+    state.selectedDatasourceId = null;
+    state.datasourceSchema = null;
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = "";
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+    setMessage("success", "Datasource deleted.");
     await loadDatasources();
   } catch (error) {
     setMessage("error", error.message);
