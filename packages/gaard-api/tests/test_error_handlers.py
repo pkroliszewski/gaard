@@ -3,21 +3,46 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
+from gaard_api.admin.models import DatasourceConnector
 from gaard_api.admin.services import set_setting
 from gaard_api.core.settings import settings
+from gaard_api.example_database import install_medical_poc_example_database
 from gaard_api.main import app
 
 
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    demo_db = tmp_path / "demo.db"
+
     monkeypatch.setattr(
         settings,
         "gaard_metadata_database_url",
         f"sqlite:///{tmp_path / 'metadata.db'}",
     )
+    monkeypatch.setattr(settings, "gaard_datasource_url", f"sqlite:///{demo_db}")
     reset_metadata_store_for_tests()
+    install_medical_poc_example_database(demo_db)
+
+    with create_session() as session:
+        connector = session.scalar(
+            select(DatasourceConnector).where(DatasourceConnector.connector_key == "default")
+        )
+        if connector is None:
+            connector = DatasourceConnector(
+                connector_key="default",
+                name="Default DB",
+                database_type="sqlite",
+                database_url=settings.gaard_datasource_url,
+                sql_dialect="sqlite",
+                active=True,
+            )
+            session.add(connector)
+        connector.database_url = settings.gaard_datasource_url
+        connector.active = True
+        session.commit()
 
     with TestClient(app) as test_client:
         yield test_client

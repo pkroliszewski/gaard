@@ -28,8 +28,10 @@ from gaard_api.admin.services import (
 )
 from gaard_api.api.v1.query import (
     DatasourceContext,
+    DatasourceContexts,
     create_llm_client,
     effective_query_request,
+    normalize_datasource_contexts,
     ndjson_line,
     run_sql_request,
 )
@@ -872,19 +874,20 @@ def save_business_logic_finding(
     session_id: str,
     decision: AnalysisPlannerDecision,
     context: dict[str, Any],
-    datasource_context: DatasourceContext | None,
+    datasource_context: DatasourceContext | DatasourceContexts | None,
 ) -> dict[str, Any] | None:
     finding = decision.business_logic
     if not finding.create_suggestion or not finding.rule_text.strip():
         return None
 
-    if datasource_context is None:
+    datasource_contexts = normalize_datasource_contexts(datasource_context)
+    if not datasource_contexts:
         return {
             "status": "skipped",
             "reason": "No active datasource connector was available.",
         }
 
-    connector, _schema_cache = datasource_context
+    connector, _schema_cache = datasource_contexts[0]
     runtime_config = get_query_runtime_config_safe()
     with create_session() as session:
         suggestion = upsert_analysis_business_logic_suggestion(

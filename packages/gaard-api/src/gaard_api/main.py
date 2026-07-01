@@ -13,7 +13,7 @@ from importlib.resources import files
 
 app = FastAPI(
     title="GAARD API",
-    version="0.2.0",
+    version="0.2.1",
     description="Self-hosted AI SQL Gateway for governed natural-language access to relational data.",
 )
 
