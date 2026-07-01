@@ -749,6 +749,7 @@ def format_connected_datasource_schemas(datasource_contexts: DatasourceContexts)
         (
             "For schema metadata questions, prefer the provided schema text. If SQL is needed, "
             "use datasource_key.information_schema.columns or datasource_key.information_schema.tables."
+            "For informational_schema Never use table_schema"
         ),
     ]
 
