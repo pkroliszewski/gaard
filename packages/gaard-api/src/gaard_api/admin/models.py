@@ -89,6 +89,7 @@ class DataQueryAuditLog(Base):
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
     sql: Mapped[str] = mapped_column(Text)
+    llm_sql_language: Mapped[str] = mapped_column(String(50), default="")
     output_classification: Mapped[OutputClassification] = mapped_column(
         SAEnum(
             OutputClassification,

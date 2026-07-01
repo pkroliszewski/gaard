@@ -22,6 +22,12 @@ def test_validator_accepts_mysql_quoted_identifier() -> None:
     validator.validate("SELECT COUNT(*) AS total_leads FROM `lead`")
 
 
+def test_validator_accepts_union_of_literal_selects() -> None:
+    validator = SelectOnlySqlValidator()
+
+    validator.validate("SELECT 'form_id' AS column_name UNION ALL SELECT 'status'")
+
+
 def test_validator_rejects_delete() -> None:
     validator = SelectOnlySqlValidator()
 

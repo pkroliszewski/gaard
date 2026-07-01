@@ -14,6 +14,7 @@ from gaard_core.query_pipeline.models import (
     OutputClassification,
     QueryIntentClassification,
     QueryIntentDecision,
+    QueryResult,
     QueryRequest,
 )
 from gaard_llm.providers.models import ChatCompletionResponse
@@ -41,6 +42,7 @@ from gaard_api.admin.services import (
     record_candidate_business_knowledge,
     set_setting,
 )
+from gaard_api.api.v1.query import RoutingDatasourceExecutor, resolve_sql_dialect_plan
 from gaard_api.core.settings import settings
 from gaard_api.example_database import install_medical_poc_example_database
 from gaard_api.main import app
@@ -1376,6 +1378,169 @@ def test_sql_generation_prompt_uses_active_datasource_dialect(
     assert "Table: lead" in body["user_prompt"]
 
 
+def test_sql_dialect_plan_uses_shared_active_dialect() -> None:
+    plan = resolve_sql_dialect_plan(
+        [
+            (
+                DatasourceConnector(
+                    connector_key="mysql_a",
+                    name="MySQL A",
+                    database_type="mysql",
+                    database_url="mysql://user:pass@example.test/a",
+                    sql_dialect="mysql",
+                    active=True,
+                ),
+                DatasourceSchemaCache(connector_id=1, schema_json='{"tables":[]}'),
+            ),
+            (
+                DatasourceConnector(
+                    connector_key="mysql_b",
+                    name="MySQL B",
+                    database_type="mysql",
+                    database_url="mysql://user:pass@example.test/b",
+                    sql_dialect="mysql",
+                    active=True,
+                ),
+                DatasourceSchemaCache(connector_id=2, schema_json='{"tables":[]}'),
+            ),
+        ]
+    )
+
+    assert plan.prompt_dialect == "mysql"
+    assert plan.sqlglot_read_dialect == "mysql"
+
+
+def test_sql_dialect_plan_chooses_first_supported_dialect_for_transpilation() -> None:
+    plan = resolve_sql_dialect_plan(
+        [
+            (
+                DatasourceConnector(
+                    connector_key="pg",
+                    name="Postgres",
+                    database_type="postgresql",
+                    database_url="postgresql://user:pass@example.test/db",
+                    sql_dialect="postgres",
+                    active=True,
+                ),
+                DatasourceSchemaCache(connector_id=1, schema_json='{"tables":[]}'),
+            ),
+            (
+                DatasourceConnector(
+                    connector_key="sqlite_db",
+                    name="SQLite",
+                    database_type="sqlite",
+                    database_url="sqlite:///example.db",
+                    sql_dialect="sqlite",
+                    active=True,
+                ),
+                DatasourceSchemaCache(connector_id=2, schema_json='{"tables":[]}'),
+            ),
+        ]
+    )
+
+    assert plan.prompt_dialect == "postgres"
+    assert plan.sqlglot_read_dialect == "postgres"
+
+
+def test_sql_dialect_plan_uses_generic_sql_when_any_dialect_is_unsupported() -> None:
+    plan = resolve_sql_dialect_plan(
+        [
+            (
+                DatasourceConnector(
+                    connector_key="pg",
+                    name="Postgres",
+                    database_type="postgresql",
+                    database_url="postgresql://user:pass@example.test/db",
+                    sql_dialect="postgres",
+                    active=True,
+                ),
+                DatasourceSchemaCache(connector_id=1, schema_json='{"tables":[]}'),
+            ),
+            (
+                DatasourceConnector(
+                    connector_key="custom",
+                    name="Custom",
+                    database_type="custom",
+                    database_url="custom://example",
+                    sql_dialect="vendor_sql",
+                    active=True,
+                ),
+                DatasourceSchemaCache(connector_id=2, schema_json='{"tables":[]}'),
+            ),
+        ]
+    )
+
+    assert plan.prompt_dialect == "sql"
+    assert plan.sqlglot_read_dialect is None
+
+
+def test_routing_executor_transpiles_from_generation_dialect_to_target(
+    monkeypatch,
+) -> None:
+    executed_sql: list[str] = []
+
+    class FakeExecutor:
+        def execute(self, sql: str) -> QueryResult:
+            executed_sql.append(sql)
+            return QueryResult(columns=["ok"], rows=[{"ok": True}])
+
+    class FakeDefinition:
+        def executor_factory(self, database_url: str, max_rows: int) -> FakeExecutor:
+            return FakeExecutor()
+
+    class FakeRegistry:
+        def get(self, type_key: str) -> FakeDefinition:
+            return FakeDefinition()
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.query.get_connector_registry",
+        lambda: FakeRegistry(),
+    )
+    contexts = [
+        (
+            DatasourceConnector(
+                connector_key="pg",
+                name="Postgres",
+                database_type="postgresql",
+                database_url="postgresql://user:pass@example.test/db",
+                sql_dialect="postgres",
+                active=True,
+            ),
+            DatasourceSchemaCache(
+                connector_id=1,
+                schema_json='{"tables":[{"name":"orders","columns":[]}]}',
+            ),
+        ),
+        (
+            DatasourceConnector(
+                connector_key="sqlite_db",
+                name="SQLite",
+                database_type="sqlite",
+                database_url="sqlite:///example.db",
+                sql_dialect="sqlite",
+                active=True,
+            ),
+            DatasourceSchemaCache(
+                connector_id=2,
+                schema_json='{"tables":[{"name":"orders","columns":[]}]}',
+            ),
+        ),
+    ]
+
+    executor = RoutingDatasourceExecutor(
+        contexts,
+        max_rows=100,
+        dialect_plan=resolve_sql_dialect_plan(contexts),
+    )
+
+    result = executor.execute("SELECT * FROM sqlite_db.orders WHERE name ILIKE '%a%'")
+
+    assert result.rows == [{"ok": True}]
+    assert executed_sql == [
+        "SELECT * FROM orders WHERE LOWER(name) LIKE LOWER('%a%')",
+    ]
+
+
 def test_datasource_schema_table_settings_are_saved(admin_client: TestClient) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -1963,8 +2128,173 @@ def test_query_routes_datasource_qualified_sql_to_one_active_datasource(
     assert query_response.status_code == 200
     payload = query_response.json()
     assert payload["rows"] == [{"total": 3}]
-    assert payload["metadata"]["datasource_id"] == "con_a,con_b"
+    assert payload["metadata"]["datasource_id"] == "con_b"
+    assert payload["metadata"]["datasource_ids"] == ["con_b"]
     assert payload["metadata"]["active_datasource_ids"] == ["con_a", "con_b"]
+    assert payload["metadata"]["llm_sql_language"] == "sqlite"
+
+    audit_response = admin_client.get(
+        "/api/v1/admin/audit/data-queries",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert audit_response.status_code == 200
+    audit_item = audit_response.json()["items"][0]
+    assert audit_item["datasource_id"] == "con_b"
+    assert audit_item["llm_sql_language"] == "sqlite"
+    assert audit_item["metadata"]["datasource_id"] == "con_b"
+    assert audit_item["metadata"]["datasource_ids"] == ["con_b"]
+
+
+def test_query_runs_tableless_sql_without_datasource_audit(
+    admin_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    first_db = tmp_path / "first.db"
+    second_db = tmp_path / "second.db"
+
+    with sqlite3.connect(first_db) as connection:
+        connection.execute("CREATE TABLE first_table (id INTEGER PRIMARY KEY)")
+        connection.commit()
+
+    with sqlite3.connect(second_db) as connection:
+        connection.execute("CREATE TABLE second_table (id INTEGER PRIMARY KEY)")
+        connection.commit()
+
+    for connector_key, database_url in (
+        ("con_a", f"sqlite:///{first_db}"),
+        ("con_b", f"sqlite:///{second_db}"),
+    ):
+        create_response = admin_client.post(
+            "/api/v1/admin/datasources",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "connector_key": connector_key,
+                "name": connector_key,
+                "database_type": "sqlite",
+                "database_url": database_url,
+                "sql_dialect": "sqlite",
+                "active": True,
+            },
+        )
+        assert create_response.status_code == 200
+
+    def generate_tableless_sql(self, request: QueryRequest) -> GeneratedSql:
+        return GeneratedSql(
+            sql="SELECT 'form_id' AS column_name UNION ALL SELECT 'status'",
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(MockSqlGenerator, "generate", generate_tableless_sql)
+
+    query_response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "List known columns.",
+            "user_id": "alice",
+            "interpret": False,
+        },
+    )
+
+    assert query_response.status_code == 200
+    payload = query_response.json()
+    assert payload["rows"] == [
+        {"column_name": "form_id"},
+        {"column_name": "status"},
+    ]
+    assert payload["metadata"]["datasource_id"] == ""
+    assert payload["metadata"]["datasource_ids"] == []
+
+    audit_response = admin_client.get(
+        "/api/v1/admin/audit/data-queries",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert audit_response.status_code == 200
+    audit_item = audit_response.json()["items"][0]
+    assert audit_item["datasource_id"] == ""
+    assert audit_item["metadata"]["datasource_id"] == ""
+    assert audit_item["metadata"]["datasource_ids"] == []
+
+
+def test_query_runs_datasource_information_schema_from_schema_cache(
+    admin_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    patients_db = tmp_path / "patients.db"
+    orders_db = tmp_path / "orders.db"
+
+    with sqlite3.connect(patients_db) as connection:
+        connection.execute("CREATE TABLE patients (id INTEGER PRIMARY KEY, name TEXT)")
+        connection.commit()
+
+    with sqlite3.connect(orders_db) as connection:
+        connection.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, total REAL)")
+        connection.commit()
+
+    for connector_key, database_url in (
+        ("con_a", f"sqlite:///{patients_db}"),
+        ("con_b", f"sqlite:///{orders_db}"),
+    ):
+        create_response = admin_client.post(
+            "/api/v1/admin/datasources",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "connector_key": connector_key,
+                "name": connector_key,
+                "database_type": "sqlite",
+                "database_url": database_url,
+                "sql_dialect": "sqlite",
+                "active": True,
+            },
+        )
+        assert create_response.status_code == 200
+
+    def generate_information_schema_sql(self, request: QueryRequest) -> GeneratedSql:
+        return GeneratedSql(
+            sql=(
+                "SELECT column_name FROM con_b.information_schema.columns "
+                "WHERE table_name = 'orders' ORDER BY ordinal_position"
+            ),
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(MockSqlGenerator, "generate", generate_information_schema_sql)
+
+    query_response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "List columns in orders.",
+            "user_id": "alice",
+            "interpret": False,
+        },
+    )
+
+    assert query_response.status_code == 200
+    payload = query_response.json()
+    assert payload["rows"] == [
+        {"column_name": "id"},
+        {"column_name": "total"},
+    ]
+    assert payload["metadata"]["datasource_id"] == "con_b"
+    assert payload["metadata"]["datasource_ids"] == ["con_b"]
+
+    audit_response = admin_client.get(
+        "/api/v1/admin/audit/data-queries",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert audit_response.status_code == 200
+    audit_item = audit_response.json()["items"][0]
+    assert audit_item["datasource_id"] == "con_b"
+    assert audit_item["metadata"]["datasource_id"] == "con_b"
+    assert audit_item["metadata"]["datasource_ids"] == ["con_b"]
 
 
 def test_query_rejects_cross_datasource_sql(

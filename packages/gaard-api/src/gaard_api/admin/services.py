@@ -413,6 +413,7 @@ def _record_data_query_audit(
         audit_metadata = dict(metadata)
         audit_metadata.pop("audit_type", None)
         audit_metadata.pop("output_classification", None)
+        llm_sql_language = str(audit_metadata.get("llm_sql_language") or "")
         log = DataQueryAuditLog(
             type=coerce_data_query_audit_type(audit_type),
             output_classification=coerce_output_classification(output_classification),
@@ -421,6 +422,7 @@ def _record_data_query_audit(
             question=request.question,
             answer=answer,
             sql=sql,
+            llm_sql_language=llm_sql_language,
             metadata_json=json_dumps(audit_metadata),
         )
         session.add(log)

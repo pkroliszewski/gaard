@@ -406,6 +406,15 @@ def ensure_data_query_audit_schema(engine: Engine) -> None:
                 )
             )
 
+    if "llm_sql_language" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE data_query_audit_logs "
+                    "ADD COLUMN llm_sql_language VARCHAR(50) DEFAULT ''"
+                )
+            )
+
     with engine.begin() as connection:
         for index in DataQueryAuditLog.__table__.indexes:
             index.create(bind=connection, checkfirst=True)

@@ -19,7 +19,7 @@ class SelectOnlySqlValidator:
 
         statement = statements[0]
 
-        if not isinstance(statement, exp.Select):
+        if not isinstance(statement, (exp.Select, exp.SetOperation)):
             raise SqlValidationError(f"Only SELECT queries are allowed. {sql}")
 
         forbidden_expressions = (

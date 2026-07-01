@@ -1406,6 +1406,7 @@ def get_data_query_audit(
                 "question": item.question,
                 "answer": item.answer,
                 "sql": item.sql,
+                "llm_sql_language": item.llm_sql_language,
                 "output_classification": item.output_classification,
                 "metadata": json_loads(item.metadata_json),
             }
