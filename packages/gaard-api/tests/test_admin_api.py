@@ -108,7 +108,20 @@ def test_admin_lists_datasource_types_from_connector_registry(admin_client: Test
     definitions = {item["type_key"]: item for item in response.json()["items"]}
     assert definitions["sqlite"]["default_sql_dialect"] == "sqlite"
     assert definitions["postgresql"]["default_sql_dialect"] == "postgres"
-    assert definitions["mysql"]["config_schema"]["required"] == ["database_url"]
+    assert definitions["sqlite"]["config_schema"]["required"] == ["database_path"]
+    assert definitions["postgresql"]["config_schema"]["required"] == [
+        "host",
+        "port",
+        "database",
+        "username",
+    ]
+    assert definitions["mysql"]["config_schema"]["required"] == [
+        "host",
+        "port",
+        "database",
+        "username",
+    ]
+    assert "database_path" in definitions["sqlite"]["config_schema"]["properties"]
 
 
 def test_admin_lists_extensions_inventory(admin_client: TestClient) -> None:
@@ -1226,6 +1239,103 @@ def test_datasource_connector_accepts_postgres_sql_dialect(
     item = create_response.json()["item"]
     assert item["database_type"] == "postgresql"
     assert item["sql_dialect"] == "postgres"
+
+
+def test_datasource_connector_builds_sqlite_url_from_database_path(
+    admin_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    db_path = tmp_path / "path-source.db"
+    sqlite3.connect(db_path).close()
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "path_db",
+            "name": "Path DB",
+            "database_type": "sqlite",
+            "database_path": str(db_path),
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "sqlite"
+    assert item["database_url"] == f"sqlite:///{db_path}"
+    assert item["sql_dialect"] == "sqlite"
+
+
+def test_datasource_connector_builds_postgres_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "pg_fields",
+            "name": "Postgres fields",
+            "database_type": "postgresql",
+            "connection_config": {
+                "host": "db.example.test",
+                "port": 5433,
+                "database": "analytics",
+                "username": "reporter",
+                "password": "pa:ss@word",
+                "sslmode": "require",
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "postgresql"
+    assert item["database_url"] == (
+        "postgresql+psycopg://reporter:pa%3Ass%40word@"
+        "db.example.test:5433/analytics?sslmode=require"
+    )
+    assert item["sql_dialect"] == "postgres"
+
+
+def test_datasource_connector_builds_mysql_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "mysql_fields",
+            "name": "MySQL fields",
+            "database_type": "mysql",
+            "connection_config": {
+                "host": "mysql.example.test",
+                "port": 3307,
+                "database": "sales",
+                "username": "reader",
+                "password": "secret",
+                "charset": "utf8mb4",
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "mysql"
+    assert item["database_url"] == (
+        "mysql+pymysql://reader:secret@mysql.example.test:3307/sales?charset=utf8mb4"
+    )
+    assert item["sql_dialect"] == "mysql"
 
 
 def test_sql_generation_prompt_uses_active_datasource_dialect(

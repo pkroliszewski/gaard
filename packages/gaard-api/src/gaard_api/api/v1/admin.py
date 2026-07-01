@@ -78,6 +78,7 @@ from gaard_api.admin.services import (
     list_prompt_templates,
     learn_business_logic_from_sql_error,
     mask_database_url,
+    normalize_datasource_configuration,
     record_admin_audit,
     record_data_query_audit,
     record_data_query_sql_error_audit,
@@ -92,8 +93,6 @@ from gaard_api.admin.services import (
     test_llm_runtime_config,
     update_business_logic_suggestion_content,
     update_schema_table_settings,
-    validate_datasource_url,
-    validate_datasource_configuration,
 )
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
@@ -231,22 +230,28 @@ class DatasourceConnectorRequest(BaseModel):
     connector_key: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     name: str = Field(min_length=1)
     database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
-    database_url: str = Field(min_length=1)
-    sql_dialect: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    connection_config: dict[str, Any] = Field(default_factory=dict)
+    database_path: str | None = Field(default=None, min_length=1)
+    database_url: str | None = Field(default=None, min_length=1)
+    sql_dialect: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     active: bool = False
 
 
 class DatasourceConnectorUpdateRequest(BaseModel):
     name: str = Field(min_length=1)
     database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
-    database_url: str = Field(min_length=1)
-    sql_dialect: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    connection_config: dict[str, Any] = Field(default_factory=dict)
+    database_path: str | None = Field(default=None, min_length=1)
+    database_url: str | None = Field(default=None, min_length=1)
+    sql_dialect: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     active: bool = False
 
 
 class DatasourceConnectionTestRequest(BaseModel):
     database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
-    database_url: str = Field(min_length=1)
+    connection_config: dict[str, Any] = Field(default_factory=dict)
+    database_path: str | None = Field(default=None, min_length=1)
+    database_url: str | None = Field(default=None, min_length=1)
 
 
 class DatasourceSchemaTableSettingsRequest(BaseModel):
@@ -1585,10 +1590,12 @@ def create_datasource(
         )
 
     try:
-        validate_datasource_configuration(
-            request.database_type,
-            request.database_url,
-            request.sql_dialect,
+        normalized_config = normalize_datasource_configuration(
+            database_type=request.database_type,
+            connection_config=request.connection_config,
+            database_path=request.database_path,
+            database_url=request.database_url,
+            sql_dialect=request.sql_dialect,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1608,9 +1615,9 @@ def create_datasource(
     connector = DatasourceConnector(
         connector_key=request.connector_key,
         name=request.name,
-        database_type=request.database_type,
-        database_url=request.database_url,
-        sql_dialect=request.sql_dialect,
+        database_type=normalized_config.database_type,
+        database_url=normalized_config.database_url,
+        sql_dialect=normalized_config.sql_dialect,
         active=request.active,
         updated_by=user.username,
     )
@@ -1658,18 +1665,20 @@ def update_datasource(
         )
 
     try:
-        validate_datasource_configuration(
-            request.database_type,
-            request.database_url,
-            request.sql_dialect,
+        normalized_config = normalize_datasource_configuration(
+            database_type=request.database_type,
+            connection_config=request.connection_config,
+            database_path=request.database_path,
+            database_url=request.database_url,
+            sql_dialect=request.sql_dialect,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     connector.name = request.name
-    connector.database_type = request.database_type
-    connector.database_url = request.database_url
-    connector.sql_dialect = request.sql_dialect
+    connector.database_type = normalized_config.database_type
+    connector.database_url = normalized_config.database_url
+    connector.sql_dialect = normalized_config.sql_dialect
     connector.active = request.active
     connector.updated_by = user.username
 
@@ -1816,14 +1825,22 @@ def test_datasource(
 def test_datasource_from_request(
     request: DatasourceConnectionTestRequest,
 ) -> dict[str, Any]:
-    validate_datasource_url(request.database_type, request.database_url)
-    definition = get_connector_registry().get(request.database_type)
+    try:
+        normalized_config = normalize_datasource_configuration(
+            database_type=request.database_type,
+            connection_config=request.connection_config,
+            database_path=request.database_path,
+            database_url=request.database_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     connector = DatasourceConnector(
         connector_key="__preview__",
         name="__preview__",
-        database_type=request.database_type,
-        database_url=request.database_url,
-        sql_dialect=definition.default_sql_dialect,
+        database_type=normalized_config.database_type,
+        database_url=normalized_config.database_url,
+        sql_dialect=normalized_config.sql_dialect,
         active=False,
     )
     test_datasource_connection(connector)

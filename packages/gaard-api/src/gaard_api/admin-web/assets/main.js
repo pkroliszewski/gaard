@@ -1021,12 +1021,11 @@ function renderDatasourceForm(connector) {
   const systemManaged = connector?.system_managed === true;
   const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
   const selectedType = getDatasourceType(selectedTypeKey);
-  const databaseUrlSchema = selectedType?.config_schema?.properties?.database_url;
   const selectedSqlDialect = connector?.sql_dialect || selectedType?.default_sql_dialect || "";
-  const databaseUrl = connector?.database_url || String(databaseUrlSchema?.default || "");
   const unavailableType = Boolean(selectedTypeKey && !selectedType);
   const disabled = systemManaged || unavailableType || !selectedType ? "disabled" : "";
   const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
+  const connectionValues = datasourceConnectionConfigDefaults(selectedType, connector);
   return `
     <form id="datasource-form" class="form-grid">
       <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
@@ -1035,10 +1034,12 @@ function renderDatasourceForm(connector) {
       <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
       <div class="subgrid">
         <label>Connector type<select id="datasource-type" name="database_type" ${disabled}>${renderDatasourceTypeOptions(selectedTypeKey)}</select></label>
-        <label>SQL dialect<select id="datasource-sql-dialect" name="sql_dialect" ${disabled}>${renderSqlDialectOptions(selectedType, selectedSqlDialect)}</select></label>
+        <label>SQL dialect<input id="datasource-sql-dialect" readonly ${disabled} value="${escapeHtml(selectedSqlDialect)}" /></label>
       </div>
       <p id="datasource-type-description" class="muted">${escapeHtml(connectorDescription)}</p>
-      <label><span id="datasource-url-label">${escapeHtml(databaseUrlSchema?.title || "Database URL")}</span><input id="datasource-url" name="database_url" ${disabled} placeholder="${escapeHtml(databaseUrlSchema?.description || "")}" value="${escapeHtml(databaseUrl)}" /></label>
+      <div id="datasource-connection-fields" class="subgrid">
+        ${renderDatasourceConnectionFields(selectedType, connectionValues, disabled)}
+      </div>
       <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
       <div class="button-row">
         <button type="button" id="test-datasource" ${disabled}>Test</button>
@@ -1079,28 +1080,84 @@ function renderSqlDialectOptions(datasourceType, selected) {
   }
   return dialects.map((value) => `<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
 }
+function datasourceConnectionConfigDefaults(datasourceType, connector = null) {
+  const values = {};
+  const properties = datasourceType?.config_schema?.properties || {};
+  const usesGeneratedFields = datasourceUsesGeneratedConnectionFields(datasourceType);
+  Object.entries(properties).forEach(([key, schema]) => {
+    if (key === "database_url" && usesGeneratedFields) return;
+    values[key] = schema?.default ?? "";
+  });
+  if (!connector?.database_url) return values;
+  if (!usesGeneratedFields) {
+    return { ...values, database_url: connector.database_url };
+  }
+  return { ...values, ...parseDatasourceUrl(connector.database_type, connector.database_url) };
+}
+function datasourceUsesGeneratedConnectionFields(datasourceType) {
+  const required = datasourceType?.config_schema?.required || [];
+  return required.some((key) => key !== "database_url");
+}
+function parseDatasourceUrl(databaseType, databaseUrl) {
+  if (!databaseUrl) return {};
+  if (databaseType === "sqlite") {
+    return { database_path: databaseUrl.replace(/^sqlite:\/\/\/?/, "") };
+  }
+  try {
+    const parsed = new URL(databaseUrl);
+    const query = Object.fromEntries(parsed.searchParams.entries());
+    return {
+      host: parsed.hostname || "",
+      port: parsed.port || "",
+      database: decodeURIComponent(parsed.pathname.replace(/^\//, "")),
+      username: decodeURIComponent(parsed.username || ""),
+      password: decodeURIComponent(parsed.password || ""),
+      ...query
+    };
+  } catch {
+    return {};
+  }
+}
+function renderDatasourceConnectionFields(datasourceType, values = {}, disabled = "") {
+  const properties = datasourceType?.config_schema?.properties || {};
+  const usesGeneratedFields = datasourceUsesGeneratedConnectionFields(datasourceType);
+  return Object.entries(properties)
+    .filter(([key]) => key !== "database_url" || !usesGeneratedFields)
+    .map(([key, schema]) => {
+      const type = schema?.format === "password" ? "password" : schema?.type === "integer" ? "number" : "text";
+      const value = values[key] ?? schema?.default ?? "";
+      const placeholder = schema?.description || "";
+      const inputName = key === "database_url" ? "database_url" : `connection_${key}`;
+      const dataAttribute = key === "database_url" ? "" : `data-connection-field="${escapeHtml(key)}"`;
+      return `<label>${escapeHtml(schema?.title || key)}<input ${dataAttribute} name="${escapeHtml(inputName)}" type="${type}" ${disabled} placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" /></label>`;
+    })
+    .join("");
+}
+function collectDatasourceConnectionConfig(form) {
+  const config = {};
+  form.querySelectorAll("[data-connection-field]").forEach((input) => {
+    config[input.dataset.connectionField] = input.value;
+  });
+  return config;
+}
 function syncDatasourceTypeFields(event) {
   const typeKey = event.currentTarget.value;
   const datasourceType = getDatasourceType(typeKey);
   const sqlDialect = document.querySelector("#datasource-sql-dialect");
   const description = document.querySelector("#datasource-type-description");
-  const urlLabel = document.querySelector("#datasource-url-label");
-  const urlInput = document.querySelector("#datasource-url");
-  const databaseUrlSchema = datasourceType?.config_schema?.properties?.database_url;
+  const connectionFields = document.querySelector("#datasource-connection-fields");
   if (sqlDialect) {
-    sqlDialect.innerHTML = renderSqlDialectOptions(
-      datasourceType,
-      datasourceType?.default_sql_dialect || ""
-    );
+    sqlDialect.value = datasourceType?.default_sql_dialect || "";
   }
   if (description) {
     description.textContent = datasourceType?.description || "Connector type is unavailable.";
   }
-  if (urlLabel) {
-    urlLabel.textContent = databaseUrlSchema?.title || "Database URL";
-  }
-  if (urlInput) {
-    urlInput.placeholder = databaseUrlSchema?.description || "";
+  if (connectionFields) {
+    connectionFields.innerHTML = renderDatasourceConnectionFields(
+      datasourceType,
+      datasourceConnectionConfigDefaults(datasourceType),
+      ""
+    );
   }
 }
 function renderModeOptions(selected, values) {
@@ -1890,8 +1947,8 @@ async function saveDatasource(event) {
     connector_key: form.get("connector_key"),
     name: form.get("name"),
     database_type: form.get("database_type"),
-    database_url: form.get("database_url"),
-    sql_dialect: form.get("sql_dialect"),
+    connection_config: collectDatasourceConnectionConfig(event.currentTarget),
+    database_url: form.get("database_url") || null,
     active: form.get("active") === "on"
   };
   try {
@@ -1918,7 +1975,8 @@ async function testDatasource() {
         method: "POST",
         body: JSON.stringify({
           database_type: formData.get("database_type"),
-          database_url: formData.get("database_url")
+          connection_config: collectDatasourceConnectionConfig(form),
+          database_url: formData.get("database_url") || null
         })
       });
     } else {
