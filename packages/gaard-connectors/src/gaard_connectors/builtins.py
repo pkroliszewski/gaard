@@ -56,19 +56,61 @@ def _sqlalchemy_connector(
             database_url=database_url,
         ),
         connection_tester=_test_sqlalchemy_connection,
-        config_schema={
-            "type": "object",
-            "properties": {
-                "database_url": {
-                    "type": "string",
-                    "format": "uri",
-                    "title": "Database URL",
-                }
-            },
-            "required": ["database_url"],
-        },
+        config_schema=_sqlalchemy_config_schema(type_key),
         description=description,
     )
+
+
+def _sqlalchemy_config_schema(type_key: str) -> dict[str, object]:
+    database_url = {
+        "type": "string",
+        "format": "uri",
+        "title": "Database URL",
+    }
+    if type_key == "sqlite":
+        properties = {
+            "database_url": database_url,
+            "database_path": {
+                "type": "string",
+                "title": "Database path",
+                "description": (
+                    "Filesystem path to the database file. GAARD builds the SQLAlchemy URL "
+                    "automatically."
+                ),
+            },
+        }
+        required = ["database_path"]
+    elif type_key == "postgresql":
+        properties = {
+            "database_url": database_url,
+            "host": {"type": "string", "title": "Host", "default": "localhost"},
+            "port": {"type": "integer", "title": "Port", "default": 5432},
+            "database": {"type": "string", "title": "Database"},
+            "username": {"type": "string", "title": "Username"},
+            "password": {"type": "string", "title": "Password", "format": "password"},
+            "sslmode": {"type": "string", "title": "SSL mode", "default": ""},
+        }
+        required = ["host", "port", "database", "username"]
+    elif type_key == "mysql":
+        properties = {
+            "database_url": database_url,
+            "host": {"type": "string", "title": "Host", "default": "localhost"},
+            "port": {"type": "integer", "title": "Port", "default": 3306},
+            "database": {"type": "string", "title": "Database"},
+            "username": {"type": "string", "title": "Username"},
+            "password": {"type": "string", "title": "Password", "format": "password"},
+            "charset": {"type": "string", "title": "Charset", "default": "utf8mb4"},
+        }
+        required = ["host", "port", "database", "username"]
+    else:
+        properties = {"database_url": database_url}
+        required = ["database_url"]
+
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    }
 
 
 def _test_sqlalchemy_connection(database_url: str) -> None:

@@ -2,8 +2,10 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
+from sqlalchemy.engine import URL
 from sqlalchemy import delete, desc, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -51,6 +53,137 @@ def validate_datasource_configuration(
     sql_dialect: str,
 ) -> None:
     get_connector_registry().validate(database_type, database_url, sql_dialect)
+
+
+@dataclass(frozen=True)
+class NormalizedDatasourceConfiguration:
+    database_type: str
+    database_url: str
+    sql_dialect: str
+
+
+def normalize_datasource_configuration(
+    database_type: str,
+    connection_config: dict[str, Any] | None = None,
+    database_path: str | None = None,
+    database_url: str | None = None,
+    sql_dialect: str | None = None,
+) -> NormalizedDatasourceConfiguration:
+    registry = get_connector_registry()
+    normalized_url = (database_url or "").strip()
+    normalized_path = (database_path or "").strip()
+
+    if not normalized_url and connection_config:
+        normalized_url = build_sqlalchemy_url_from_connection_config(
+            database_type,
+            connection_config,
+        )
+
+    if not normalized_url and normalized_path:
+        normalized_url = build_sqlalchemy_url_from_path(database_type, normalized_path)
+
+    if not normalized_url:
+        raise ValueError("Datasource database path is required.")
+
+    if database_type:
+        definition = registry.get(database_type)
+    else:
+        definition = registry.detect_from_database_url(normalized_url)
+
+    resolved_dialect = (sql_dialect or "").strip() or definition.default_sql_dialect
+    registry.validate(definition.type_key, normalized_url, resolved_dialect)
+
+    return NormalizedDatasourceConfiguration(
+        database_type=definition.type_key,
+        database_url=normalized_url,
+        sql_dialect=resolved_dialect,
+    )
+
+
+def build_sqlalchemy_url_from_path(database_type: str, database_path: str) -> str:
+    if "://" in database_path:
+        return database_path
+
+    if database_type == "sqlite":
+        return str(URL.create("sqlite", database=str(Path(database_path).expanduser())))
+
+    raise ValueError(
+        "Only SQLite datasources can be created from a filesystem path. "
+        "Use a SQLAlchemy URL for this datasource type."
+    )
+
+
+def build_sqlalchemy_url_from_connection_config(
+    database_type: str,
+    connection_config: dict[str, Any],
+) -> str:
+    if database_type == "sqlite":
+        database_path = str(connection_config.get("database_path") or "").strip()
+        if not database_path:
+            raise ValueError("SQLite datasource requires a database path.")
+        return build_sqlalchemy_url_from_path(database_type, database_path)
+
+    if database_type == "postgresql":
+        return build_server_database_url(
+            drivername="postgresql+psycopg",
+            connection_config=connection_config,
+            default_port=5432,
+            query_keys=("sslmode",),
+        )
+
+    if database_type == "mysql":
+        return build_server_database_url(
+            drivername="mysql+pymysql",
+            connection_config=connection_config,
+            default_port=3306,
+            query_keys=("charset",),
+        )
+
+    raise ValueError(f"Datasource type {database_type!r} does not support generated URLs.")
+
+
+def build_server_database_url(
+    drivername: str,
+    connection_config: dict[str, Any],
+    default_port: int,
+    query_keys: tuple[str, ...],
+) -> str:
+    host = str(connection_config.get("host") or "").strip()
+    database = str(connection_config.get("database") or "").strip()
+    username = str(connection_config.get("username") or "").strip()
+    password = str(connection_config.get("password") or "")
+    port_value = connection_config.get("port") or default_port
+
+    if not host:
+        raise ValueError("Datasource host is required.")
+    if not database:
+        raise ValueError("Datasource database name is required.")
+    if not username:
+        raise ValueError("Datasource username is required.")
+
+    try:
+        port = int(port_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Datasource port must be a number.") from exc
+
+    query = {
+        key: str(connection_config.get(key)).strip()
+        for key in query_keys
+        if connection_config.get(key) not in (None, "")
+    }
+
+    return (
+        URL.create(
+            drivername=drivername,
+            username=username,
+            password=password or None,
+            host=host,
+            port=port,
+            database=database,
+            query=query,
+        )
+        .render_as_string(hide_password=False)
+    )
 
 
 def mask_database_url(database_url: str) -> str:
