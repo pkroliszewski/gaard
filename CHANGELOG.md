@@ -1,3 +1,8 @@
+### v.0.2.1 - Better handling of datasources
+- Improvements related to adding data sources, 
+- Introducing a datasource parameters form instead of URL, 
+- Bug fixes, and package version updates to v0.2.1.
+
 ### v.0.2.0 - Big step for GAARD. Data closer to people
 - The new Analysis mode is available. It has its own endpoint.
 - The investigation mode is not available anymore. 
