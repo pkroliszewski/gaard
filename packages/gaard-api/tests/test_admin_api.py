@@ -27,6 +27,7 @@ from gaard_api.admin.database import (
 from gaard_api.admin.models import (
     AdminSetting,
     BusinessKnowledgeClaim,
+    BusinessLogicSuggestion,
     DataQueryAuditLog,
     DataQueryAuditType,
     DatasourceConnector,
@@ -1055,6 +1056,94 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
     )
 
 
+def test_overview_widget_from_query_strips_datasource_qualifier(
+    admin_client: TestClient,
+) -> None:
+    create_response = admin_client.post(
+        "/api/v1/admin/overview/widgets/from-query",
+        json={
+            "label": "Qualified prompt count",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "How many prompts are configured?",
+            "sql": 'SELECT COUNT(*) AS value FROM "metadata-db".prompt_templates',
+        },
+    )
+
+    assert create_response.status_code == 200
+    created_item = create_response.json()["item"]
+    assert created_item["sql"] == (
+        'SELECT COUNT(*) AS value FROM "metadata-db".prompt_templates'
+    )
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    state_response = admin_client.patch(
+        f"/api/v1/admin/overview/widgets/{created_item['widget_key']}/state",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"active": True},
+    )
+    assert state_response.status_code == 200
+
+    overview_response = admin_client.get(
+        "/api/v1/admin/overview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert overview_response.status_code == 200
+    widget = next(
+        item
+        for item in overview_response.json()["widgets"]
+        if item["widget_key"] == created_item["widget_key"]
+    )
+    assert widget["result"]["status"] == "ok"
+    assert widget["result"]["columns"] == ["value"]
+    assert widget["result"]["rows"][0]["value"] >= 1
+
+
+def test_overview_widget_generation_strips_unquoted_datasource_qualifier(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    def generate_qualified_sql(self, request: QueryRequest) -> GeneratedSql:
+        return GeneratedSql(
+            sql=(
+                "SELECT CAST(value AS INTEGER) AS retention_days "
+                "FROM metadata-db.admin_settings "
+                "WHERE key = 'data_query_audit_retention_days'"
+            ),
+            confidence=0.8,
+            assumptions=[],
+        )
+
+    monkeypatch.setattr(MockSqlGenerator, "generate", generate_qualified_sql)
+
+    update_response = admin_client.put(
+        "/api/v1/admin/overview/widgets/audit_retention",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "label": "Audit retention",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "Return audit retention days.",
+        },
+    )
+
+    assert update_response.status_code == 200
+    item = update_response.json()["item"]
+    assert item["sql"] == (
+        "SELECT CAST(value AS INTEGER) AS retention_days "
+        "FROM metadata-db.admin_settings "
+        "WHERE key = 'data_query_audit_retention_days'"
+    )
+    assert item["result"]["status"] == "ok"
+    assert item["result"]["columns"] == ["retention_days"]
+
+
 def test_overview_widget_can_return_interpreted_result(
     admin_client: TestClient,
 ) -> None:
@@ -1266,6 +1355,100 @@ def test_sql_generation_prompt_uses_active_datasource_dialect(
     body = response.json()
     assert body["metadata"]["dialect"] == "mysql"
     assert "Table: lead" in body["user_prompt"]
+
+
+def test_business_logic_suggestions_include_all_active_datasources(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    with create_session() as session:
+        for connector in session.scalars(select(DatasourceConnector)):
+            connector.active = False
+
+        con_a = DatasourceConnector(
+            connector_key="con_a",
+            name="Connector A",
+            database_type="sqlite",
+            database_url="sqlite:///a.db",
+            sql_dialect="sqlite",
+            active=True,
+        )
+        con_b = DatasourceConnector(
+            connector_key="con_b",
+            name="Connector B",
+            database_type="sqlite",
+            database_url="sqlite:///b.db",
+            sql_dialect="sqlite",
+            active=True,
+        )
+        con_disabled = DatasourceConnector(
+            connector_key="con_disabled",
+            name="Connector disabled",
+            database_type="sqlite",
+            database_url="sqlite:///disabled.db",
+            sql_dialect="sqlite",
+            active=False,
+        )
+        session.add_all([con_a, con_b, con_disabled])
+        session.flush()
+        session.add_all(
+            [
+                BusinessLogicSuggestion(
+                    connector_id=con_a.id,
+                    error_category="schema.missing_table",
+                    title="Rule A",
+                    rule_text="Use active datasource A.",
+                ),
+                BusinessLogicSuggestion(
+                    connector_id=con_b.id,
+                    error_category="schema.missing_column",
+                    title="Rule B",
+                    rule_text="Use active datasource B.",
+                ),
+                BusinessLogicSuggestion(
+                    connector_id=con_disabled.id,
+                    error_category="schema.missing_table",
+                    title="Disabled rule",
+                    rule_text="Do not show inactive datasource suggestions.",
+                ),
+            ]
+        )
+        session.commit()
+
+    response = admin_client.get(
+        "/api/v1/admin/business-logic-suggestions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["connector_key"] for item in body["datasources"]] == ["con_a", "con_b"]
+    assert body["datasource"]["connector_key"] == "con_a"
+    assert {item["title"] for item in body["items"]} == {"Rule A", "Rule B"}
+
+
+def test_business_logic_suggestions_returns_empty_state_without_active_datasources(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    with create_session() as session:
+        for connector in session.scalars(select(DatasourceConnector)):
+            connector.active = False
+        session.commit()
+
+    response = admin_client.get(
+        "/api/v1/admin/business-logic-suggestions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["datasource"] is None
+    assert response.json()["datasources"] == []
+    assert response.json()["items"] == []
 
 
 def test_sql_dialect_plan_uses_shared_active_dialect() -> None:

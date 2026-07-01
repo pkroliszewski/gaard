@@ -1031,10 +1031,20 @@ def list_business_logic_suggestions(
     session: Session,
     connector_id: int,
 ) -> list[BusinessLogicSuggestion]:
+    return list_business_logic_suggestions_for_connectors(session, [connector_id])
+
+
+def list_business_logic_suggestions_for_connectors(
+    session: Session,
+    connector_ids: list[int],
+) -> list[BusinessLogicSuggestion]:
+    if not connector_ids:
+        return []
+
     return list(
         session.scalars(
             select(BusinessLogicSuggestion)
-            .where(BusinessLogicSuggestion.connector_id == connector_id)
+            .where(BusinessLogicSuggestion.connector_id.in_(connector_ids))
             .order_by(
                 BusinessLogicSuggestion.enabled.desc(),
                 desc(BusinessLogicSuggestion.updated_at),

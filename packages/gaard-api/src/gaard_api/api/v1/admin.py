@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from gaard_plugin_api import ExtensionRecord
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -18,10 +17,13 @@ from gaard_core.query_pipeline.models import (
     QueryResult,
 )
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
+from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+import sqlglot
+from sqlglot import expressions as exp
 
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import (
@@ -51,6 +53,7 @@ from gaard_api.admin.services import (
     coerce_data_query_audit_type,
     delete_business_logic_suggestion,
     get_active_datasource_connector,
+    get_active_datasource_connectors,
     get_business_logic_suggestion,
     get_data_query_audit_retention_days,
     get_data_query_audit_type,
@@ -71,7 +74,7 @@ from gaard_api.admin.services import (
     json_loads,
     list_admin_audit_logs,
     list_all_overview_widgets,
-    list_business_logic_suggestions,
+    list_business_logic_suggestions_for_connectors,
     list_data_query_audit_logs,
     list_datasource_connectors,
     list_overview_widgets,
@@ -524,7 +527,8 @@ def execute_overview_sql(
     connector: DatasourceConnector,
     sql: str,
 ) -> QueryResult:
-    SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(sql)
+    executable_sql = prepare_overview_sql_for_connector(connector, sql)
+    SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(executable_sql)
 
     return (
         get_connector_registry()
@@ -533,8 +537,37 @@ def execute_overview_sql(
             connector.database_url,
             get_query_runtime_config(session).query_max_rows,
         )
-        .execute(sql)
+        .execute(executable_sql)
     )
+
+
+def prepare_overview_sql_for_connector(
+    connector: DatasourceConnector,
+    sql: str,
+) -> str:
+    sql = strip_overview_datasource_qualifier(connector, sql)
+
+    try:
+        expression = sqlglot.parse_one(sql, read=connector.sql_dialect)
+    except Exception:
+        return sql
+
+    for table in expression.find_all(exp.Table):
+        if table.args.get("db") and table.args["db"].name == connector.connector_key:
+            table.set("db", None)
+        if table.args.get("catalog") and table.args["catalog"].name == connector.connector_key:
+            table.set("catalog", None)
+
+    return expression.sql(dialect=connector.sql_dialect)
+
+
+def strip_overview_datasource_qualifier(
+    connector: DatasourceConnector,
+    sql: str,
+) -> str:
+    connector_key = re.escape(connector.connector_key)
+    cleaned = re.sub(rf'"{connector_key}"\s*\.', "", sql)
+    return re.sub(rf"(?<![\w\"`]){connector_key}\s*\.", "", cleaned)
 
 
 def generate_overview_widget_sql(
@@ -546,10 +579,15 @@ def generate_overview_widget_sql(
     schema_cache = get_or_create_datasource_schema_cache(session, connector, actor)
     session.commit()
 
-    from gaard_api.api.v1.query import create_sql_generator
+    from gaard_api.api.v1.query import create_sql_generator, resolve_sql_dialect_plan
 
-    generated_sql = create_sql_generator((connector, schema_cache)).generate(query_request)
-    SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(generated_sql.sql)
+    datasource_context = (connector, schema_cache)
+    generated_sql = create_sql_generator(
+        datasource_context,
+        dialect_plan=resolve_sql_dialect_plan([datasource_context]),
+    ).generate(query_request)
+    executable_sql = prepare_overview_sql_for_connector(connector, generated_sql.sql)
+    SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(executable_sql)
 
     return generated_sql.sql
 
@@ -1936,23 +1974,38 @@ def get_business_logic_suggestions(
     user: AdminUser = Depends(get_current_admin),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    connector = (
-        get_datasource_connector(session, connector_id)
-        if connector_id is not None
-        else get_active_datasource_connector(session)
+    connectors = []
+    if connector_id is not None:
+        connector = get_datasource_connector(session, connector_id)
+        if connector is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Datasource connector not found.",
+            )
+        connectors = [connector]
+    else:
+        connectors = get_active_datasource_connectors(session)
+
+    if not connectors:
+        return {
+            "datasource": None,
+            "datasources": [],
+            "items": [],
+            "statuses": [BUSINESS_LOGIC_STATUS_PENDING, BUSINESS_LOGIC_STATUS_ACTIVE],
+            "viewer": user.username,
+        }
+
+    suggestions = list_business_logic_suggestions_for_connectors(
+        session,
+        [connector.id for connector in connectors],
     )
 
-    if connector is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Datasource connector not found.",
-        )
-
     return {
-        "datasource": serialize_datasource(connector),
+        "datasource": serialize_datasource(connectors[0]),
+        "datasources": [serialize_datasource(connector) for connector in connectors],
         "items": [
             serialize_business_logic_suggestion(suggestion)
-            for suggestion in list_business_logic_suggestions(session, connector.id)
+            for suggestion in suggestions
         ],
         "statuses": [BUSINESS_LOGIC_STATUS_PENDING, BUSINESS_LOGIC_STATUS_ACTIVE],
         "viewer": user.username,

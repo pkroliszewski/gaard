@@ -44,6 +44,7 @@ var state = {
   schemaCache: null,
   businessLogic: [],
   businessLogicDatasource: null,
+  businessLogicDatasources: [],
   businessLogicEditorId: null,
   llmConfig: null,
   reasoningConfig: null,
@@ -1109,10 +1110,11 @@ function renderModeOptions(selected, values) {
 function renderDatasourceSchema() {
   const schema = state.datasourceSchema?.item;
   const rawTables = schema?.raw_schema?.tables || [];
+  const displayTables = [...rawTables].sort((a, b) => a.name.localeCompare(b.name));
   const tableSettings = schema?.table_settings?.tables || {};
   const draftTables = schema ? getDatasourceSchemaDraftTables(rawTables, tableSettings) : {};
-  const visibleTables = state.datasourceSchemaShowEnabledOnly ? rawTables.filter((table) => draftTables[table.name]?.selected !== false) : rawTables;
-  const selectedTable = schema ? getSelectedDatasourceSchemaObject(rawTables, visibleTables) : null;
+  const visibleTables = state.datasourceSchemaShowEnabledOnly ? displayTables.filter((table) => draftTables[table.name]?.selected !== false) : displayTables;
+  const selectedTable = schema ? getSelectedDatasourceSchemaObject(displayTables, visibleTables) : null;
   const selectedSettings = selectedTable ? draftTables[selectedTable.name] || {} : {};
   return `
     <section class="panel">
@@ -1163,11 +1165,15 @@ function getSelectedDatasourceSchemaObject(rawTables, visibleTables) {
 }
 function renderBusinessLogicSuggestions() {
   const datasource = state.businessLogicDatasource;
+  const datasources = state.businessLogicDatasources || (datasource ? [datasource] : []);
+  const datasourceLabel = datasources.length
+    ? datasources.map((item) => item.connector_key).join(", ")
+    : "no active datasource";
   return `
     <section class="panel">
       <div class="panel-header">
         <h2>Business logic suggestions</h2>
-        <span class="badge">${escapeHtml(datasource?.connector_key || "no active datasource")}</span>
+        <span class="badge">${escapeHtml(datasourceLabel)}</span>
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Use</th><th>Status</th><th>Safety</th><th>Rule</th><th>Error</th><th>Confidence</th><th>Actions</th></tr></thead>
@@ -1187,7 +1193,7 @@ function renderBusinessLogicSuggestions() {
             </td>
           </tr>`).join("")}</tbody>
       </table></div>
-      ${state.businessLogic.length ? "" : `<div class="panel-body"><p class="muted">No suggestions for the active datasource.</p></div>`}
+      ${state.businessLogic.length ? "" : `<div class="panel-body"><p class="muted">No suggestions for the active datasources.</p></div>`}
     </section>
     ${renderBusinessLogicEditorModal()}`;
 }
@@ -2203,6 +2209,7 @@ async function loadBusinessLogicSuggestions() {
   const result = await api("/api/v1/admin/business-logic-suggestions");
   state.businessLogic = result.items || [];
   state.businessLogicDatasource = result.datasource || null;
+  state.businessLogicDatasources = result.datasources || [];
   render();
 }
 async function loadLlmConfig() {

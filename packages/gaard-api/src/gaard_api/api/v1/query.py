@@ -151,8 +151,6 @@ def create_sql_generator(
             if datasource_contexts:
                 formatted_schema = format_connected_datasource_schemas(datasource_contexts)
                 dialect_plan = dialect_plan or resolve_sql_dialect_plan(datasource_contexts)
-                print("LlmSqlGenerator",formatted_schema)
-                print("dialect",dialect_plan.prompt_dialect)
                 return LlmSqlGenerator(
                     client=create_llm_client(llm_config),
                     model=llm_config.model,
