@@ -145,6 +145,21 @@ function isMenuGroupActive(group) {
 function renderNavigation() {
   return getMenuGroups().map((group) => renderMenuGroup(group)).join("");
 }
+function renderSidebar() {
+  return `
+      <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
+        <div class="sidebar-header">
+          <div class="brand"><strong>GAARD Admin Console</strong><span>Community edition</span></div>
+          <button class="menu-toggle" id="mobile-menu-button" type="button" aria-label="${state.mobileMenuOpen ? "Close navigation" : "Open navigation"}" aria-expanded="${state.mobileMenuOpen}" aria-controls="admin-navigation">
+            <span></span><span></span><span></span>
+          </button>
+        </div>
+        <nav class="nav" id="admin-navigation">
+          ${renderNavigation()}
+        </nav>
+        <div class="sidebar-footer"><span>${escapeHtml(state.username)}</span><button id="logout-button">Sign out</button></div>
+      </aside>`;
+}
 function renderMenuGroup(group) {
   const isOpen = Boolean(state.openMenuGroups[group.key]);
   const isActive = isMenuGroupActive(group);
@@ -392,18 +407,7 @@ function renderShell() {
   const activeLabel = getSectionLabel(state.section);
   app.innerHTML = `
     <div class="app-shell">
-      <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
-        <div class="sidebar-header">
-          <div class="brand"><strong>GAARD Admin Console</strong><span>Community edition</span></div>
-          <button class="menu-toggle" id="mobile-menu-button" type="button" aria-label="${state.mobileMenuOpen ? "Close navigation" : "Open navigation"}" aria-expanded="${state.mobileMenuOpen}" aria-controls="admin-navigation">
-            <span></span><span></span><span></span>
-          </button>
-        </div>
-        <nav class="nav" id="admin-navigation">
-          ${renderNavigation()}
-        </nav>
-        <div class="sidebar-footer"><span>${escapeHtml(state.username)}</span><button id="logout-button">Sign out</button></div>
-      </aside>
+      ${renderSidebar()}
       <main class="main">
         <header class="topbar">
           <h1>${escapeHtml(activeLabel || "Admin")}</h1>
@@ -416,12 +420,16 @@ function renderShell() {
       </main>
     </div>
     ${renderOverviewWidgetModal()}`;
+  attachShellHandlers();
+  resizeExtensionFrames();
+}
+function attachShellHandlers() {
   document.querySelectorAll("[data-menu-group]").forEach((button) => {
     button.addEventListener("click", () => {
       const groupKey = button.dataset.menuGroup;
       if (!groupKey) return;
       state.openMenuGroups[groupKey] = !state.openMenuGroups[groupKey];
-      render();
+      updateSidebar();
     });
   });
   document.querySelectorAll("[data-section]").forEach((button) => {
@@ -437,12 +445,17 @@ function renderShell() {
   });
   document.querySelector("#mobile-menu-button")?.addEventListener("click", () => {
     state.mobileMenuOpen = !state.mobileMenuOpen;
-    render();
+    updateSidebar();
   });
   document.querySelector("#logout-button")?.addEventListener("click", logout);
   document.querySelector("#top-logout-button")?.addEventListener("click", logout);
   attachSectionHandlers();
-  resizeExtensionFrames();
+}
+function updateSidebar() {
+  const sidebarHost = document.querySelector(".app-shell > .sidebar");
+  if (!sidebarHost) return render();
+  sidebarHost.outerHTML = renderSidebar();
+  attachShellHandlers();
 }
 function renderSection() {
   if (state.section === "overview") return renderOverview();

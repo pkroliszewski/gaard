@@ -1840,6 +1840,16 @@ def get_active_datasource_connector(session: Session) -> DatasourceConnector | N
     return session.scalar(select(DatasourceConnector).where(DatasourceConnector.active.is_(True)))
 
 
+def get_active_datasource_connectors(session: Session) -> list[DatasourceConnector]:
+    return list(
+        session.scalars(
+            select(DatasourceConnector)
+            .where(DatasourceConnector.active.is_(True))
+            .order_by(DatasourceConnector.name, DatasourceConnector.id)
+        )
+    )
+
+
 def get_active_datasource_connector_safe() -> DatasourceConnector | None:
     try:
         session = create_session()
@@ -1859,13 +1869,17 @@ def set_active_datasource_connector(
     connector: DatasourceConnector,
     actor: str,
 ) -> None:
-    for item in list_datasource_connectors(session):
-        if is_system_datasource_connector(item):
-            item.active = False
-            continue
+    if is_system_datasource_connector(connector):
+        connector.active = False
+        return
 
-        item.active = item.id == connector.id
-        item.updated_by = actor if item.id == connector.id else item.updated_by
+    if connector.connector_key != "default":
+        for item in list_datasource_connectors(session):
+            if item.connector_key == "default":
+                item.active = False
+
+    connector.active = True
+    connector.updated_by = actor
 
 
 def test_datasource_connection(connector: DatasourceConnector) -> None:
@@ -2085,7 +2099,6 @@ def get_datasource_schema_context_safe() -> (
         session = create_session()
     except SQLAlchemyError:
         return None
-
     try:
         connector = get_active_datasource_connector(session)
 
@@ -2102,5 +2115,47 @@ def get_datasource_schema_context_safe() -> (
     except SQLAlchemyError:
         session.rollback()
         return None
+    finally:
+        session.close()
+
+
+def get_datasource_schema_contexts_safe(
+    datasource_ids: list[str] | None = None,
+) -> list[tuple[DatasourceConnector, DatasourceSchemaCache]]:
+    try:
+        session = create_session()
+    except SQLAlchemyError:
+        return []
+
+    try:
+        if datasource_ids:
+            connectors = [
+                connector
+                for datasource_id in datasource_ids
+                if (connector := get_datasource_connector_by_key(session, datasource_id))
+                is not None
+                and not is_system_datasource_connector(connector)
+            ]
+        else:
+            connectors = [
+                connector
+                for connector in get_active_datasource_connectors(session)
+                if not is_system_datasource_connector(connector)
+            ]
+
+        contexts: list[tuple[DatasourceConnector, DatasourceSchemaCache]] = []
+        for connector in connectors:
+            cache = get_datasource_schema_cache(session, connector.id)
+
+            if cache is None:
+                cache = introspect_datasource_connector(session, connector, "system")
+                session.commit()
+
+            contexts.append((connector, cache))
+
+        return contexts
+    except SQLAlchemyError:
+        session.rollback()
+        return []
     finally:
         session.close()

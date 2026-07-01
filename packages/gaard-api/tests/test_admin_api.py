@@ -1756,6 +1756,167 @@ def test_query_audit_uses_active_datasource_connector_key(admin_client: TestClie
     assert audit_response.json()["items"][0]["datasource_id"] == "con_db"
 
 
+def test_query_without_active_datasources_returns_before_ai(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    with create_session() as session:
+        for connector in session.scalars(select(DatasourceConnector)):
+            connector.active = False
+        session.commit()
+
+    def fail_if_ai_is_touched(*args, **kwargs):
+        raise AssertionError("AI and query pipeline should not run without active datasources.")
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.query.create_intent_classifier",
+        fail_if_ai_is_touched,
+    )
+    monkeypatch.setattr(
+        "gaard_api.api.v1.query.create_pipeline",
+        fail_if_ai_is_touched,
+    )
+
+    query_response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "How many active patients are there?",
+            "user_id": "alice",
+        },
+    )
+
+    assert query_response.status_code == 200
+    payload = query_response.json()
+    assert payload["answer"] == (
+        "No active data sources are selected. Please select at least one data source "
+        "before asking a data question."
+    )
+    assert payload["sql"] == ""
+    assert payload["rows"] == []
+    assert payload["metadata"]["blocked"] is True
+    assert payload["metadata"]["blocked_reason"] == "datasource.none_active"
+
+
+def test_query_routes_datasource_qualified_sql_to_one_active_datasource(
+    admin_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    patients_db = tmp_path / "patients.db"
+    orders_db = tmp_path / "orders.db"
+
+    with sqlite3.connect(patients_db) as connection:
+        connection.execute("CREATE TABLE patients (id INTEGER PRIMARY KEY)")
+        connection.commit()
+
+    with sqlite3.connect(orders_db) as connection:
+        connection.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO orders (id) VALUES (1), (2), (3)")
+        connection.commit()
+
+    for connector_key, database_url in (
+        ("con_a", f"sqlite:///{patients_db}"),
+        ("con_b", f"sqlite:///{orders_db}"),
+    ):
+        create_response = admin_client.post(
+            "/api/v1/admin/datasources",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "connector_key": connector_key,
+                "name": connector_key,
+                "database_type": "sqlite",
+                "database_url": database_url,
+                "sql_dialect": "sqlite",
+                "active": True,
+            },
+        )
+        assert create_response.status_code == 200
+
+    def generate_orders_sql(self, request: QueryRequest) -> GeneratedSql:
+        return GeneratedSql(
+            sql="SELECT COUNT(*) AS total FROM con_b.orders",
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(MockSqlGenerator, "generate", generate_orders_sql)
+
+    query_response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "How many orders are there?",
+            "user_id": "alice",
+        },
+    )
+
+    assert query_response.status_code == 200
+    payload = query_response.json()
+    assert payload["rows"] == [{"total": 3}]
+    assert payload["metadata"]["datasource_id"] == "con_a,con_b"
+    assert payload["metadata"]["active_datasource_ids"] == ["con_a", "con_b"]
+
+
+def test_query_rejects_cross_datasource_sql(
+    admin_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    patients_db = tmp_path / "patients.db"
+    orders_db = tmp_path / "orders.db"
+
+    with sqlite3.connect(patients_db) as connection:
+        connection.execute("CREATE TABLE patients (id INTEGER PRIMARY KEY)")
+        connection.commit()
+
+    with sqlite3.connect(orders_db) as connection:
+        connection.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY)")
+        connection.commit()
+
+    for connector_key, database_url in (
+        ("con_a", f"sqlite:///{patients_db}"),
+        ("con_b", f"sqlite:///{orders_db}"),
+    ):
+        create_response = admin_client.post(
+            "/api/v1/admin/datasources",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "connector_key": connector_key,
+                "name": connector_key,
+                "database_type": "sqlite",
+                "database_url": database_url,
+                "sql_dialect": "sqlite",
+                "active": True,
+            },
+        )
+        assert create_response.status_code == 200
+
+    def generate_cross_datasource_sql(self, request: QueryRequest) -> GeneratedSql:
+        return GeneratedSql(
+            sql=(
+                "SELECT COUNT(*) AS total FROM con_a.patients "
+                "JOIN con_b.orders ON patients.id = orders.id"
+            ),
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(MockSqlGenerator, "generate", generate_cross_datasource_sql)
+
+    query_response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "Compare patients and orders.",
+            "user_id": "alice",
+        },
+    )
+
+    assert query_response.status_code == 400
+    assert query_response.json()["error"]["code"] == "QUERY_EXECUTION_ERROR"
+    assert "Cross-datasource SQL is not supported yet" in query_response.json()["error"]["message"]
+
+
 def test_query_endpoint_writes_sql_error_data_query_audit(
     admin_client: TestClient,
     tmp_path: Path,

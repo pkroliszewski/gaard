@@ -29,6 +29,7 @@ class QueryIntentClassification(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     datasource_id: str = "default"
+    datasource_ids: list[str] = Field(default_factory=list)
     user_id: str = "local-admin"
     interpret: bool = True
 
