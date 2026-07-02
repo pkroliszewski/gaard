@@ -467,6 +467,7 @@ textarea {
 }
 
 .data-table th {
+  overflow-wrap: break-word;
   background: #f7f9fb;
   color: var(--muted);
   font-size: 12px;

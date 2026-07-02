@@ -31,6 +31,19 @@ def get_api_registry() -> ApiRegistry:
     return registry
 
 
+@lru_cache
+def get_query_hook_registry():
+    from gaard_api.query_hooks import QueryHookRegistry
+
+    registry = QueryHookRegistry()
+    get_extension_manager().activate(
+        "query",
+        registry,
+        services=_create_query_extension_services(),
+    )
+    return registry
+
+
 def _create_api_extension_services() -> dict[str, object]:
     from gaard_api.admin.database import create_session
     from gaard_api.admin.services import (
@@ -47,4 +60,25 @@ def _create_api_extension_services() -> dict[str, object]:
         "datasources": DatasourceHostService(create_session),
         "datasource_schema_introspection": introspect_datasource_connector,
         "llm_runtime_config": get_llm_runtime_config_safe,
+    }
+
+
+def _create_query_extension_services() -> dict[str, object]:
+    from gaard_api.admin.database import create_session
+    from gaard_api.admin.services import (
+        get_active_business_logic_prompt_safe,
+        get_datasource_schema_contexts_safe,
+        json_loads,
+        list_datasource_connectors,
+        selected_schema_from_cache,
+    )
+
+    return {
+        "metadata_session_factory": create_session,
+        "connector_registry": get_connector_registry,
+        "datasource_contexts": get_datasource_schema_contexts_safe,
+        "selected_schema_from_cache": selected_schema_from_cache,
+        "json_loads": json_loads,
+        "active_business_logic_prompt": get_active_business_logic_prompt_safe,
+        "list_datasource_connectors": list_datasource_connectors,
     }

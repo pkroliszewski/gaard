@@ -1,0 +1,160 @@
+from __future__ import annotations
+import logging
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from gaard_core.query_pipeline.models import QueryResult
+from gaard_core.schema.models import DatabaseSchema
+from gaard_plugin_api import ExtensionContext
+
+
+class QueryExecutor(Protocol):
+    def execute(self, sql: str) -> QueryResult: ...
+
+
+class SchemaIntrospector(Protocol):
+    def introspect(self) -> DatabaseSchema: ...
+
+logger = logging.getLogger(__name__)
+
+ExecutorFactory = Callable[[str, int], QueryExecutor]
+IntrospectorFactory = Callable[[str], SchemaIntrospector]
+ConnectionTester = Callable[[str], None]
+
+
+class ConnectorRegistryError(RuntimeError):
+    """Base error for connector registration and lookup failures."""
+
+
+class ConnectorNotFoundError(ConnectorRegistryError):
+    """Raised when a requested connector type is not registered."""
+
+
+class DuplicateConnectorTypeError(ConnectorRegistryError):
+    """Raised when two definitions use the same connector type key."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorDefinition:
+    """A typed datasource implementation registered with GAARD."""
+
+    type_key: str
+    label: str
+    sql_dialects: tuple[str, ...]
+    url_prefixes: tuple[str, ...]
+    executor_factory: ExecutorFactory
+    introspector_factory: IntrospectorFactory
+    connection_tester: ConnectionTester
+    config_schema: Mapping[str, Any] = field(default_factory=dict)
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.type_key:
+            raise ValueError("Connector type key must not be empty.")
+        if not self.label:
+            raise ValueError("Connector label must not be empty.")
+        if not self.sql_dialects:
+            raise ValueError("Connector must declare at least one SQL dialect.")
+        if not self.url_prefixes:
+            raise ValueError("Connector must declare at least one supported URL prefix.")
+
+    @property
+    def default_sql_dialect(self) -> str:
+        return self.sql_dialects[0]
+
+    def validate_database_url(self, database_url: str) -> None:
+        if database_url.startswith(self.url_prefixes):
+            return
+
+        raise ValueError(
+            f"Datasource URL for {self.type_key} must start with one of: "
+            f"{', '.join(self.url_prefixes)}"
+        )
+
+    def validate_sql_dialect(self, sql_dialect: str) -> None:
+        if sql_dialect in self.sql_dialects:
+            return
+
+        raise ValueError(
+            f"Datasource {self.type_key} supports SQL dialects: "
+            f"{', '.join(self.sql_dialects)}"
+        )
+
+    def serialize(self) -> dict[str, Any]:
+        """Return UI-safe metadata; connection credentials are never included."""
+
+        return {
+            "type_key": self.type_key,
+            "label": self.label,
+            "description": self.description,
+            "sql_dialects": list(self.sql_dialects),
+            "default_sql_dialect": self.default_sql_dialect,
+            "config_schema": dict(self.config_schema),
+        }
+
+
+class ConnectorRegistry:
+    """Registry of datasource implementations available to one GAARD process."""
+
+    def __init__(self) -> None:
+        self._definitions: dict[str, ConnectorDefinition] = {}
+
+    def register(self, definition: ConnectorDefinition) -> None:
+        if definition.type_key in self._definitions:
+            raise DuplicateConnectorTypeError(
+                f"Connector type {definition.type_key!r} is already registered."
+            )
+
+        self._definitions[definition.type_key] = definition
+
+    def get(self, type_key: str) -> ConnectorDefinition:
+        try:
+            return self._definitions[type_key]
+        except KeyError as exc:
+            available = ", ".join(sorted(self._definitions)) or "none"
+            raise ConnectorNotFoundError(
+                f"Unsupported datasource type {type_key!r}. Available types: {available}."
+            ) from exc
+
+    def list(self) -> list[ConnectorDefinition]:
+        return [self._definitions[type_key] for type_key in sorted(self._definitions)]
+
+    def detect_from_database_url(self, database_url: str) -> ConnectorDefinition:
+        matches = [
+            definition
+            for definition in self._definitions.values()
+            if database_url.startswith(definition.url_prefixes)
+        ]
+
+        if not matches:
+            raise ConnectorNotFoundError(
+                "Could not determine a datasource type from the configured database URL."
+            )
+
+        return max(matches, key=lambda definition: max(map(len, definition.url_prefixes)))
+
+    def validate(self, type_key: str, database_url: str, sql_dialect: str) -> ConnectorDefinition:
+        definition = self.get(type_key)
+        definition.validate_database_url(database_url)
+        definition.validate_sql_dialect(sql_dialect)
+        return definition
+
+    def activate_extension(self, context: ExtensionContext) -> None:
+        """Adapter for a `connectors` extension contribution factory."""
+
+        if context.registry is not self:
+            raise ConnectorRegistryError("Connector extension received the wrong registry instance.")
+
+
+def register_connector(definition: ConnectorDefinition) -> Callable[[ExtensionContext], None]:
+    """Build a contribution function for simple one-definition extensions."""
+
+    def register(context: ExtensionContext) -> None:
+        if not isinstance(context.registry, ConnectorRegistry):
+            raise ConnectorRegistryError("Connector extension requires a ConnectorRegistry.")
+
+        context.registry.register(definition)
+
+    return register

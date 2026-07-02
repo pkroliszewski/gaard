@@ -1,11 +1,10 @@
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
-from sqlalchemy.engine import URL
 from sqlalchemy import delete, desc, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -32,8 +31,10 @@ from gaard_api.admin.models import (
     PromptTemplate,
 )
 from gaard_api.core.settings import settings
+from gaard_connectors.registry import ConnectorNotFoundError
 from gaard_api.extensions import get_connector_registry
 
+logger = logging.getLogger(__name__)
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -44,7 +45,7 @@ def json_loads(value: str) -> Any:
 
 
 def validate_datasource_url(database_type: str, database_url: str) -> None:
-    get_connector_registry().get(database_type).validate_database_url(database_url)
+    _resolve_connector_definition(database_type, database_url).validate_database_url(database_url)
 
 
 def validate_datasource_configuration(
@@ -52,138 +53,9 @@ def validate_datasource_configuration(
     database_url: str,
     sql_dialect: str,
 ) -> None:
-    get_connector_registry().validate(database_type, database_url, sql_dialect)
-
-
-@dataclass(frozen=True)
-class NormalizedDatasourceConfiguration:
-    database_type: str
-    database_url: str
-    sql_dialect: str
-
-
-def normalize_datasource_configuration(
-    database_type: str,
-    connection_config: dict[str, Any] | None = None,
-    database_path: str | None = None,
-    database_url: str | None = None,
-    sql_dialect: str | None = None,
-) -> NormalizedDatasourceConfiguration:
-    registry = get_connector_registry()
-    normalized_url = (database_url or "").strip()
-    normalized_path = (database_path or "").strip()
-
-    if not normalized_url and connection_config:
-        normalized_url = build_sqlalchemy_url_from_connection_config(
-            database_type,
-            connection_config,
-        )
-
-    if not normalized_url and normalized_path:
-        normalized_url = build_sqlalchemy_url_from_path(database_type, normalized_path)
-
-    if not normalized_url:
-        raise ValueError("Datasource database path is required.")
-
-    if database_type:
-        definition = registry.get(database_type)
-    else:
-        definition = registry.detect_from_database_url(normalized_url)
-
-    resolved_dialect = (sql_dialect or "").strip() or definition.default_sql_dialect
-    registry.validate(definition.type_key, normalized_url, resolved_dialect)
-
-    return NormalizedDatasourceConfiguration(
-        database_type=definition.type_key,
-        database_url=normalized_url,
-        sql_dialect=resolved_dialect,
-    )
-
-
-def build_sqlalchemy_url_from_path(database_type: str, database_path: str) -> str:
-    if "://" in database_path:
-        return database_path
-
-    if database_type == "sqlite":
-        return str(URL.create("sqlite", database=str(Path(database_path).expanduser())))
-
-    raise ValueError(
-        "Only SQLite datasources can be created from a filesystem path. "
-        "Use a SQLAlchemy URL for this datasource type."
-    )
-
-
-def build_sqlalchemy_url_from_connection_config(
-    database_type: str,
-    connection_config: dict[str, Any],
-) -> str:
-    if database_type == "sqlite":
-        database_path = str(connection_config.get("database_path") or "").strip()
-        if not database_path:
-            raise ValueError("SQLite datasource requires a database path.")
-        return build_sqlalchemy_url_from_path(database_type, database_path)
-
-    if database_type == "postgresql":
-        return build_server_database_url(
-            drivername="postgresql+psycopg",
-            connection_config=connection_config,
-            default_port=5432,
-            query_keys=("sslmode",),
-        )
-
-    if database_type == "mysql":
-        return build_server_database_url(
-            drivername="mysql+pymysql",
-            connection_config=connection_config,
-            default_port=3306,
-            query_keys=("charset",),
-        )
-
-    raise ValueError(f"Datasource type {database_type!r} does not support generated URLs.")
-
-
-def build_server_database_url(
-    drivername: str,
-    connection_config: dict[str, Any],
-    default_port: int,
-    query_keys: tuple[str, ...],
-) -> str:
-    host = str(connection_config.get("host") or "").strip()
-    database = str(connection_config.get("database") or "").strip()
-    username = str(connection_config.get("username") or "").strip()
-    password = str(connection_config.get("password") or "")
-    port_value = connection_config.get("port") or default_port
-
-    if not host:
-        raise ValueError("Datasource host is required.")
-    if not database:
-        raise ValueError("Datasource database name is required.")
-    if not username:
-        raise ValueError("Datasource username is required.")
-
-    try:
-        port = int(port_value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Datasource port must be a number.") from exc
-
-    query = {
-        key: str(connection_config.get(key)).strip()
-        for key in query_keys
-        if connection_config.get(key) not in (None, "")
-    }
-
-    return (
-        URL.create(
-            drivername=drivername,
-            username=username,
-            password=password or None,
-            host=host,
-            port=port,
-            database=database,
-            query=query,
-        )
-        .render_as_string(hide_password=False)
-    )
+    definition = _resolve_connector_definition(database_type, database_url)
+    definition.validate_database_url(database_url)
+    definition.validate_sql_dialect(sql_dialect)
 
 
 def mask_database_url(database_url: str) -> str:
@@ -286,6 +158,11 @@ class QueryRuntimeConfig:
     query_timeout_seconds: int
     analysis_loop_count: int
     analysis_auto_enable_business_logic: bool
+
+
+class EmptySchemaIntrospector:
+    def introspect(self) -> DatabaseSchema:
+        return DatabaseSchema(tables=[])
 
 
 def record_data_query_audit(
@@ -413,7 +290,6 @@ def _record_data_query_audit(
         audit_metadata = dict(metadata)
         audit_metadata.pop("audit_type", None)
         audit_metadata.pop("output_classification", None)
-        llm_sql_language = str(audit_metadata.get("llm_sql_language") or "")
         log = DataQueryAuditLog(
             type=coerce_data_query_audit_type(audit_type),
             output_classification=coerce_output_classification(output_classification),
@@ -422,7 +298,6 @@ def _record_data_query_audit(
             question=request.question,
             answer=answer,
             sql=sql,
-            llm_sql_language=llm_sql_language,
             metadata_json=json_dumps(audit_metadata),
         )
         session.add(log)
@@ -1164,20 +1039,10 @@ def list_business_logic_suggestions(
     session: Session,
     connector_id: int,
 ) -> list[BusinessLogicSuggestion]:
-    return list_business_logic_suggestions_for_connectors(session, [connector_id])
-
-
-def list_business_logic_suggestions_for_connectors(
-    session: Session,
-    connector_ids: list[int],
-) -> list[BusinessLogicSuggestion]:
-    if not connector_ids:
-        return []
-
     return list(
         session.scalars(
             select(BusinessLogicSuggestion)
-            .where(BusinessLogicSuggestion.connector_id.in_(connector_ids))
+            .where(BusinessLogicSuggestion.connector_id == connector_id)
             .order_by(
                 BusinessLogicSuggestion.enabled.desc(),
                 desc(BusinessLogicSuggestion.updated_at),
@@ -1985,16 +1850,6 @@ def get_active_datasource_connector(session: Session) -> DatasourceConnector | N
     return session.scalar(select(DatasourceConnector).where(DatasourceConnector.active.is_(True)))
 
 
-def get_active_datasource_connectors(session: Session) -> list[DatasourceConnector]:
-    return list(
-        session.scalars(
-            select(DatasourceConnector)
-            .where(DatasourceConnector.active.is_(True))
-            .order_by(DatasourceConnector.name, DatasourceConnector.id)
-        )
-    )
-
-
 def get_active_datasource_connector_safe() -> DatasourceConnector | None:
     try:
         session = create_session()
@@ -2014,13 +1869,19 @@ def set_active_datasource_connector(
     connector: DatasourceConnector,
     actor: str,
 ) -> None:
-    from gaard_api.extensions import get_query_hook_registry
+    for item in list_datasource_connectors(session):
+        if is_system_datasource_connector(item):
+            item.active = False
+            continue
 
-    get_query_hook_registry().set_active_datasource_connector(session, connector, actor)
+        item.active = item.id == connector.id
+        item.updated_by = actor if item.id == connector.id else item.updated_by
 
 
 def test_datasource_connection(connector: DatasourceConnector) -> None:
-    get_connector_registry().get(connector.database_type).connection_tester(connector.database_url)
+    _resolve_connector_definition(connector.database_type, connector.database_url).connection_tester(
+        connector.database_url
+    )
 
 
 def get_datasource_schema_cache(
@@ -2049,8 +1910,7 @@ def introspect_datasource_connector(
     actor: str,
 ) -> DatasourceSchemaCache:
     schema = (
-        get_connector_registry()
-        .get(connector.database_type)
+        _resolve_connector_definition(connector.database_type, connector.database_url)
         .introspector_factory(connector.database_url)
         .introspect()
     )
@@ -2235,7 +2095,9 @@ def get_datasource_schema_context_safe() -> (
     try:
         session = create_session()
     except SQLAlchemyError:
+        logger.exception("Unable to create metadata session while resolving active datasource.")
         return None
+
     try:
         connector = get_active_datasource_connector(session)
 
@@ -2245,54 +2107,84 @@ def get_datasource_schema_context_safe() -> (
         cache = get_datasource_schema_cache(session, connector.id)
 
         if cache is None:
-            cache = introspect_datasource_connector(session, connector, "system")
-            session.commit()
+            logger.warning(
+                "Active datasource schema cache is missing; introspecting before query: "
+                "connector_key=%s database_type=%s database_url=%s sql_dialect=%s",
+                connector.connector_key,
+                connector.database_type,
+                connector.database_url,
+                connector.sql_dialect,
+            )
+            try:
+                cache = introspect_datasource_connector(session, connector, "system")
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception(
+                    "Active datasource schema introspection failed: "
+                    "connector_key=%s database_type=%s database_url=%s sql_dialect=%s",
+                    connector.connector_key,
+                    connector.database_type,
+                    connector.database_url,
+                    connector.sql_dialect,
+                )
+                raise
 
         return connector, cache
     except SQLAlchemyError:
         session.rollback()
-        return None
+        logger.exception("Metadata store error while resolving active datasource context.")
+        raise
     finally:
         session.close()
 
 
-def get_datasource_schema_contexts_safe(
-    datasource_ids: list[str] | None = None,
-) -> list[tuple[DatasourceConnector, DatasourceSchemaCache]]:
-    try:
-        session = create_session()
-    except SQLAlchemyError:
-        return []
+def _resolve_connector_definition(
+    database_type: str,
+    database_url: str,
+):
+    registry = get_connector_registry()
 
     try:
-        if datasource_ids:
-            connectors = [
-                connector
-                for datasource_id in datasource_ids
-                if (connector := get_datasource_connector_by_key(session, datasource_id))
-                is not None
-                and not is_system_datasource_connector(connector)
-            ]
-        else:
-            connectors = [
-                connector
-                for connector in get_active_datasource_connectors(session)
-                if not is_system_datasource_connector(connector)
-            ]
+        definition = registry.get(database_type)
+    except ConnectorNotFoundError:
+        definition = None
 
-        contexts: list[tuple[DatasourceConnector, DatasourceSchemaCache]] = []
-        for connector in connectors:
-            cache = get_datasource_schema_cache(session, connector.id)
+    if definition is not None and database_url.startswith(definition.url_prefixes):
+        logger.warning(
+            "Selected connector definition by database_type match: "
+            "database_type=%s database_url=%s selected_type_key=%s url_prefixes=%s registry=%s",
+            database_type,
+            database_url,
+            definition.type_key,
+            definition.url_prefixes,
+            type(registry).__name__,
+        )
+        return definition
 
-            if cache is None:
-                cache = introspect_datasource_connector(session, connector, "system")
-                session.commit()
+    if definition is not None:
+        logger.warning(
+            "Connector definition database_type match rejected by url prefix mismatch: "
+            "database_type=%s database_url=%s matched_type_key=%s url_prefixes=%s registry=%s",
+            database_type,
+            database_url,
+            definition.type_key,
+            definition.url_prefixes,
+            type(registry).__name__,
+        )
 
-            contexts.append((connector, cache))
+    definition = registry.detect_from_database_url(database_url)
+    logger.warning(
+        "Selected connector definition by database_url match: "
+        "database_type=%s database_url=%s selected_type_key=%s url_prefixes=%s registry=%s",
+        database_type,
+        database_url,
+        definition.type_key,
+        definition.url_prefixes,
+        type(registry).__name__,
+    )
+    return definition
 
-        return contexts
-    except SQLAlchemyError:
-        session.rollback()
-        return []
-    finally:
-        session.close()
+
+def has_default_datasource_url() -> bool:
+    return bool(settings.gaard_datasource_url.strip())
