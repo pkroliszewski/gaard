@@ -517,13 +517,57 @@ function resizeExtensionFrame(frame) {
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin) return;
   const data = event.data;
-  if (!data || data.type !== "gaard:extension:height") return;
-  const height = Number(data.height);
-  if (!Number.isFinite(height) || height <= 0) return;
   const frame = Array.from(document.querySelectorAll(".extension-frame")).find((item) => item.contentWindow === event.source);
   if (!frame) return;
-  frame.style.height = `${Math.ceil(height)}px`;
+  if (!data || data.type === "gaard:extension:height") {
+    const height = Number(data?.height);
+    if (!Number.isFinite(height) || height <= 0) return;
+    frame.style.height = `${Math.ceil(height)}px`;
+    return;
+  }
+  if (data.type === "gaard:admin-api-request") {
+    void handleExtensionAdminApiRequest(frame, data);
+  }
 });
+async function handleExtensionAdminApiRequest(frame, data) {
+  const requestId = String(data.requestId || "");
+  const request = data.request || {};
+  const method = String(request.method || "GET").toUpperCase();
+  const path = String(request.path || "");
+  const allowedRequests = new Set([
+    "POST /api/v1/admin/datasources",
+    "POST /api/v1/admin/datasources/test"
+  ]);
+  if (!requestId) return;
+  try {
+    if (!allowedRequests.has(`${method} ${path}`)) {
+      throw new Error("Extension request is not allowed.");
+    }
+    const payload = await api(path, {
+      method,
+      body: JSON.stringify(request.body || {})
+    });
+    frame.contentWindow?.postMessage(
+      {
+        type: "gaard:admin-api-response",
+        requestId,
+        ok: true,
+        payload
+      },
+      window.location.origin
+    );
+  } catch (error) {
+    frame.contentWindow?.postMessage(
+      {
+        type: "gaard:admin-api-response",
+        requestId,
+        ok: false,
+        error: error.message || String(error)
+      },
+      window.location.origin
+    );
+  }
+}
 function renderOverview() {
   const overview = state.overview;
   const widgets = overview?.widgets || [];
