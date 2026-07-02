@@ -1,6 +1,6 @@
 from typing import Any
 
-import httpx
+import httpx2
 
 from gaard_core.errors import LlmProviderError
 from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
