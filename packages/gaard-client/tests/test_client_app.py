@@ -1,6 +1,6 @@
 import json
 
-import httpx
+import httpx2 as httpx
 from fastapi.testclient import TestClient
 
 from gaard_client.main import app
