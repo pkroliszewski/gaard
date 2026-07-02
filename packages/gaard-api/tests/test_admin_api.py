@@ -45,6 +45,7 @@ from gaard_api.admin.services import (
 from gaard_api.core.settings import settings
 from gaard_api.example_database import install_medical_poc_example_database
 from gaard_api.main import app
+from gaard_api.query_hooks import QueryHookRegistry
 
 
 @pytest.fixture()
@@ -1360,8 +1361,13 @@ def test_datasource_connector_builds_sqlite_url_from_database_path(
 
 def test_public_datasource_activation_keeps_single_active_datasource(
     admin_client: TestClient,
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
+    import gaard_api.extensions
+
+    monkeypatch.setattr(gaard_api.extensions, "get_query_hook_registry", QueryHookRegistry)
+
     token = login(admin_client)["token"]
     change_password(admin_client, token)
     first_db = tmp_path / "first-active.db"
