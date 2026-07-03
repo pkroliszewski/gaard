@@ -494,25 +494,46 @@ function renderExtensionSection() {
 }
 function resizeExtensionFrames() {
   document.querySelectorAll(".extension-frame").forEach((frame) => {
-    frame.addEventListener("load", () => resizeExtensionFrame(frame), { once: true });
-    resizeExtensionFrame(frame);
+    if (!frame.dataset.extensionHeightReady) {
+      if (isExtensionFrameDocumentReady(frame)) {
+        initializeExtensionFrameHeight(frame);
+      } else {
+        frame.addEventListener("load", () => initializeExtensionFrameHeight(frame), { once: true });
+      }
+    } else {
+      setExtensionFrameHeight(frame, getExtensionFrameMaxHeight(frame));
+    }
   });
 }
-function resizeExtensionFrame(frame) {
+function isExtensionFrameDocumentReady(frame) {
   try {
-    const doc = frame.contentDocument;
-    if (!doc) return;
-    const height = Math.max(
-      doc.documentElement?.scrollHeight || 0,
-      doc.body?.scrollHeight || 0,
-      doc.documentElement?.offsetHeight || 0,
-      doc.body?.offsetHeight || 0
-    );
-    if (height > 0) {
-      frame.style.height = `${Math.ceil(height)}px`;
-    }
+    return frame.contentDocument?.readyState === "complete";
   } catch {
+    return false;
   }
+}
+function initializeExtensionFrameHeight(frame) {
+  frame.dataset.extensionHeightReady = "true";
+  setExtensionFrameHeight(frame, getExtensionFrameMaxHeight(frame));
+}
+function getExtensionFrameMaxHeight(frame) {
+  const content = frame.closest(".content");
+  if (!content) return Number.POSITIVE_INFINITY;
+  const styles = window.getComputedStyle(content);
+  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+  const rowGap = Number.parseFloat(styles.rowGap || styles.gap) || 0;
+  const messageRegion = content.querySelector("#message-region");
+  const reservedHeight =
+    paddingTop +
+    paddingBottom +
+    (messageRegion?.offsetHeight || 0) +
+    (messageRegion ? rowGap : 0);
+  return Math.max(1, content.clientHeight - reservedHeight);
+}
+function setExtensionFrameHeight(frame, height) {
+  const maxHeight = getExtensionFrameMaxHeight(frame);
+  frame.style.height = `${Math.ceil(Math.min(height+2, maxHeight))}px`;//+2 because of border 1px
 }
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin) return;
@@ -520,15 +541,17 @@ window.addEventListener("message", (event) => {
   const frame = Array.from(document.querySelectorAll(".extension-frame")).find((item) => item.contentWindow === event.source);
   if (!frame) return;
   if (!data || data.type === "gaard:extension:height") {
+    if (!frame.dataset.extensionHeightReady) return;
     const height = Number(data?.height);
     if (!Number.isFinite(height) || height <= 0) return;
-    frame.style.height = `${Math.ceil(height)}px`;
+    setExtensionFrameHeight(frame, height);
     return;
   }
   if (data.type === "gaard:admin-api-request") {
     void handleExtensionAdminApiRequest(frame, data);
   }
 });
+window.addEventListener("resize", resizeExtensionFrames);
 async function handleExtensionAdminApiRequest(frame, data) {
   const requestId = String(data.requestId || "");
   const request = data.request || {};
