@@ -26,13 +26,31 @@ def test_builtin_registry_exposes_existing_datasource_types() -> None:
     registry = create_builtin_connector_registry()
 
     assert [definition.type_key for definition in registry.list()] == [
+        "ibm_db2",
+        "mssql",
         "mysql",
+        "oracle",
         "postgresql",
         "sqlite",
+        "teradata",
     ]
     assert registry.get("postgresql").default_sql_dialect == "postgres"
+    assert registry.get("mssql").default_sql_dialect == "tsql"
+    assert registry.get("ibm_db2").default_sql_dialect == "db2"
     assert registry.detect_from_database_url("postgresql+psycopg://localhost/demo").type_key == (
         "postgresql"
+    )
+    assert registry.detect_from_database_url("oracle+oracledb://user:pass@host").type_key == (
+        "oracle"
+    )
+    assert registry.detect_from_database_url("mssql+pyodbc://user:pass@host/db").type_key == (
+        "mssql"
+    )
+    assert registry.detect_from_database_url("db2+ibm_db://user:pass@host/db").type_key == (
+        "ibm_db2"
+    )
+    assert registry.detect_from_database_url("teradatasql://user:pass@host").type_key == (
+        "teradata"
     )
 
 

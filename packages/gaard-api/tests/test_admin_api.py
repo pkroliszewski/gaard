@@ -110,6 +110,10 @@ def test_admin_lists_datasource_types_from_connector_registry(admin_client: Test
     definitions = {item["type_key"]: item for item in response.json()["items"]}
     assert definitions["sqlite"]["default_sql_dialect"] == "sqlite"
     assert definitions["postgresql"]["default_sql_dialect"] == "postgres"
+    assert definitions["oracle"]["default_sql_dialect"] == "oracle"
+    assert definitions["mssql"]["default_sql_dialect"] == "tsql"
+    assert definitions["ibm_db2"]["default_sql_dialect"] == "db2"
+    assert definitions["teradata"]["default_sql_dialect"] == "teradata"
     assert definitions["sqlite"]["config_schema"]["required"] == ["database_path"]
     assert definitions["postgresql"]["config_schema"]["required"] == [
         "host",
@@ -121,6 +125,29 @@ def test_admin_lists_datasource_types_from_connector_registry(admin_client: Test
         "host",
         "port",
         "database",
+        "username",
+    ]
+    assert definitions["oracle"]["config_schema"]["required"] == [
+        "host",
+        "port",
+        "service_name",
+        "username",
+    ]
+    assert definitions["mssql"]["config_schema"]["required"] == [
+        "host",
+        "port",
+        "database",
+        "username",
+    ]
+    assert definitions["ibm_db2"]["config_schema"]["required"] == [
+        "host",
+        "port",
+        "database",
+        "username",
+    ]
+    assert definitions["teradata"]["config_schema"]["required"] == [
+        "host",
+        "dbs_port",
         "username",
     ]
     assert "database_path" in definitions["sqlite"]["config_schema"]["properties"]
@@ -1474,6 +1501,143 @@ def test_datasource_connector_builds_mysql_url_from_connection_fields(
         "mysql+pymysql://reader:secret@mysql.example.test:3307/sales?charset=utf8mb4"
     )
     assert item["sql_dialect"] == "mysql"
+
+
+def test_datasource_connector_builds_oracle_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "oracle_fields",
+            "name": "Oracle fields",
+            "database_type": "oracle",
+            "connection_config": {
+                "host": "oracle.example.test",
+                "port": 1522,
+                "service_name": "FREEPDB1",
+                "username": "reader",
+                "password": "secret",
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "oracle"
+    assert item["database_url"] == (
+        "oracle+oracledb://reader:secret@oracle.example.test:1522"
+        "?service_name=FREEPDB1"
+    )
+    assert item["sql_dialect"] == "oracle"
+
+
+def test_datasource_connector_builds_mssql_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "mssql_fields",
+            "name": "SQL Server fields",
+            "database_type": "mssql",
+            "connection_config": {
+                "host": "sqlserver.example.test",
+                "port": 1434,
+                "database": "warehouse",
+                "username": "reader",
+                "password": "secret",
+                "driver": "ODBC Driver 18 for SQL Server",
+                "Encrypt": "yes",
+                "TrustServerCertificate": "no",
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "mssql"
+    assert item["database_url"] == (
+        "mssql+pyodbc://reader:secret@sqlserver.example.test:1434/warehouse"
+        "?Encrypt=yes&TrustServerCertificate=no&driver=ODBC+Driver+18+for+SQL+Server"
+    )
+    assert item["sql_dialect"] == "tsql"
+
+
+def test_datasource_connector_builds_ibm_db2_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "db2_fields",
+            "name": "Db2 fields",
+            "database_type": "ibm_db2",
+            "connection_config": {
+                "host": "db2.example.test",
+                "port": 50001,
+                "database": "analytics",
+                "username": "reader",
+                "password": "secret",
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "ibm_db2"
+    assert item["database_url"] == "db2+ibm_db://reader:secret@db2.example.test:50001/analytics"
+    assert item["sql_dialect"] == "db2"
+
+
+def test_datasource_connector_builds_teradata_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "teradata_fields",
+            "name": "Teradata fields",
+            "database_type": "teradata",
+            "connection_config": {
+                "host": "td.example.test",
+                "dbs_port": 1026,
+                "database": "analytics",
+                "username": "reader",
+                "password": "secret",
+                "tmode": "ANSI",
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "teradata"
+    assert item["database_url"] == (
+        "teradatasql://reader:secret@td.example.test?"
+        "database=analytics&dbs_port=1026&tmode=ANSI"
+    )
+    assert item["sql_dialect"] == "teradata"
 
 
 def test_sql_generation_prompt_uses_active_datasource_dialect(

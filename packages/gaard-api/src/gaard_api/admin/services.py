@@ -139,6 +139,36 @@ def build_sqlalchemy_url_from_connection_config(
             query_keys=("charset",),
         )
 
+    if database_type == "oracle":
+        return build_server_database_url(
+            drivername="oracle+oracledb",
+            connection_config=connection_config,
+            default_port=1521,
+            query_keys=("service_name",),
+            database_required=False,
+            required_query_keys=("service_name",),
+            required_query_key_labels={"service_name": "service name"},
+        )
+
+    if database_type == "mssql":
+        return build_server_database_url(
+            drivername="mssql+pyodbc",
+            connection_config=connection_config,
+            default_port=1433,
+            query_keys=("driver", "Encrypt", "TrustServerCertificate"),
+        )
+
+    if database_type == "ibm_db2":
+        return build_server_database_url(
+            drivername="db2+ibm_db",
+            connection_config=connection_config,
+            default_port=50000,
+            query_keys=(),
+        )
+
+    if database_type == "teradata":
+        return build_teradata_database_url(connection_config)
+
     raise ValueError(f"Datasource type {database_type!r} does not support generated URLs.")
 
 
@@ -147,6 +177,9 @@ def build_server_database_url(
     connection_config: dict[str, Any],
     default_port: int,
     query_keys: tuple[str, ...],
+    database_required: bool = True,
+    required_query_keys: tuple[str, ...] = (),
+    required_query_key_labels: dict[str, str] | None = None,
 ) -> str:
     host = str(connection_config.get("host") or "").strip()
     database = str(connection_config.get("database") or "").strip()
@@ -156,7 +189,7 @@ def build_server_database_url(
 
     if not host:
         raise ValueError("Datasource host is required.")
-    if not database:
+    if database_required and not database:
         raise ValueError("Datasource database name is required.")
     if not username:
         raise ValueError("Datasource username is required.")
@@ -165,6 +198,12 @@ def build_server_database_url(
         port = int(port_value)
     except (TypeError, ValueError) as exc:
         raise ValueError("Datasource port must be a number.") from exc
+
+    labels = required_query_key_labels or {}
+    for key in required_query_keys:
+        if not str(connection_config.get(key) or "").strip():
+            label = labels.get(key, key.replace("_", " "))
+            raise ValueError(f"Datasource {label} is required.")
 
     query = {
         key: str(connection_config.get(key)).strip()
@@ -179,7 +218,40 @@ def build_server_database_url(
             password=password or None,
             host=host,
             port=port,
-            database=database,
+            database=database or None,
+            query=query,
+        )
+        .render_as_string(hide_password=False)
+    )
+
+
+def build_teradata_database_url(connection_config: dict[str, Any]) -> str:
+    host = str(connection_config.get("host") or "").strip()
+    username = str(connection_config.get("username") or "").strip()
+    password = str(connection_config.get("password") or "")
+    dbs_port_value = connection_config.get("dbs_port") or 1025
+
+    if not host:
+        raise ValueError("Datasource host is required.")
+    if not username:
+        raise ValueError("Datasource username is required.")
+
+    try:
+        dbs_port = int(dbs_port_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Datasource port must be a number.") from exc
+
+    query = {"dbs_port": str(dbs_port)}
+    for key in ("database", "tmode"):
+        if connection_config.get(key) not in (None, ""):
+            query[key] = str(connection_config.get(key)).strip()
+
+    return (
+        URL.create(
+            drivername="teradatasql",
+            username=username,
+            password=password or None,
+            host=host,
             query=query,
         )
         .render_as_string(hide_password=False)

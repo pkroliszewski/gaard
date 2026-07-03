@@ -101,6 +101,7 @@ from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
 from gaard_api.extensions import get_api_registry, get_connector_registry, get_extension_manager
+from gaard_api.query_hooks import sqlglot_read_dialect
 
 router = APIRouter()
 
@@ -533,7 +534,9 @@ def execute_overview_sql(
     sql: str,
 ) -> QueryResult:
     executable_sql = prepare_overview_sql_for_connector(connector, sql)
-    SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(executable_sql)
+    SelectOnlySqlValidator(dialect=sqlglot_read_dialect(connector.sql_dialect)).validate(
+        executable_sql
+    )
 
     return (
         get_connector_registry()
@@ -551,9 +554,10 @@ def prepare_overview_sql_for_connector(
     sql: str,
 ) -> str:
     sql = strip_overview_datasource_qualifier(connector, sql)
+    read_dialect = sqlglot_read_dialect(connector.sql_dialect)
 
     try:
-        expression = sqlglot.parse_one(sql, read=connector.sql_dialect)
+        expression = sqlglot.parse_one(sql, read=read_dialect)
     except Exception:
         return sql
 
@@ -563,7 +567,9 @@ def prepare_overview_sql_for_connector(
         if table.args.get("catalog") and table.args["catalog"].name == connector.connector_key:
             table.set("catalog", None)
 
-    return expression.sql(dialect=connector.sql_dialect)
+    if read_dialect:
+        return expression.sql(dialect=read_dialect)
+    return expression.sql()
 
 
 def strip_overview_datasource_qualifier(
@@ -592,7 +598,9 @@ def generate_overview_widget_sql(
         dialect_plan=resolve_sql_dialect_plan([datasource_context]),
     ).generate(query_request)
     executable_sql = prepare_overview_sql_for_connector(connector, generated_sql.sql)
-    SelectOnlySqlValidator(dialect=connector.sql_dialect).validate(executable_sql)
+    SelectOnlySqlValidator(dialect=sqlglot_read_dialect(connector.sql_dialect)).validate(
+        executable_sql
+    )
 
     return generated_sql.sql
 
