@@ -3,7 +3,7 @@ import json
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.engine import Engine
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, Table
 from sqlalchemy.orm import Session, sessionmaker
 
 from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
@@ -19,6 +19,8 @@ from gaard_api.admin.models import (
 )
 from gaard_api.admin.security import hash_password
 from gaard_api.core.settings import settings
+
+from typing import cast
 
 
 _engine: Engine | None = None
@@ -374,8 +376,8 @@ def seed_overview_widgets(session: Session) -> None:
             existing.active = False
 
         if existing is not None and existing.updated_by == "system":
-            existing.position = int(item["position"])
-            existing.grid_width = int(item["grid_width"])
+            existing.position = int(cast(int,item["position"])) 
+            existing.grid_width = int(cast(int,item["grid_width"]))
             existing.result_mode = str(item["result_mode"])
 
 
@@ -416,7 +418,10 @@ def ensure_data_query_audit_schema(engine: Engine) -> None:
             )
 
     with engine.begin() as connection:
-        for index in DataQueryAuditLog.__table__.indexes:
+
+        audit_log_table = cast(Table, DataQueryAuditLog.__table__)
+
+        for index in audit_log_table.indexes:
             index.create(bind=connection, checkfirst=True)
 
 

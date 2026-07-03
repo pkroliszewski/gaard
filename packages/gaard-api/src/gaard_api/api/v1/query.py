@@ -54,6 +54,7 @@ from gaard_api.extensions import get_query_hook_registry
 from gaard_api.query_hooks import (
     DatasourceContext,
     DatasourceContexts,
+    QueryExecutor,
     SqlDialectPlan,
 )
 
@@ -309,7 +310,7 @@ def create_datasource_executor(
     datasource_contexts: DatasourceContexts,
     runtime_config: QueryRuntimeConfig,
     dialect_plan: SqlDialectPlan,
-):
+) -> QueryExecutor:
     return get_query_hook_registry().create_datasource_executor(
         datasource_contexts,
         runtime_config.query_max_rows,

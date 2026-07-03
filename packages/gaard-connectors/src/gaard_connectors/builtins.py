@@ -4,6 +4,8 @@ from gaard_connectors.registry import ConnectorDefinition, ConnectorRegistry
 from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
 from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 
+from typing import Any
+
 
 def create_builtin_connector_registry() -> ConnectorRegistry:
     registry = ConnectorRegistry()
@@ -67,6 +69,9 @@ def _sqlalchemy_config_schema(type_key: str) -> dict[str, object]:
         "format": "uri",
         "title": "Database URL",
     }
+
+    properties: dict[str, dict[str, Any]] = {}
+
     if type_key == "sqlite":
         properties = {
             "database_url": database_url,

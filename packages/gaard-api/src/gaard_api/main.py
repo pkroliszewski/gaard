@@ -1,3 +1,6 @@
+from importlib.resources import as_file, files 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,7 +12,6 @@ from gaard_api.api.v1.query import router as query_router
 from gaard_api.api.v1.schema import router as schema_router
 from gaard_api.core.error_handlers import register_error_handlers
 from gaard_api.extensions import get_api_registry
-from importlib.resources import files
 
 app = FastAPI(
     title="GAARD API",
@@ -19,7 +21,8 @@ app = FastAPI(
 
 register_error_handlers(app)
 
-ADMIN_WEB_DIR = files("gaard_api").joinpath("admin-web")
+with as_file(files("gaard_api").joinpath("admin-web")) as _path:
+    ADMIN_WEB_DIR: Path = Path(_path).absolute()
 
 if ADMIN_WEB_DIR.exists():
     app.mount(

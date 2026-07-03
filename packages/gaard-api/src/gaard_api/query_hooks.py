@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar, cast
 
 from sqlglot import Dialects
+from sqlalchemy.orm import Session
 
 from gaard_core.errors import ConfigurationError, QueryExecutionError
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
@@ -31,7 +32,7 @@ class EffectiveQueryContext:
 
 class QueryExecutor(Protocol):
     def execute(self, sql: str) -> QueryResult:
-        pass
+        ...
 
 
 class QueryBehaviorHook(Protocol):
@@ -71,11 +72,14 @@ class QueryBehaviorHook(Protocol):
 
     def set_active_datasource_connector(
         self,
-        session,
+        session: Session,
         connector: DatasourceConnector,
         actor: str,
     ) -> bool | None:
         return None
+
+
+HookResultT = TypeVar("HookResultT")
 
 
 class QueryHookRegistry:
@@ -146,7 +150,7 @@ class QueryHookRegistry:
 
     def set_active_datasource_connector(
         self,
-        session,
+        session: Session,
         connector: DatasourceConnector,
         actor: str,
     ) -> None:
@@ -162,14 +166,19 @@ class QueryHookRegistry:
             ),
         )
 
-    def _first_result(self, method_name: str, *args, default: Callable):
+    def _first_result(
+        self,
+        method_name: str,
+        *args: object,
+        default: Callable[[], HookResultT],
+    ) -> HookResultT:
         for hook in self._hooks:
             method = getattr(hook, method_name, None)
             if method is None:
                 continue
-            result = method(*args)
+            result = cast(object | None, method(*args))
             if result is not None:
-                return result
+                return cast(HookResultT, result)
 
         return default()
 
@@ -200,7 +209,6 @@ def default_effective_query_context(request: QueryRequest) -> EffectiveQueryCont
                 "Requested datasource was not found.",
                 error_detail=f"Unknown datasource ids: {datasource_id}.",
             )
-        context = contexts[0]
     else:
         context = get_datasource_schema_context_safe()
         contexts = [context] if context is not None else []
@@ -292,7 +300,7 @@ def default_detect_datasource_ids_from_sql(
 
 
 def default_set_active_datasource_connector(
-    session,
+    session: Session,
     connector: DatasourceConnector,
     actor: str,
 ) -> bool:

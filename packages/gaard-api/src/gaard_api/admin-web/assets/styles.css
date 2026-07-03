@@ -551,9 +551,40 @@ label {
   gap: 12px;
 }
 
+.overview-grid-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.overview-grid-actions span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .overview-widget-slot {
   min-height: 150px;
   align-content: start;
+  min-width: 0;
+  position: relative;
+  transition: border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.overview-widget-slot.is-dragging {
+  opacity: 0.58;
+}
+
+.overview-widget-slot.is-resizing {
+  user-select: none;
+}
+
+.overview-widget-slot.overview-drop-target,
+.overview-empty-slot.overview-drop-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(36, 99, 235, 0.16);
 }
 
 .overview-loading {
@@ -583,6 +614,8 @@ label {
   padding: 14px;
   display: grid;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
   box-shadow: var(--shadow);
 }
 
@@ -591,24 +624,40 @@ label {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
+}
+
+.widget-card-header > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .widget-card-header span {
   display: block;
   color: var(--muted);
   font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .widget-card-header strong {
   display: block;
   margin-top: 4px;
   font-size: 15px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.widget-card-main {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .widget-card-main span {
   display: block;
   color: var(--muted);
   font-size: 12px;
+  min-width: 0;
 }
 
 .widget-card-main .widget-card-value {
@@ -650,17 +699,26 @@ label {
 
 .overview-empty-slot {
   min-height: 150px;
+  min-width: 0;
   border: 1px dashed var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.58);
   display: grid;
   align-content: center;
-  justify-items: center;
+  justify-items: stretch;
   gap: 12px;
   padding: 12px;
 }
 
-.overview-empty-slot > button {
+.overview-empty-slot-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.overview-empty-slot-actions > button:first-child {
   width: 44px;
   min-width: 44px;
   height: 44px;
@@ -673,9 +731,33 @@ label {
 }
 
 .overview-placement-panel {
-  width: 100%;
+  width: min(100%, 320px);
+  max-width: 100%;
+  min-width: 0;
+  justify-self: center;
   display: grid;
   gap: 10px;
+  box-sizing: border-box;
+}
+
+.overview-placement-panel > label,
+.overview-placement-panel select,
+.overview-placement-panel .button-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.overview-placement-panel > label {
+  display: grid;
+  gap: 6px;
+}
+
+.overview-placement-panel select {
+  width: 100%;
+}
+
+.overview-placement-panel .button-row {
+  flex-wrap: wrap;
 }
 
 .widgets-editor {
@@ -699,7 +781,13 @@ label {
 
 .widget-config-select {
   min-height: 54px;
+  min-width: 0;
+  width: 100%;
+  padding-top: 10px;
+  padding-bottom: 10px;
   text-align: left;
+  white-space: normal;
+  overflow: hidden;
 }
 
 .widget-config-row.active .widget-config-select {
@@ -714,12 +802,15 @@ label {
 .widget-config-row strong,
 .widget-config-row span {
   display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .widget-config-row span {
   margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.4;
 }
 
 .widget-card-actions,
@@ -731,6 +822,9 @@ label {
 
 .widget-card-actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .panel-actions {
@@ -740,6 +834,44 @@ label {
 .widget-card-actions button,
 .panel-actions button {
   white-space: nowrap;
+}
+
+.overview-resize-handle {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 12px;
+  min-width: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.overview-resize-handle-left {
+  left: -6px;
+}
+
+.overview-resize-handle-right {
+  right: -6px;
+}
+
+.overview-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 48px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.8);
+}
+
+.overview-widget-slot:hover .overview-resize-handle::before,
+.overview-widget-slot.is-resizing .overview-resize-handle::before {
+  background: var(--accent);
 }
 
 .modal-backdrop {
@@ -790,9 +922,17 @@ label {
   padding: 16px;
 }
 
+.modal-actions {
+  margin-top: 12px;
+  padding: 16px;
+  border-top: 1px solid var(--line);
+}
+
 .chart {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .chart-row {
@@ -800,20 +940,26 @@ label {
   grid-template-columns: minmax(90px, 130px) minmax(0, 1fr);
   gap: 12px;
   align-items: center;
+  min-width: 0;
 }
 
 .chart-date {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chart-bars {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .chart-bar {
+  width: 100%;
+  max-width: 100%;
   min-width: 4px;
   min-height: 26px;
   border-radius: 5px;
@@ -823,13 +969,18 @@ label {
   align-items: center;
   padding: 0 8px;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .chart-bar span {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 12px;
   font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.35);
 }
 
 .chart-legend {
@@ -848,6 +999,14 @@ label {
 .overview-table-widget .panel-body {
   display: grid;
   gap: 12px;
+  min-width: 0;
+}
+
+.overview-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .overview-table-wrap table {
@@ -1061,15 +1220,10 @@ code {
   }
 
   .stats,
-  .overview-grid,
   .widget-grid,
   .split,
   .schema-editor {
     grid-template-columns: 1fr;
-  }
-
-  .overview-widget-slot {
-    grid-column: span 1 !important;
   }
 
   .schema-object-list-body {

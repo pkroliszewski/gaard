@@ -1,5 +1,5 @@
 import json
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.prompt_compiler.intent_classification_prompt import (
@@ -105,7 +105,7 @@ def parse_query_intent_decision(value: object) -> QueryIntentDecision:
 
 def parse_confidence(value: object) -> float:
     try:
-        confidence = float(value)
+        confidence = float(cast(Any, value))
     except (TypeError, ValueError):
         return 0.0
 

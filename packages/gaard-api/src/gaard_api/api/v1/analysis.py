@@ -27,14 +27,13 @@ from gaard_api.admin.services import (
     upsert_analysis_business_logic_suggestion,
 )
 from gaard_api.api.v1.query import (
-    DatasourceContext,
-    DatasourceContexts,
     create_llm_client,
     effective_query_request,
     normalize_datasource_contexts,
     ndjson_line,
     run_sql_request,
 )
+from gaard_api.query_hooks import DatasourceContext, DatasourceContexts
 
 router = APIRouter()
 
@@ -77,7 +76,7 @@ class AnalysisPlanner(Protocol):
     def decide(
         self,
         request: QueryRequest,
-        datasource_context: DatasourceContext | None,
+        datasource_context: DatasourceContext | DatasourceContexts | None,
         context: dict[str, Any],
     ) -> AnalysisPlannerDecision:
         pass
@@ -226,12 +225,13 @@ def stream_event(session_id: str, event_type: str, payload: dict[str, Any]) -> s
 
 
 def analysis_knowledge(
-    datasource_context: DatasourceContext | None,
+    datasource_context: DatasourceContext | DatasourceContexts | None,
 ) -> tuple[str, str]:
-    if datasource_context is None:
+    datasource_contexts = normalize_datasource_contexts(datasource_context)
+    if not datasource_contexts:
         return "", ""
 
-    connector, schema_cache = datasource_context
+    connector, schema_cache = datasource_contexts[0]
     return (
         schema_cache.formatted_schema or schema_cache.schema_json,
         get_active_business_logic_prompt_safe(connector.id),
@@ -602,7 +602,7 @@ class MockAnalysisPlanner:
     def decide(
         self,
         request: QueryRequest,
-        datasource_context: DatasourceContext | None,
+        datasource_context: DatasourceContext | DatasourceContexts | None,
         context: dict[str, Any],
     ) -> AnalysisPlannerDecision:
         question = request.question.lower()
@@ -721,7 +721,7 @@ class LlmAnalysisPlanner:
     def decide(
         self,
         request: QueryRequest,
-        datasource_context: DatasourceContext | None,
+        datasource_context: DatasourceContext | DatasourceContexts | None,
         context: dict[str, Any],
     ) -> AnalysisPlannerDecision:
         schema, business_logic = analysis_knowledge(datasource_context)
@@ -942,7 +942,7 @@ def final_metadata(
 def run_analysis_loop(
     session_id: str,
     request: QueryRequest,
-    datasource_context: DatasourceContext | None,
+    datasource_context: DatasourceContext | DatasourceContexts | None,
 ) -> Iterator[str]:
     planner = create_analysis_planner()
     runtime_config = get_query_runtime_config_safe()
@@ -1174,7 +1174,7 @@ def run_analysis_loop(
 def start_stream_for_record(
     record: AnalysisSessionRecord,
     request: QueryRequest,
-    datasource_context: DatasourceContext | None,
+    datasource_context: DatasourceContexts,
     resumed: bool = False,
 ) -> Iterator[str]:
     event_name = "session_resumed" if resumed else "session_started"

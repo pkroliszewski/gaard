@@ -1,9 +1,13 @@
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from gaard_connectors import ConnectorRegistry, create_builtin_connector_registry
 from gaard_plugin_api import ExtensionManager
 
 from gaard_api.api_registry import ApiRegistry
+
+if TYPE_CHECKING:
+    from gaard_api.query_hooks import QueryHookRegistry
 
 
 @lru_cache
@@ -32,7 +36,7 @@ def get_api_registry() -> ApiRegistry:
 
 
 @lru_cache
-def get_query_hook_registry():
+def get_query_hook_registry() -> "QueryHookRegistry":
     from gaard_api.query_hooks import QueryHookRegistry
 
     registry = QueryHookRegistry()

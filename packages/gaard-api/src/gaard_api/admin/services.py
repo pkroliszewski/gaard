@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.engine import URL
 from sqlalchemy import delete, desc, select
@@ -487,7 +487,7 @@ def set_setting(session: Session, key: str, value: str, actor: str) -> AdminSett
 
 
 def default_governance_policy_config() -> dict[str, Any]:
-    return json.loads(json_dumps(DEFAULT_GOVERNANCE_POLICY_CONFIG))
+    return cast(dict[str, Any], json.loads(json_dumps(DEFAULT_GOVERNANCE_POLICY_CONFIG)))
 
 
 def normalize_bool_setting(value: Any, field_name: str) -> bool:
