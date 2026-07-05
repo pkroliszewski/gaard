@@ -103,8 +103,7 @@ function getMenuGroups() {
       sections: [
         { key: "data-audit", label: builtInSectionLabels["data-audit"] },
         { key: "business-logic", label: builtInSectionLabels["business-logic"] },
-        { key: "admin-audit", label: builtInSectionLabels["admin-audit"] },
-        { key: "license", label: builtInSectionLabels.license }
+        { key: "admin-audit", label: builtInSectionLabels["admin-audit"] }
       ]
     },
     {
@@ -117,7 +116,8 @@ function getMenuGroups() {
         { key: "prompts", label: builtInSectionLabels.prompts },
         { key: "widgets", label: builtInSectionLabels.widgets },
         { key: "identity", label: builtInSectionLabels.identity },
-        { key: "governance-policy", label: builtInSectionLabels["governance-policy"] }
+        { key: "governance-policy", label: builtInSectionLabels["governance-policy"] },
+        { key: "license", label: builtInSectionLabels.license }
       ]
     },
     {
@@ -255,6 +255,21 @@ function formatAuditTime(value) {
     return `${match[1]} ${match[2]}:${match[3]}:${match[4]}:${millis}`;
   }
   return raw;
+}
+function formatLicenseDate(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  if (match) return `${match[1]} ${match[2]}:${match[3]}`;
+  return raw;
+}
+function formatLicenseMessage(license) {
+  const message = String(license?.message || "").trim();
+  if (!message) return "";
+  if (/account is deleted/i.test(message)) {
+    return "License validation returned a deleted status. Update the key or run a recheck after changes in GAARD Website.";
+  }
+  return message;
 }
 function extractErrorMessage(value) {
   if (typeof value === "string") {
@@ -1618,7 +1633,41 @@ function renderStub(title, text) {
   return `<section class="panel"><div class="panel-header"><h2>${escapeHtml(title)}</h2><span class="badge planned">planned</span></div><div class="panel-body"><p class="muted">${escapeHtml(text)}</p></div></section>`;
 }
 function renderLicense() {
-  return `<section class="panel"><div class="panel-header"><h2>License</h2></div><div class="panel-body mono">${escapeHtml(JSON.stringify(state.license || {}, null, 2))}</div></section>`;
+  const license = state.license || {};
+  const statusClass = license.valid ? "ok" : license.status === "missing" ? "planned" : "danger";
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <h2>License</h2>
+        <span class="badge ${statusClass}">${escapeHtml(license.status || "missing")}</span>
+      </div>
+      <div class="panel-body">
+        <div class="license-status-grid">
+          ${renderLicenseStatusItem("Plan", license.plan || "community")}
+          ${renderLicenseStatusItem("Valid", license.valid ? "yes" : "no")}
+          ${renderLicenseStatusItem("Current period end", formatLicenseDate(license.current_period_end))}
+          ${renderLicenseStatusItem("Grace until", formatLicenseDate(license.grace_until))}
+          ${renderLicenseStatusItem("Last checked", formatLicenseDate(license.last_checked_at))}
+          ${renderLicenseStatusItem("Next check", formatLicenseDate(license.next_check_at))}
+        </div>
+        ${formatLicenseMessage(license) ? `<p class="muted">${escapeHtml(formatLicenseMessage(license))}</p>` : ""}
+        <form id="license-key-form" class="form-grid license-key-form">
+          <label>License key<input name="license_key" type="password" autocomplete="off" placeholder="gaard_live_xxx" /></label>
+          <div class="form-actions">
+            <button type="button" class="danger" id="clear-license-key">Clear key</button>
+            <button type="button" id="check-license-now">Check now</button>
+            <button class="primary" type="submit">Save key</button>
+          </div>
+        </form>
+      </div>
+    </section>`;
+}
+function renderLicenseStatusItem(label, value) {
+  return `
+    <div class="stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>`;
 }
 function renderAdminAudit() {
   return `
@@ -1726,6 +1775,9 @@ function attachSectionHandlers() {
   document.querySelector("#data-audit-output-classification")?.addEventListener("change", loadDataAuditForFilters);
   document.querySelector("#prompt-form")?.addEventListener("submit", savePrompt);
   document.querySelector("#schema-cache-form")?.addEventListener("submit", saveSchemaCacheTtl);
+  document.querySelector("#license-key-form")?.addEventListener("submit", saveLicenseKey);
+  document.querySelector("#clear-license-key")?.addEventListener("click", clearLicenseKey);
+  document.querySelector("#check-license-now")?.addEventListener("click", checkLicenseNow);
   document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
   document.querySelector("#test-llm-config")?.addEventListener("click", testLlmConfig);
   document.querySelector("#reasoning-config-form")?.addEventListener("submit", saveReasoningConfig);
@@ -2236,6 +2288,51 @@ async function deleteBusinessLogicSuggestion(event) {
     render();
   }
 }
+async function saveLicenseKey(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const licenseKey = String(form.get("license_key") || "").trim();
+  if (!licenseKey) {
+    setMessage("error", "License key is required.");
+    return;
+  }
+  try {
+    state.license = await api("/api/v1/admin/license/key", {
+      method: "PUT",
+      body: JSON.stringify({ license_key: licenseKey })
+    });
+    setMessage("success", "License key saved.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function clearLicenseKey() {
+  try {
+    state.license = await api("/api/v1/admin/license/key", {
+      method: "PUT",
+      body: JSON.stringify({ clear_license_key: true })
+    });
+    setMessage("success", "License key cleared.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function checkLicenseNow() {
+  try {
+    state.license = await api("/api/v1/admin/license/check", {
+      method: "POST"
+    });
+    setMessage("success", "License status refreshed.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
 async function saveLlmConfig(event) {
   event.preventDefault();
   try {
@@ -2729,7 +2826,7 @@ async function loadGovernancePolicy() {
   render();
 }
 async function loadLicense() {
-  state.license = await api("/api/v1/admin/license");
+  state.license = await api("/api/v1/admin/license/status");
   render();
 }
 async function loadAdminAudit() {

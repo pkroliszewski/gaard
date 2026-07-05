@@ -544,6 +544,17 @@ label {
   gap: 12px;
 }
 
+.license-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.license-key-form {
+  margin-top: 16px;
+}
+
 .overview-grid,
 .widget-grid {
   display: grid;
@@ -1141,6 +1152,10 @@ code {
   color: var(--ok);
 }
 
+.badge.danger {
+  color: var(--danger);
+}
+
 .badge.planned {
   color: #8c5b12;
 }
@@ -1220,6 +1235,7 @@ code {
   }
 
   .stats,
+  .license-status-grid,
   .widget-grid,
   .split,
   .schema-editor {

@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 import json
+import threading
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.engine import Engine
@@ -26,6 +27,7 @@ from typing import cast
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
 _engine_url: str | None = None
+_init_lock = threading.RLock()
 LEGACY_PROMPT_KEYS = {"investigation_readiness"}
 
 
@@ -68,23 +70,24 @@ def create_session() -> Session:
 
 
 def init_metadata_store() -> None:
-    engine = get_engine()
-    Base.metadata.create_all(engine)
-    ensure_data_query_audit_schema(engine)
-    ensure_overview_widget_schema(engine)
+    with _init_lock:
+        engine = get_engine()
+        Base.metadata.create_all(engine)
+        ensure_data_query_audit_schema(engine)
+        ensure_overview_widget_schema(engine)
 
-    if _session_factory is None:
-        raise RuntimeError("Admin metadata session factory is not initialized.")
+        if _session_factory is None:
+            raise RuntimeError("Admin metadata session factory is not initialized.")
 
-    with _session_factory() as session:
-        seed_admin_user(session)
-        seed_settings(session)
-        apply_runtime_settings(session)
-        seed_prompts(session)
-        seed_datasource_connectors(session)
-        seed_overview_widgets(session)
-        backfill_data_query_audit_types(session)
-        session.commit()
+        with _session_factory() as session:
+            seed_admin_user(session)
+            seed_settings(session)
+            apply_runtime_settings(session)
+            seed_prompts(session)
+            seed_datasource_connectors(session)
+            seed_overview_widgets(session)
+            backfill_data_query_audit_types(session)
+            session.commit()
 
 
 def seed_admin_user(session: Session) -> None:
@@ -131,7 +134,6 @@ def seed_settings(session: Session) -> None:
         ),
         "data_query_audit_retention_days": str(settings.gaard_audit_retention_days),
         "schema_cache_ttl_seconds": str(settings.gaard_schema_cache_ttl_seconds),
-        "license_edition": "community",
     }
 
     for key, value in defaults.items():
@@ -140,6 +142,9 @@ def seed_settings(session: Session) -> None:
             session.add(AdminSetting(key=key, value=value))
         elif setting.updated_by == "system" and setting.value != value:
             setting.value = value
+
+    if session.get(AdminSetting, "license_edition") is None:
+        session.add(AdminSetting(key="license_edition", value="community"))
 
 
 def apply_runtime_settings(session: Session) -> None:

@@ -101,6 +101,7 @@ from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
 from gaard_api.extensions import get_api_registry, get_connector_registry, get_extension_manager
+from gaard_api.license import license_service, redact_license_key
 from gaard_api.query_hooks import sqlglot_read_dialect
 
 router = APIRouter()
@@ -266,6 +267,11 @@ class BusinessLogicSuggestionUpdateRequest(BaseModel):
     enabled: bool | None = None
     title: str | None = Field(default=None, min_length=1)
     rule_text: str | None = Field(default=None, min_length=1)
+
+
+class LicenseKeyRequest(BaseModel):
+    license_key: str | None = Field(default=None, min_length=1)
+    clear_license_key: bool = False
 
 
 def serialize_datetime(value: datetime) -> str:
@@ -948,10 +954,7 @@ def get_overview(
         "admin": {
             "username": user.username,
         },
-        "license": {
-            "edition": "community",
-            "status": "active",
-        },
+        "license": license_service.status(),
         "prompts_count": len(prompts),
         "data_query_audit_retention_days": retention_days,
         "schema_cache_ttl_seconds": schema_context_cache.ttl_seconds,
@@ -1647,6 +1650,8 @@ def create_datasource(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    license_service.ensure_datasource_type_allowed(normalized_config.database_type)
+
     existing = session.scalar(
         select(DatasourceConnector).where(
             DatasourceConnector.connector_key == request.connector_key
@@ -1673,6 +1678,8 @@ def create_datasource(
 
     if request.active:
         set_active_datasource_connector(session, connector, user.username)
+
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
 
     record_admin_audit(
         session=session,
@@ -1722,6 +1729,8 @@ def update_datasource(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    license_service.ensure_datasource_type_allowed(normalized_config.database_type)
+
     connector.name = request.name
     connector.database_type = normalized_config.database_type
     connector.database_url = normalized_config.database_url
@@ -1731,6 +1740,8 @@ def update_datasource(
 
     if request.active:
         set_active_datasource_connector(session, connector, user.username)
+
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
 
     record_admin_audit(
         session=session,
@@ -1813,6 +1824,7 @@ def activate_datasource(
         )
 
     set_active_datasource_connector(session, connector, user.username)
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
     record_admin_audit(
         session=session,
         actor=user.username,
@@ -1838,6 +1850,8 @@ def test_datasource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datasource connector not found.",
         )
+
+    license_service.ensure_datasource_type_allowed(connector.database_type)
 
     try:
         test_datasource_connection(connector)
@@ -1890,6 +1904,7 @@ def test_datasource_from_request(
         sql_dialect=normalized_config.sql_dialect,
         active=False,
     )
+    license_service.ensure_datasource_type_allowed(connector.database_type)
     test_datasource_connection(connector)
     return {"status": "ok"}
 
@@ -1907,6 +1922,8 @@ def introspect_datasource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datasource connector not found.",
         )
+
+    license_service.ensure_datasource_type_allowed(connector.database_type)
 
     try:
         cache = introspect_datasource_connector(session, connector, user.username)
@@ -1945,6 +1962,7 @@ def get_datasource_schema(
     cache = get_datasource_schema_cache(session, connector.id)
 
     if cache is None:
+        license_service.ensure_datasource_type_allowed(connector.database_type)
         cache = introspect_datasource_connector(session, connector, user.username)
         session.commit()
 
@@ -1972,6 +1990,7 @@ def update_datasource_schema_tables(
     cache = get_datasource_schema_cache(session, connector.id)
 
     if cache is None:
+        license_service.ensure_datasource_type_allowed(connector.database_type)
         cache = introspect_datasource_connector(session, connector, user.username)
 
     cache = update_schema_table_settings(
@@ -2150,6 +2169,8 @@ def update_llm_config(
             detail="Only openai-compatible LLM provider is supported.",
         )
 
+    license_service.ensure_models_allowed(request.model)
+
     current_llm_config = get_llm_runtime_config(session)
     current_query_config = get_query_runtime_config(session)
     timeout_seconds = request.timeout_seconds or current_llm_config.timeout_seconds
@@ -2224,6 +2245,8 @@ def test_llm_config(
     user: AdminUser = Depends(get_current_admin),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    license_service.ensure_models_allowed(request.model)
+
     try:
         return {
             "item": test_llm_runtime_config(
@@ -2420,13 +2443,56 @@ def get_integration_stubs(user: AdminUser = Depends(get_current_admin)) -> dict[
 @router.get("/license")
 def get_license(user: AdminUser = Depends(get_current_admin)) -> dict[str, Any]:
     return {
-        "edition": "community",
-        "status": "active",
+        **license_service.status(),
         "managed_features": {
             "freeipa": False,
-            "datasource_connectors": False,
+            "datasource_connectors": license_service.state.features.get("non_sql_sources", False),
             "sql_validation_rules": False,
             "result_interpretation_policies": False,
         },
         "viewer": user.username,
     }
+
+
+@router.get("/license/status")
+def get_license_status(user: AdminUser = Depends(get_current_admin)) -> dict[str, Any]:
+    return license_service.status()
+
+
+@router.post("/license/check")
+def check_license_now(user: AdminUser = Depends(get_current_admin)) -> dict[str, Any]:
+    return license_service.refresh(force=True).serialize_status()
+
+
+@router.put("/license/key")
+def update_license_key(
+    request: LicenseKeyRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        if request.clear_license_key:
+            state = license_service.clear_license_key(user.username)
+            details = {"cleared": True}
+        else:
+            if request.license_key is None:
+                raise ValueError("License key is required.")
+            state = license_service.set_license_key(request.license_key, user.username)
+            details = {
+                "cleared": False,
+                "license_key_preview": redact_license_key(request.license_key),
+            }
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="license.key.update",
+        resource_type="license",
+        resource_id=state.plan,
+        details=details,
+    )
+    session.commit()
+
+    return state.serialize_status()

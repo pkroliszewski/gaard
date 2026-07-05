@@ -181,6 +181,13 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "Configuration" in response.text
     assert "Extensions" in response.text
     assert "Data sources" in response.text
+    license_menu_item = '{ key: "license", label: builtInSectionLabels.license }'
+    assert response.text.count(license_menu_item) == 1
+    governance_index = response.text.index('key: "governance"')
+    configuration_index = response.text.index('key: "configuration"')
+    extensions_index = response.text.index('key: "extensions"')
+    license_index = response.text.index(license_menu_item)
+    assert governance_index < configuration_index < license_index < extensions_index
     assert "extension-frame" in response.text
     assert "plugin unavailable" in response.text
     assert "renderDatabaseTypeOptions" not in response.text
