@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 from datetime import datetime
 from typing import Any, Annotated
 
@@ -25,7 +26,7 @@ from sqlalchemy.orm import Session
 import sqlglot
 from sqlglot import expressions as exp
 
-from gaard_api.admin.database import get_session
+from gaard_api.admin.database import create_session, get_session
 from gaard_api.admin.models import (
     AdminSession,
     AdminUser,
@@ -102,6 +103,7 @@ from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
 from gaard_api.extensions import get_api_registry, get_connector_registry, get_extension_manager
 from gaard_api.license import license_service, redact_license_key
+from gaard_api.package_updates import package_update_jobs, package_update_service
 from gaard_api.query_hooks import sqlglot_read_dialect
 
 router = APIRouter()
@@ -2496,3 +2498,101 @@ def update_license_key(
     session.commit()
 
     return state.serialize_status()
+
+
+def package_update_audit_details(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": result["status"],
+        "plan": result["plan"],
+        "installed_count": result["installed_count"],
+        "packs": [
+            {
+                "pack": pack_result.get("pack"),
+                "status": pack_result.get("status"),
+                "packages": [
+                    {
+                        "name": package.get("name"),
+                        "action": package.get("action"),
+                        "available_version": package.get("available_version"),
+                    }
+                    for package in pack_result.get("packages", [])
+                ],
+            }
+            for pack_result in result["packs"]
+        ],
+    }
+
+
+def run_package_update_job(
+    *,
+    job_id: str,
+    actor: str,
+    license_state: Any,
+    license_key: str,
+    instance_id: str,
+) -> None:
+    def report(stage: str, percent: int, message: str) -> None:
+        package_update_jobs.update(
+            job_id,
+            stage=stage,
+            percent=percent,
+            message=message,
+        )
+
+    try:
+        result = package_update_service.update_packages(
+            license_state=license_state,
+            license_key=license_key,
+            instance_id=instance_id,
+            progress=report,
+        )
+        with create_session() as session:
+            record_admin_audit(
+                session=session,
+                actor=actor,
+                action="license.packages.update",
+                resource_type="license",
+                resource_id=license_state.plan,
+                details=package_update_audit_details(result),
+            )
+            session.commit()
+        package_update_jobs.complete(job_id, result)
+    except Exception as exc:
+        package_update_jobs.fail(job_id, exc)
+
+
+@router.post("/license/packages/update", status_code=status.HTTP_202_ACCEPTED)
+def update_license_packages(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    license_state, license_key, instance_id = license_service.package_download_context()
+    job = package_update_jobs.create()
+    thread = threading.Thread(
+        target=run_package_update_job,
+        kwargs={
+            "job_id": job.job_id,
+            "actor": user.username,
+            "license_state": license_state,
+            "license_key": license_key,
+            "instance_id": instance_id,
+        },
+        name=f"gaard-package-update-{job.job_id}",
+        daemon=True,
+    )
+    thread.start()
+
+    return job.serialize()
+
+
+@router.get("/license/packages/update/{job_id}")
+def get_license_package_update_job(
+    job_id: str,
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    job = package_update_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Package update job was not found.",
+        )
+    return job.serialize()

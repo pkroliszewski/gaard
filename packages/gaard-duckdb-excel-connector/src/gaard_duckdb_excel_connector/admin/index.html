@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Excel File Loader</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+      }
+
+      body {
+        background: #f8fafc;
+        color: #172033;
+        margin: 0;
+      }
+
+      main {
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      .header,
+      .panel {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+      }
+
+      .header {
+        display: grid;
+        gap: 8px;
+        padding: 16px;
+      }
+
+      .header-top {
+        align-items: start;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 1.35rem;
+        line-height: 1.25;
+      }
+
+      h2 {
+        font-size: 1.1rem;
+        line-height: 1.25;
+      }
+
+      h3 {
+        font-size: 0.96rem;
+      }
+
+      p,
+      li {
+        color: #64748b;
+        line-height: 1.45;
+      }
+
+      .license {
+        color: #64748b;
+        font-size: 0.82rem;
+        white-space: nowrap;
+      }
+
+      .step-tabs {
+        align-items: center;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        gap: 20px;
+        padding: 0 4px;
+      }
+
+      .step-tab {
+        background: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        color: #64748b;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 750;
+        padding: 9px 2px 10px;
+      }
+
+      .step-tab.active {
+        border-bottom-color: #2563eb;
+        color: #0f172a;
+      }
+
+      .panel {
+        display: grid;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      label {
+        color: #334155;
+        display: grid;
+        font-weight: 650;
+        gap: 5px;
+      }
+
+      input,
+      select,
+      button {
+        border: 1px solid #cbd5e1;
+        border-radius: 7px;
+        font: inherit;
+      }
+
+      input,
+      select {
+        padding: 8px 9px;
+      }
+
+      input[type="radio"],
+      input[type="checkbox"] {
+        min-width: 0;
+      }
+
+      button {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: white;
+        cursor: pointer;
+        font-weight: 750;
+        padding: 8px 11px;
+        width: fit-content;
+      }
+
+      button.secondary {
+        background: white;
+        border-color: #94a3b8;
+        color: #172033;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .choice {
+        align-items: start;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        cursor: pointer;
+        display: grid;
+        gap: 7px;
+        padding: 12px;
+      }
+
+      .choice-title {
+        align-items: center;
+        color: #0f172a;
+        display: flex;
+        gap: 8px;
+        font-weight: 800;
+      }
+
+      code {
+        background: #eef2f7;
+        border-radius: 4px;
+        color: #172033;
+        padding: 2px 5px;
+      }
+
+      pre {
+        background: #111827;
+        border-radius: 8px;
+        color: #f8fafc;
+        overflow-x: auto;
+        padding: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .output {
+        min-height: 54px;
+      }
+
+      .note {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .status {
+        border-radius: 8px;
+        display: none;
+        padding: 10px 12px;
+      }
+
+      .status.error {
+        background: #fef2f2;
+        color: #991b1b;
+        display: block;
+      }
+
+      .status.success {
+        background: #ecfdf5;
+        color: #166534;
+        display: block;
+      }
+
+      footer {
+        color: #64748b;
+        font-size: 0.82rem;
+        padding: 0 2px 6px;
+      }
+
+      @media (max-width: 840px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .header-top {
+          display: grid;
+        }
+
+        .license {
+          white-space: normal;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="header">
+        <div class="header-top">
+          <div class="stack">
+            <h1>Excel File Loader</h1>
+            <p>
+              Loads local <code>.xlsx</code> workbooks as queryable datasource relations.
+              Configure the datasource from the Datasources screen with a loader URL.
+            </p>
+          </div>
+          <div class="license">Uses DuckDB, MIT License.</div>
+        </div>
+        <nav class="step-tabs" aria-label="Excel File Loader sections">
+          <button class="step-tab active" data-tab="usage" type="button">Usage</button>
+          <button class="step-tab" data-tab="configuration" type="button">Configuration</button>
+        </nav>
+      </section>
+
+      <section class="panel" data-tab-panel="usage">
+        <div class="grid">
+          <div class="stack">
+            <h2>Short form</h2>
+            <p>
+              Use this when automatic sheet mapping is enough. Every workbook sheet becomes a
+              relation, and relation names are generated from sheet names.
+            </p>
+            <pre><code>duckdb-excel:///C:/path/to/file.xlsx</code></pre>
+            <p>
+              The catalog is created automatically as <code>dane.duckdb</code>. If
+              <code>GAARD_DUCKDB_CATALOG_ROOT</code> is set, the catalog is created there.
+            </p>
+          </div>
+          <div class="stack">
+            <h2>Explicit form</h2>
+            <p>
+              Use this when you want to choose the catalog path, relation names, loading mode, or
+              type inference sampling.
+            </p>
+            <pre><code>duckdb-excel:///C:/path/to/file.duckdb?workbook=C:/path/to/file.xlsx&amp;sheet=Arkusz1:tabela1&amp;sheet=Arkusz2:tabela2&amp;mode=table</code></pre>
+            <ul>
+              <li><code>mode=table</code> materializes sheets into tables.</li>
+              <li><code>mode=view</code> reads the current workbook through views.</li>
+              <li>Use relation names such as <code>tabela1</code> or <code>magazyn</code> in SQL.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="note">
+          Unix paths copied from a terminal sometimes escape spaces as <code>\ </code>, for example
+          <code>/srv/data/Sales\ 2026.xlsx</code>. The loader accepts that form and normalizes it
+          to a real space before validating the path.
+        </div>
+      </section>
+
+      <section class="panel" data-tab-panel="configuration" hidden>
+        <div class="grid">
+          <form class="stack" id="url-form">
+            <h2>URL builder</h2>
+            <label>
+              Workbook path
+              <input id="workbook-path" placeholder="C:/path/to/file.xlsx" />
+            </label>
+            <label>
+              Loading mode
+              <select id="loading-mode">
+                <option value="table">Materialized tables</option>
+                <option value="view">Live views</option>
+              </select>
+            </label>
+            <p>
+              Materialized tables copy workbook data into the catalog. Live views read the current
+              file on every query.
+            </p>
+            <div class="stack">
+              <h3>Type inference rows</h3>
+              <label class="choice">
+                <span class="choice-title">
+                  <input checked name="sample-mode" type="radio" value="default" />
+                  Current automatic inference
+                </span>
+                <p>
+                  Use DuckDB's native XLSX behavior - column types are inferred from the first data row.
+                </p>
+              </label>
+              <label class="choice">
+                <span class="choice-title">
+                  <input name="sample-mode" type="radio" value="custom" />
+                  Use a fixed number of rows
+                </span>
+                <p>Let the loader inspect this many data rows before creating typed relations.</p>
+                <span class="stack" style="max-width: 220px;">
+                  Rows
+                  <input disabled id="sample-size" min="1" placeholder="For example 25" type="number" />
+                </span>
+              </label>
+            </div>
+            <button type="submit">Build URL</button>
+          </form>
+          <div class="stack">
+            <h2>Generated URL</h2>
+            <pre class="output"><code id="generated-url">duckdb-excel:///C:/path/to/file.xlsx</code></pre>
+            <p>
+              For custom sheet names or relation names, start from the explicit form in Usage and
+              add <code>type_sample_rows</code> when the first row may be empty or not representative.
+            </p>
+            <div class="stack">
+              <h2>Save as datasource</h2>
+              <label>
+                Datasource key
+                <input id="datasource-key" placeholder="excel01" />
+              </label>
+              <label>
+                Datasource name
+                <input id="datasource-name" placeholder="Excel source" />
+              </label>
+              <span class="choice-title">
+                <input id="datasource-active" type="checkbox" />
+                  Active datasource
+              </span>
+              <div class="actions">
+                <button class="secondary" id="test-datasource" type="button">Test connection</button>
+                <button id="save-datasource" type="button">Save as datasource</button>
+              </div>
+              <div class="status" id="datasource-status"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        Excel File Loader · Uses DuckDB under the MIT License.
+      </footer>
+    </main>
+
+    <script>
+      const state = {
+        activeTab: "usage",
+        generatedUrl: "duckdb-excel:///C:/path/to/file.xlsx",
+        pendingRequests: new Map(),
+      };
+
+      function renderTabs() {
+        document.querySelectorAll("[data-tab]").forEach(button => {
+          button.classList.toggle("active", button.dataset.tab === state.activeTab);
+        });
+        document.querySelectorAll("[data-tab-panel]").forEach(panel => {
+          panel.hidden = panel.dataset.tabPanel !== state.activeTab;
+        });
+        postExtensionHeight();
+      }
+
+      function buildUrl(event) {
+        event.preventDefault();
+        const workbookPath = document.querySelector("#workbook-path").value.trim().replaceAll("\\", "/");
+        const mode = document.querySelector("#loading-mode").value;
+        const sampleMode = document.querySelector("[name='sample-mode']:checked").value;
+        const sampleSize = document.querySelector("#sample-size").value.trim();
+        const target = document.querySelector("#generated-url");
+        if (!workbookPath) {
+          target.textContent = "Enter a workbook path.";
+          state.generatedUrl = "";
+          postExtensionHeight();
+          return;
+        }
+
+        const params = new URLSearchParams();
+        if (mode !== "table") params.set("mode", mode);
+        if (sampleMode === "custom" && sampleSize) params.set("type_sample_rows", sampleSize);
+        const query = params.toString();
+        state.generatedUrl = `duckdb-excel:///${workbookPath}${query ? `?${query}` : ""}`;
+        target.textContent = state.generatedUrl;
+        postExtensionHeight();
+      }
+
+      function datasourcePayload() {
+        const connectorKey = document.querySelector("#datasource-key").value.trim();
+        const name = document.querySelector("#datasource-name").value.trim();
+        requireGeneratedUrl();
+        if (!connectorKey) {
+          throw new Error("Datasource key is required.");
+        }
+        if (!name) {
+          throw new Error("Datasource name is required.");
+        }
+        return {
+          connector_key: connectorKey,
+          name,
+          database_type: "duckdb-excel",
+          database_url: state.generatedUrl,
+          active: document.querySelector("#datasource-active").checked,
+        };
+      }
+
+      async function testDatasource() {
+        setDatasourceStatus("", "");
+        try {
+          requireGeneratedUrl();
+        } catch (error) {
+          setDatasourceStatus("error", error.message || String(error));
+          return;
+        }
+        await runDatasourceAction(
+          "test-datasource",
+          {
+            method: "POST",
+            path: "/api/v1/admin/datasources/test",
+            body: {
+              database_type: "duckdb-excel",
+              database_url: state.generatedUrl,
+            },
+          },
+          "Connection test succeeded.",
+        );
+      }
+
+      function requireGeneratedUrl() {
+        if (!state.generatedUrl || !state.generatedUrl.startsWith("duckdb-excel://")) {
+          throw new Error("Build a DuckDB Excel URL first.");
+        }
+      }
+
+      async function saveDatasource() {
+        setDatasourceStatus("", "");
+        let payload;
+        try {
+          payload = datasourcePayload();
+        } catch (error) {
+          setDatasourceStatus("error", error.message || String(error));
+          return;
+        }
+        await runDatasourceAction(
+          "save-datasource",
+          {
+            method: "POST",
+            path: "/api/v1/admin/datasources",
+            body: payload,
+          },
+          "Datasource saved.",
+        );
+      }
+
+      async function runDatasourceAction(buttonId, request, successMessage) {
+        const button = document.querySelector(`#${buttonId}`);
+        button.disabled = true;
+        try {
+          await postAdminApiRequest(request);
+          setDatasourceStatus("success", successMessage);
+        } catch (error) {
+          setDatasourceStatus("error", error.message || String(error));
+        } finally {
+          button.disabled = false;
+          postExtensionHeight();
+        }
+      }
+
+      function postAdminApiRequest(request) {
+        const requestId = `duckdb-excel-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        return new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            state.pendingRequests.delete(requestId);
+            reject(new Error("Admin API bridge is unavailable."));
+          }, 15000);
+          state.pendingRequests.set(requestId, { resolve, reject, timeout });
+          parent.postMessage(
+            {
+              type: "gaard:admin-api-request",
+              requestId,
+              request,
+            },
+            window.location.origin,
+          );
+        });
+      }
+
+      function handleAdminApiResponse(event) {
+        if (event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (!data || data.type !== "gaard:admin-api-response") return;
+        const pending = state.pendingRequests.get(data.requestId);
+        if (!pending) return;
+        window.clearTimeout(pending.timeout);
+        state.pendingRequests.delete(data.requestId);
+        if (data.ok) {
+          pending.resolve(data.payload);
+          return;
+        }
+        pending.reject(new Error(data.error || "Admin API request failed."));
+      }
+
+      function setDatasourceStatus(kind, message) {
+        const status = document.querySelector("#datasource-status");
+        status.className = kind ? `status ${kind}` : "status";
+        status.textContent = message;
+      }
+
+      function postExtensionHeight() {
+        requestAnimationFrame(() => {
+          parent.postMessage(
+            { type: "gaard:extension:height", height: document.body.scrollHeight },
+            "*",
+          );
+        });
+      }
+
+      document.querySelectorAll("[data-tab]").forEach(button => {
+        button.addEventListener("click", () => {
+          state.activeTab = button.dataset.tab || "usage";
+          renderTabs();
+        });
+      });
+
+      function syncSampleSizeState() {
+        document.querySelector("#sample-size").disabled =
+          document.querySelector("[name='sample-mode']:checked").value !== "custom";
+      }
+
+      document.querySelectorAll("[name='sample-mode']").forEach(input => {
+        input.addEventListener("change", syncSampleSizeState);
+      });
+      syncSampleSizeState();
+      document.querySelector("#url-form").addEventListener("submit", buildUrl);
+      document.querySelector("#test-datasource").addEventListener("click", testDatasource);
+      document.querySelector("#save-datasource").addEventListener("click", saveDatasource);
+      window.addEventListener("message", handleAdminApiResponse);
+      window.addEventListener("load", postExtensionHeight);
+      window.addEventListener("resize", postExtensionHeight);
+    </script>
+  </body>
+</html>

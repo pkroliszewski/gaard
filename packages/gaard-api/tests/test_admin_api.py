@@ -181,6 +181,15 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "Configuration" in response.text
     assert "Extensions" in response.text
     assert "Data sources" in response.text
+    assert 'src="/admin/assets/getgaard.svg"' in response.text
+    assert "Update packages" in response.text
+    assert "formatLicenseEditionLabel(state.license)" in response.text
+    assert "<span>Community edition</span>" not in response.text
+    assert 'api("/api/v1/admin/license/status")' in response.text
+    assert 'api("/api/v1/admin/license/packages/update"' in response.text
+    assert 'api(`/api/v1/admin/license/packages/update/${encodeURIComponent(jobId)}`)' in response.text
+    assert "package-update-progress" in response.text
+    assert 'license.plan && license.plan !== "community"' in response.text
     license_menu_item = '{ key: "license", label: builtInSectionLabels.license }'
     assert response.text.count(license_menu_item) == 1
     governance_index = response.text.index('key: "governance"')
@@ -191,6 +200,17 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "extension-frame" in response.text
     assert "plugin unavailable" in response.text
     assert "renderDatabaseTypeOptions" not in response.text
+
+    styles_response = admin_client.get("/admin/assets/styles.css")
+    assert styles_response.status_code == 200
+    assert ".brand-logo" in styles_response.text
+    assert ".nav button" in styles_response.text
+    assert "font-weight: 800" not in styles_response.text
+    assert "font-weight: 650" not in styles_response.text
+
+    logo_response = admin_client.get("/admin/assets/getgaard.svg")
+    assert logo_response.status_code == 200
+    assert "<svg" in logo_response.text
 
 
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(

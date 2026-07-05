@@ -48,6 +48,11 @@ button:hover {
   border-color: var(--accent);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -316,8 +321,22 @@ label {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 4px 8px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.brand-logo {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 8px;
+}
+
+.brand-copy {
+  min-width: 0;
 }
 
 .brand strong {
@@ -349,6 +368,7 @@ label {
   color: rgba(255, 255, 255, 0.76);
   text-align: left;
   padding: 0 10px;
+  font-weight: 400;
 }
 
 .nav button:hover {
@@ -366,8 +386,7 @@ label {
   justify-content: space-between;
   align-items: center;
   border-radius: 8px;
-  font-weight: 800;
-  letter-spacing: 0.01em;
+  font-weight: 400;
 }
 
 .nav-group-button.active,
@@ -391,7 +410,7 @@ label {
   min-height: 34px !important;
   border-radius: 7px;
   color: rgba(255, 255, 255, 0.68) !important;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .submenu-button.active,
@@ -404,7 +423,7 @@ label {
   padding: 8px 10px;
   color: rgba(255, 255, 255, 0.48);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .sidebar-footer {
@@ -553,6 +572,103 @@ label {
 
 .license-key-form {
   margin-top: 16px;
+}
+
+.package-update-progress {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbfc;
+}
+
+.package-update-progress.complete {
+  border-color: rgba(36, 116, 90, 0.35);
+  background: #f4fbf8;
+}
+
+.package-update-progress.failed {
+  border-color: rgba(163, 59, 59, 0.35);
+  background: #fff8f8;
+}
+
+.package-update-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.package-update-progress-header strong,
+.package-update-progress-header span {
+  font-size: 13px;
+}
+
+.package-update-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe6ee;
+}
+
+.package-update-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.package-update-progress.complete .package-update-fill {
+  background: var(--ok);
+}
+
+.package-update-progress.failed .package-update-fill {
+  background: var(--danger);
+}
+
+.package-update-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.package-update-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.package-update-step span {
+  width: 10px;
+  min-width: 10px;
+  height: 10px;
+  border: 2px solid #aab6c4;
+  border-radius: 999px;
+  background: white;
+}
+
+.package-update-step.active {
+  color: var(--accent-strong);
+}
+
+.package-update-step.active span {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.package-update-step.done {
+  color: var(--ok);
+}
+
+.package-update-step.done span {
+  border-color: var(--ok);
+  background: var(--ok);
 }
 
 .overview-grid,
@@ -1236,6 +1352,7 @@ code {
 
   .stats,
   .license-status-grid,
+  .package-update-steps,
   .widget-grid,
   .split,
   .schema-editor {

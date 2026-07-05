@@ -42,6 +42,7 @@ FEATURE_KEYS = (
     "non_sql_sources",
     "multi_source",
     "multiple_models",
+    "extract_jobs",
     "identity_management",
     "unlimited_machine_consumers",
 )
@@ -102,6 +103,7 @@ PLAN_ENTITLEMENTS: dict[LicensePlan, PlanEntitlements] = {
             "non_sql_sources": False,
             "multi_source": False,
             "multiple_models": False,
+            "extract_jobs": False,
             "identity_management": False,
             "unlimited_machine_consumers": False,
         },
@@ -118,6 +120,7 @@ PLAN_ENTITLEMENTS: dict[LicensePlan, PlanEntitlements] = {
             "non_sql_sources": True,
             "multi_source": True,
             "multiple_models": True,
+            "extract_jobs": False,
             "identity_management": False,
             "unlimited_machine_consumers": False,
         },
@@ -134,6 +137,7 @@ PLAN_ENTITLEMENTS: dict[LicensePlan, PlanEntitlements] = {
             "non_sql_sources": True,
             "multi_source": True,
             "multiple_models": True,
+            "extract_jobs": True,
             "identity_management": True,
             "unlimited_machine_consumers": True,
         },
@@ -433,6 +437,25 @@ class LicenseService:
             session.commit()
 
         return self.refresh(force=True)
+
+    def package_download_context(self) -> tuple[LicenseState, str, str]:
+        state = self.refresh_if_due()
+        if state.plan == "community" or not state.valid:
+            raise LicenseAccessError(
+                "Package updates require an active paid GAARD license."
+            )
+
+        with self._session() as session:
+            license_key = self._effective_license_key(session)
+            instance_id = self._get_or_create_instance_id(session)
+            session.commit()
+
+        if not license_key:
+            raise LicenseAccessError(
+                "Package updates require a configured GAARD license key."
+            )
+
+        return state, license_key, instance_id
 
     def require_feature(self, feature: str, detail: str | None = None) -> None:
         state = self.refresh_if_due()

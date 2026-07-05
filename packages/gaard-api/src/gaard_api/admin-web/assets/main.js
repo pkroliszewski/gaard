@@ -1,12 +1,13 @@
 // src/main.ts
 var app = document.querySelector("#app");
+var licensePackageUpdatePollTimer = null;
 var builtInSectionLabels = {
   overview: "Overview",
   widgets: "Widgets",
   "data-audit": "Data audit",
   prompts: "Prompts",
   "schema-cache": "Schema cache",
-  "business-logic": "Business logic suggestions",
+  "business-logic": "Business logic",
   "llm-config": "LLM",
   reasoning: "Reasoning",
   "governance-policy": "Governance policy",
@@ -65,8 +66,15 @@ var state = {
   datasourceSchemaDraftTables: null,
   extensionSections: [],
   extensionsLoaded: false,
-  license: null
+  license: null,
+  licensePackageUpdate: null
 };
+var packageUpdateStages = [
+  { key: "downloading", label: "Downloading" },
+  { key: "decompressing", label: "Decompressing" },
+  { key: "analyzing", label: "Analyzing" },
+  { key: "installing", label: "Installing" }
+];
 var dataAuditTypes = [
   { value: "", label: "All types" },
   { value: "info", label: "Info" },
@@ -157,7 +165,10 @@ function renderSidebar() {
   return `
       <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
         <div class="sidebar-header">
-          <div class="brand"><strong>GAARD Admin Console</strong><span>Community edition</span></div>
+          <div class="brand">
+            <img class="brand-logo" src="/admin/assets/getgaard.svg" alt="" aria-hidden="true" />
+            <div class="brand-copy"><strong>GAARD Admin Console</strong><span>${escapeHtml(formatLicenseEditionLabel(state.license))}</span></div>
+          </div>
           <button class="menu-toggle" id="mobile-menu-button" type="button" aria-label="${state.mobileMenuOpen ? "Close navigation" : "Open navigation"}" aria-expanded="${state.mobileMenuOpen}" aria-controls="admin-navigation">
             <span></span><span></span><span></span>
           </button>
@@ -262,6 +273,15 @@ function formatLicenseDate(value) {
   const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
   if (match) return `${match[1]} ${match[2]}:${match[3]}`;
   return raw;
+}
+function formatLicenseEditionLabel(license) {
+  const plan = String(license?.plan || "community")
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  const normalized = plan || "community";
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)} edition`;
 }
 function formatLicenseMessage(license) {
   const message = String(license?.message || "").trim();
@@ -377,6 +397,7 @@ function renderLogin() {
       persistAuth(result.token, result.username, result.must_change_password);
       state.overviewLoading = !result.must_change_password && state.section === "overview";
       setMessage("success", "");
+      await loadShellLicense();
       render();
       if (!result.must_change_password) await loadCurrentSection();
     } catch (error) {
@@ -418,6 +439,7 @@ function renderPasswordChange() {
       state.overviewLoading = !state.mustChangePassword && state.section === "overview";
       localStorage.setItem("gaard_admin_must_change", String(result.must_change_password));
       setMessage("success", "Password changed.");
+      await loadShellLicense();
       render();
       await loadCurrentSection();
     } catch (error) {
@@ -1635,6 +1657,8 @@ function renderStub(title, text) {
 function renderLicense() {
   const license = state.license || {};
   const statusClass = license.valid ? "ok" : license.status === "missing" ? "planned" : "danger";
+  const canUpdatePackages = license.plan && license.plan !== "community";
+  const packageUpdateRunning = state.licensePackageUpdate?.status === "running";
   return `
     <section class="panel">
       <div class="panel-header">
@@ -1656,9 +1680,11 @@ function renderLicense() {
           <div class="form-actions">
             <button type="button" class="danger" id="clear-license-key">Clear key</button>
             <button type="button" id="check-license-now">Check now</button>
+            ${canUpdatePackages ? `<button type="button" id="update-license-packages"${packageUpdateRunning ? " disabled" : ""}>Update packages</button>` : ""}
             <button class="primary" type="submit">Save key</button>
           </div>
         </form>
+        ${renderLicensePackageProgress()}
       </div>
     </section>`;
 }
@@ -1667,6 +1693,34 @@ function renderLicenseStatusItem(label, value) {
     <div class="stat">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
+    </div>`;
+}
+function renderLicensePackageProgress() {
+  const job = state.licensePackageUpdate;
+  if (!job) return "";
+  const stage = job.stage || "queued";
+  const percent = Math.max(0, Math.min(100, Number(job.percent || 0)));
+  const activeIndex = packageUpdateStages.findIndex((item) => item.key === stage);
+  const complete = job.status === "succeeded";
+  const failed = job.status === "failed";
+  const statusLabel = failed ? "Failed" : complete ? "Complete" : job.message || "Updating packages.";
+  return `
+    <div class="package-update-progress ${failed ? "failed" : complete ? "complete" : ""}">
+      <div class="package-update-progress-header">
+        <strong>Package update</strong>
+        <span>${failed ? "Failed" : `${percent}%`}</span>
+      </div>
+      <div class="package-update-track" aria-label="Package update progress">
+        <div class="package-update-fill" style="width: ${percent}%"></div>
+      </div>
+      <div class="package-update-steps">
+        ${packageUpdateStages.map((item, index) => {
+          const done = complete || (activeIndex >= 0 && index < activeIndex);
+          const active = !complete && !failed && item.key === stage;
+          return `<div class="package-update-step ${done ? "done" : ""} ${active ? "active" : ""}"><span></span>${escapeHtml(item.label)}</div>`;
+        }).join("")}
+      </div>
+      <p class="muted">${escapeHtml(failed ? job.error?.message || job.message || "Package update failed." : statusLabel)}</p>
     </div>`;
 }
 function renderAdminAudit() {
@@ -1778,6 +1832,7 @@ function attachSectionHandlers() {
   document.querySelector("#license-key-form")?.addEventListener("submit", saveLicenseKey);
   document.querySelector("#clear-license-key")?.addEventListener("click", clearLicenseKey);
   document.querySelector("#check-license-now")?.addEventListener("click", checkLicenseNow);
+  document.querySelector("#update-license-packages")?.addEventListener("click", updateLicensePackages);
   document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
   document.querySelector("#test-llm-config")?.addEventListener("click", testLlmConfig);
   document.querySelector("#reasoning-config-form")?.addEventListener("submit", saveReasoningConfig);
@@ -2333,6 +2388,52 @@ async function checkLicenseNow() {
     render();
   }
 }
+async function updateLicensePackages() {
+  try {
+    state.licensePackageUpdate = {
+      status: "running",
+      stage: "queued",
+      percent: 0,
+      message: "Starting package update."
+    };
+    render();
+    const job = await api("/api/v1/admin/license/packages/update", {
+      method: "POST"
+    });
+    state.licensePackageUpdate = job;
+    render();
+    pollLicensePackageUpdate(job.job_id);
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function pollLicensePackageUpdate(jobId) {
+  if (!jobId || state.licensePackageUpdate?.job_id !== jobId) return;
+  if (licensePackageUpdatePollTimer) {
+    clearTimeout(licensePackageUpdatePollTimer);
+    licensePackageUpdatePollTimer = null;
+  }
+  try {
+    const job = await api(`/api/v1/admin/license/packages/update/${encodeURIComponent(jobId)}`);
+    state.licensePackageUpdate = job;
+    if (job.status === "running") {
+      render();
+      licensePackageUpdatePollTimer = setTimeout(() => pollLicensePackageUpdate(jobId), 700);
+      return;
+    }
+    if (job.status === "succeeded") {
+      await loadExtensions(false);
+      setMessage("success", job.result?.message || job.message || "Packages updated.");
+    } else {
+      setMessage("error", job.error?.message || job.message || "Package update failed.");
+    }
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
 async function saveLlmConfig(event) {
   event.preventDefault();
   try {
@@ -2825,9 +2926,19 @@ async function loadGovernancePolicy() {
   state.governancePolicy = result.item || null;
   render();
 }
-async function loadLicense() {
+async function loadLicense(shouldRender = true) {
   state.license = await api("/api/v1/admin/license/status");
-  render();
+  if (shouldRender) {
+    render();
+  }
+}
+async function loadShellLicense() {
+  if (!state.token || state.mustChangePassword) return;
+  try {
+    await loadLicense(false);
+  } catch (error) {
+    setMessage("error", error.message);
+  }
 }
 async function loadAdminAudit() {
   const result = await api("/api/v1/admin/audit/admin-events");
@@ -2842,6 +2953,7 @@ async function bootstrap() {
     state.username = me.username;
     state.mustChangePassword = me.must_change_password;
     localStorage.setItem("gaard_admin_must_change", String(state.mustChangePassword));
+    await loadShellLicense();
     render();
     await loadCurrentSection();
   } catch (error) {

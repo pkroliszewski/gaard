@@ -85,6 +85,7 @@ def test_no_license_key_uses_community(isolated_license_service: LicenseService)
     assert state.status == "missing"
     assert state.features["sql_sources"] is True
     assert state.features["non_sql_sources"] is False
+    assert state.features["extract_jobs"] is False
     assert state.limits == {
         "human_users": 1,
         "machine_consumers": 1,
@@ -114,6 +115,7 @@ def test_active_data_analyst_license_enables_data_analyst_entitlements(
     assert state.features["non_sql_sources"] is True
     assert state.features["multi_source"] is True
     assert state.features["multiple_models"] is True
+    assert state.features["extract_jobs"] is False
     assert state.features["identity_management"] is False
     assert state.limits["sources"] is None
     assert state.limits["human_users"] == 1

@@ -5,8 +5,15 @@ from fastapi.testclient import TestClient
 import pytest
 
 from gaard_api.api_registry import ApiRegistry
+from gaard_api.core.error_handlers import register_error_handlers
 from gaard_api.extension_services import DatasourceHostService
-from gaard_api.extensions import _create_api_extension_services
+from gaard_api.extensions import (
+    EXTRACT_JOBS_LICENSE_MESSAGE,
+    _create_api_extension_services,
+    enforce_extension_license_entitlements,
+    is_extract_job_mutation,
+)
+from gaard_api.license import LicenseAccessError
 
 
 def test_api_registry_mounts_extension_router_and_admin_page(tmp_path: Path) -> None:
@@ -91,6 +98,72 @@ def test_api_registry_applies_inherited_dependencies_to_extension_routes() -> No
 
     assert unauthorized_response.status_code == 401
     assert authorized_response.status_code == 200
+
+
+def test_extract_job_mutations_are_guarded_by_host_license(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DenyingLicenseService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str | None]] = []
+
+        def require_feature(self, feature: str, detail: str | None = None) -> None:
+            self.calls.append((feature, detail))
+            raise LicenseAccessError(detail)
+
+    license_service = DenyingLicenseService()
+    monkeypatch.setattr("gaard_api.license.license_service", license_service)
+
+    router = APIRouter()
+
+    @router.get("/jobs")
+    def list_jobs() -> dict[str, str]:
+        return {"status": "listed"}
+
+    @router.post("/jobs")
+    def create_job() -> dict[str, str]:
+        return {"status": "queued"}
+
+    @router.post("/jobs/{job_id}/refresh")
+    def refresh_job(job_id: str) -> dict[str, str]:
+        return {"status": f"refreshed:{job_id}"}
+
+    registry = ApiRegistry(dependencies=[Depends(enforce_extension_license_entitlements)])
+    registry.register_router(extension_id="gaard-extract", router=router)
+
+    app = FastAPI()
+    register_error_handlers(app)
+    registry.apply_to(app)
+
+    with TestClient(app) as client:
+        list_response = client.get("/api/v1/extensions/gaard-extract/jobs")
+        create_response = client.post("/api/v1/extensions/gaard-extract/jobs")
+        refresh_response = client.post("/api/v1/extensions/gaard-extract/jobs/job-1/refresh")
+
+    assert list_response.status_code == 200
+    assert create_response.status_code == 403
+    assert create_response.json()["error"]["message"] == EXTRACT_JOBS_LICENSE_MESSAGE
+    assert refresh_response.status_code == 403
+    assert refresh_response.json()["error"]["message"] == EXTRACT_JOBS_LICENSE_MESSAGE
+    assert license_service.calls == [
+        ("extract_jobs", EXTRACT_JOBS_LICENSE_MESSAGE),
+        ("extract_jobs", EXTRACT_JOBS_LICENSE_MESSAGE),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("POST", "/api/v1/extensions/gaard-extract/jobs", True),
+        ("POST", "/api/v1/extensions/gaard-extract/jobs/", True),
+        ("POST", "/api/v1/extensions/gaard-extract/jobs/job-1/refresh", True),
+        ("GET", "/api/v1/extensions/gaard-extract/jobs", False),
+        ("POST", "/api/v1/extensions/gaard-extract/llm-extracting-config", False),
+        ("POST", "/api/v1/extensions/other/jobs", False),
+    ],
+)
+def test_extract_job_mutation_matcher(method: str, path: str, expected: bool) -> None:
+    assert is_extract_job_mutation(method, path) is expected
 
 
 def test_api_extension_services_include_read_only_datasource_service() -> None:

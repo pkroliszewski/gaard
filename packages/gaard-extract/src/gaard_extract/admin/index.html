@@ -1,0 +1,2677 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GAARD Extract</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+      }
+
+      html,
+      body {
+        overflow: hidden;
+      }
+
+      body {
+        margin: 0;
+        background: #f8fafc;
+        color: #0f172a;
+      }
+
+      main {
+        display: grid;
+        gap: 10px;
+        padding: 12px 14px;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      section,
+      .source-definition,
+      .workspace,
+      .embedding-definition,
+      .llm-definition,
+      .jobs-definition {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 1.35rem;
+        line-height: 1.25;
+      }
+
+      h2 {
+        font-size: 1.12rem;
+        line-height: 1.25;
+      }
+
+      h3 {
+        font-size: 0.98rem;
+      }
+
+      p {
+        color: #64748b;
+        line-height: 1.35;
+      }
+
+      label {
+        color: #334155;
+        font-weight: 650;
+      }
+
+      input,
+      select,
+      textarea,
+      button {
+        border: 1px solid #cbd5e1;
+        border-radius: 7px;
+        font: inherit;
+      }
+
+      input,
+      select {
+        min-width: 250px;
+        padding: 7px 9px;
+      }
+
+      input[type="checkbox"],
+      input[type="radio"] {
+        min-width: 0;
+      }
+
+      textarea {
+        box-sizing: border-box;
+        max-width: 100%;
+        min-height: 120px;
+        padding: 9px;
+        resize: vertical;
+        width: 100%;
+      }
+
+      button {
+        background: white;
+        cursor: pointer;
+        font-weight: 650;
+        padding: 7px 10px;
+      }
+
+      button.primary {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: white;
+      }
+
+      .icon-button {
+        align-items: center;
+        display: inline-flex;
+        font-size: 1rem;
+        height: 34px;
+        justify-content: center;
+        line-height: 1;
+        padding: 0;
+        width: 34px;
+      }
+
+      button.selected {
+        background: #0f172a;
+        border-color: #0f172a;
+        color: white;
+      }
+
+      .step-tabs {
+        align-items: center;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        padding: 0 4px;
+      }
+
+      .step-tab {
+        background: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        color: #64748b;
+        cursor: pointer;
+        font-weight: 750;
+        padding: 9px 2px 10px;
+      }
+
+      .step-tab.active {
+        border-bottom-color: #2563eb;
+        color: #0f172a;
+      }
+
+      .step-tab:disabled {
+        cursor: default;
+        opacity: 0.55;
+      }
+
+      .source-definition {
+        align-items: start;
+        display: grid;
+        gap: 16px;
+        grid-template-columns: minmax(360px, 0.9fr) minmax(360px, 1.1fr);
+        padding: 16px;
+      }
+
+      .source-copy,
+      .source-controls,
+      .selected-tables-panel {
+        align-content: start;
+        align-self: start;
+        display: grid;
+        gap: 10px;
+      }
+
+      .source-controls-row,
+      .message-row,
+      .selected-table-buttons,
+      .table-actions,
+      .role-radios {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .selected-table-buttons {
+        align-content: flex-start;
+        min-height: 37px;
+      }
+
+      .selected-table-button {
+        border-radius: 999px;
+        padding: 7px 12px;
+      }
+
+      .selected-table-button.main {
+        background: white;
+        border-color: #94a3b8;
+        color: #0f172a;
+      }
+
+      .selected-table-button.content {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: white;
+      }
+
+      .selected-table-button.mapped {
+        background: #e2e8f0;
+        border-color: #cbd5e1;
+        color: #334155;
+      }
+
+      .workspace {
+        align-items: start;
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 16px;
+      }
+
+      .panel {
+        align-content: start;
+        align-self: start;
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .panel-heading {
+        display: grid;
+        gap: 4px;
+      }
+
+      .table-list {
+        display: grid;
+      }
+
+      .table-header {
+        border-bottom: 1px solid #cbd5e1;
+        color: #334155;
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.01em;
+      }
+
+      .table-header,
+      .table-row {
+        align-items: center;
+        border-bottom: 1px solid #e2e8f0;
+        display: grid;
+        gap: 7px;
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        padding: 6px 0;
+      }
+
+      .table-main-radio {
+        justify-self: center;
+      }
+
+      .table-main-radio input {
+        accent-color: #2563eb;
+        cursor: pointer;
+      }
+
+      .table-name-button {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      table {
+        border-collapse: collapse;
+        font-size: 0.92rem;
+        width: 100%;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e2e8f0;
+        padding: 7px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: #334155;
+        font-size: 0.82rem;
+        letter-spacing: 0.01em;
+      }
+
+      .column-type {
+        color: #475569;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 120px;
+      }
+
+      .badge {
+        background: #e0f2fe;
+        border-radius: 999px;
+        color: #0369a1;
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 800;
+        padding: 2px 7px;
+      }
+
+      .badge.neutral {
+        background: #e2e8f0;
+        color: #475569;
+      }
+
+      .muted {
+        color: #64748b;
+      }
+
+      .message {
+        color: #0f766e;
+        font-weight: 800;
+        min-height: 19px;
+      }
+
+      .error {
+        color: #b91c1c;
+      }
+
+      .role-header {
+        display: grid;
+        gap: 2px;
+      }
+
+      .role-header-labels {
+        color: #64748b;
+        display: grid;
+        font-size: 0.72rem;
+        gap: 10px;
+        grid-template-columns: 52px 58px auto;
+      }
+
+      .role-radios {
+        align-items: flex-start;
+        gap: 16px;
+      }
+
+      .role-radio {
+        align-items: center;
+        display: inline-flex;
+        gap: 4px;
+        justify-content: center;
+        min-width: 42px;
+      }
+
+      .role-radio input {
+        accent-color: #2563eb;
+        cursor: pointer;
+      }
+
+      .clear-role {
+        color: #64748b;
+        font-size: 0.82rem;
+        padding: 4px 8px;
+      }
+
+      .chunking-definition {
+        display: grid;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .chunking-header {
+        align-items: start;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+      }
+
+      .chunking-options {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .chunking-option {
+        align-content: start;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        cursor: pointer;
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+      }
+
+      .chunking-option.selected {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 1px #2563eb;
+      }
+
+      .chunking-option-title {
+        align-items: center;
+        color: #0f172a;
+        display: flex;
+        gap: 8px;
+        font-weight: 800;
+      }
+
+      .chunking-option input {
+        accent-color: #2563eb;
+        cursor: pointer;
+      }
+
+      .embedding-definition {
+        display: grid;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .embedding-header {
+        align-items: start;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+      }
+
+      .llm-definition {
+        display: grid;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .llm-header {
+        align-items: start;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+      }
+
+      .jobs-definition {
+        display: grid;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .jobs-header {
+        align-items: start;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+      }
+
+      .jobs-table {
+        display: grid;
+        gap: 8px;
+      }
+
+      .jobs-row {
+        align-items: center;
+        border-bottom: 1px solid #e2e8f0;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: 1.2fr 0.8fr 0.8fr 1fr 1.2fr auto;
+        padding: 8px 0;
+      }
+
+      .jobs-row.header {
+        color: #334155;
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      .job-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .job-detail-panel {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .job-event-list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .job-event {
+        border-bottom: 1px solid #e2e8f0;
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 150px 70px minmax(0, 1fr);
+        padding: 6px 0;
+      }
+
+      .job-event.error {
+        color: #b91c1c;
+      }
+
+      .status-badge {
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 800;
+        padding: 3px 8px;
+      }
+
+      .status-badge.queued,
+      .status-badge.running {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+
+      .status-badge.succeeded {
+        background: #dcfce7;
+        color: #15803d;
+      }
+
+      .status-badge.failed {
+        background: #fee2e2;
+        color: #b91c1c;
+      }
+
+      .llm-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: minmax(320px, 0.85fr) minmax(420px, 1.15fr);
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .form-grid label,
+      .full-row {
+        min-width: 0;
+      }
+
+      .full-row {
+        grid-column: 1 / -1;
+      }
+
+      .information-types-panel {
+        display: grid;
+        gap: 14px;
+      }
+
+      .key-panel,
+      .fields-panel {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .panel-title-row {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+      }
+
+      .title-actions {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+
+      .key-buttons,
+      .field-buttons {
+        align-content: flex-start;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        min-height: 34px;
+      }
+
+      .key-chip,
+      .field-chip {
+        align-items: center;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        display: inline-flex;
+        overflow: hidden;
+      }
+
+      .key-select-button,
+      .field-select-button {
+        border: 0;
+        border-radius: 0;
+        padding: 7px 10px 7px 12px;
+      }
+
+      .key-select-button.selected {
+        background: #2563eb;
+        color: white;
+      }
+
+      .field-select-button {
+        cursor: default;
+      }
+
+      .chip-remove-button {
+        border: 0;
+        border-left: 1px solid #cbd5e1;
+        border-radius: 0;
+        color: #b91c1c;
+        height: 34px;
+        padding: 0;
+        width: 34px;
+      }
+
+      dialog {
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        box-shadow: 0 20px 55px rgba(15, 23, 42, 0.25);
+        bottom: auto;
+        inset: auto;
+        left: 50%;
+        margin: 0;
+        max-height: calc(100dvh - 32px);
+        max-width: min(520px, calc(100vw - 32px));
+        overflow: auto;
+        padding: 0;
+        position: fixed;
+        right: auto;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 520px;
+      }
+
+      dialog::backdrop {
+        background: rgba(15, 23, 42, 0.35);
+      }
+
+      .dialog-content {
+        display: grid;
+        gap: 14px;
+        padding: 16px;
+      }
+
+      .dialog-actions {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .schema-editor {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        min-height: 360px;
+      }
+
+      .mode-options {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mode-option {
+        align-content: start;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        cursor: pointer;
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+      }
+
+      .mode-option.selected {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 1px #2563eb;
+      }
+
+      .mode-option-title {
+        align-items: center;
+        color: #0f172a;
+        display: flex;
+        gap: 8px;
+        font-weight: 800;
+      }
+
+      .mode-option input {
+        accent-color: #2563eb;
+        cursor: pointer;
+        min-width: 0;
+      }
+
+      .config-form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .config-form label {
+        display: grid;
+        gap: 5px;
+      }
+
+      .field-label-row {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+      }
+
+      .inline-action-button {
+        font-size: 0.82rem;
+        padding: 4px 8px;
+      }
+
+      .checkbox-row {
+        align-items: center;
+        display: flex !important;
+        gap: 8px;
+      }
+
+      .checkbox-row input {
+        min-width: 0;
+      }
+
+      @media (max-width: 1000px) {
+        .source-definition,
+        .workspace,
+        .chunking-options,
+        .mode-options,
+        .llm-grid,
+        .form-grid,
+        .panel-title-row,
+        .job-event,
+        .jobs-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav class="step-tabs" aria-label="Extract workflow steps">
+        <button class="step-tab active" data-step="source" type="button">Source</button>
+        <button class="step-tab" data-step="chunking" type="button">Chunking</button>
+        <button class="step-tab" data-step="embedding" type="button">Embeddings</button>
+        <button class="step-tab" data-step="llm" type="button">LLM Extracting</button>
+        <button class="step-tab" data-step="jobs" type="button">Jobs</button>
+      </nav>
+
+      <section class="source-definition" data-step-panel="source">
+        <div class="source-copy">
+          <h2>Source definition</h2>
+          <p>Step 1: define an unstructured source model from an existing GAARD datasource.</p>
+          <div class="source-controls">
+            <div class="source-controls-row">
+              <label for="datasource-select">Datasource</label>
+              <select id="datasource-select"></select>
+              <button
+                aria-label="Refresh"
+                class="icon-button"
+                id="refresh"
+                title="Refresh"
+                type="button"
+              >↻</button>
+              <button
+                aria-label="Save source model"
+                class="icon-button primary"
+                id="save"
+                title="Save source model"
+                type="button"
+              >💾</button>
+            </div>
+            <div class="message-row">
+              <div class="message" id="message" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="selected-tables-panel">
+          <h2>Configured tables</h2>
+          <p>White marks the main table; blue marks tables with content.</p>
+          <div class="selected-table-buttons" id="selected-tables"></div>
+        </div>
+      </section>
+
+      <section class="workspace" data-step-panel="source">
+        <div class="panel">
+          <div class="panel-heading">
+            <h2>Tables</h2>
+            <p>Tables with any assigned role are selected and appear in the configured tables list above.</p>
+          </div>
+          <div id="tables"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-heading">
+            <h2>Columns</h2>
+            <p>Assign case linkage and unstructured content roles for the selected table.</p>
+          </div>
+          <div id="columns"></div>
+        </div>
+      </section>
+
+      <section class="chunking-definition" data-step-panel="chunking" hidden>
+        <div class="chunking-header">
+          <div class="panel-heading">
+            <h2>Chunking</h2>
+            <p>Step 2: choose how Extract should split unstructured content before downstream processing.</p>
+          </div>
+        </div>
+        <div class="chunking-options" id="chunking-options"></div>
+        <div class="message" id="chunking-message" aria-live="polite">Ready.</div>
+      </section>
+
+      <section class="embedding-definition" data-step-panel="embedding" hidden>
+        <div class="embedding-header">
+          <div class="panel-heading">
+            <h2>Embeddings</h2>
+            <p>Step 3: configure a dedicated embedding model endpoint for Extract chunks.</p>
+          </div>
+          <div class="source-controls-row">
+            <button
+              aria-label="Test embedding configuration"
+              class="icon-button"
+              id="test-embedding"
+              title="Test embedding configuration"
+              type="button"
+            >🧪</button>
+            <button
+              aria-label="Save embedding configuration"
+              class="icon-button primary"
+              id="save-embedding"
+              title="Save embedding configuration"
+              type="button"
+            >💾</button>
+          </div>
+        </div>
+        <div id="embedding-config"></div>
+        <div class="message" id="embedding-message" aria-live="polite">Ready.</div>
+      </section>
+
+      <section class="llm-definition" data-step-panel="llm" hidden>
+        <div class="llm-header">
+          <div class="panel-heading">
+            <h2>LLM Extracting</h2>
+            <p>Step 4: define extraction scope, information types, review policy, and JSON Schema.</p>
+          </div>
+          <div class="source-controls-row">
+            <button
+              aria-label="Build JSON Schema"
+              class="icon-button"
+              id="build-llm-schema"
+              title="Build JSON Schema"
+              type="button"
+            >↻</button>
+            <button
+              aria-label="Save extraction blueprint"
+              class="icon-button primary"
+              id="save-llm"
+              title="Save extraction blueprint"
+              type="button"
+            >💾</button>
+            <button
+              aria-label="Approve extraction blueprint"
+              class="icon-button"
+              id="approve-llm"
+              title="Approve extraction blueprint"
+              type="button"
+            >✓</button>
+          </div>
+        </div>
+        <div id="llm-config"></div>
+        <div class="message" id="llm-message" aria-live="polite">Ready.</div>
+      </section>
+
+      <section class="jobs-definition" data-step-panel="jobs" hidden>
+        <div class="jobs-header">
+          <div class="panel-heading">
+            <h2>Jobs</h2>
+            <p>Run Extract jobs from saved settings and inspect historical executions.</p>
+          </div>
+          <div class="source-controls-row">
+            <button id="refresh-jobs" type="button">Refresh</button>
+            <button class="primary" id="run-current-job" type="button">Run current config</button>
+          </div>
+        </div>
+        <div id="jobs-list"></div>
+        <div class="message" id="jobs-message" aria-live="polite">Ready.</div>
+      </section>
+
+      <dialog id="key-dialog">
+        <form class="dialog-content" id="key-dialog-form" method="dialog">
+          <div class="panel-heading">
+            <h2>Key</h2>
+          </div>
+          <div class="config-form">
+            <label>Key<input name="key" autocomplete="off" /></label>
+            <label>Kind
+              <select name="kind">
+                <option value="entity">entity</option>
+                <option value="event">event</option>
+                <option value="fact">fact</option>
+                <option value="relation">relation</option>
+              </select>
+            </label>
+            <label>
+              <span class="field-label-row">
+                <span>Description</span>
+                <button
+                  class="inline-action-button"
+                  id="suggest-key-description"
+                  type="button"
+                >Suggest</button>
+              </span>
+              <textarea name="description"></textarea>
+            </label>
+          </div>
+          <div class="dialog-actions">
+            <button data-close-dialog="key-dialog" type="button">Cancel</button>
+            <button class="primary" type="submit">Save</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="field-dialog">
+        <form class="dialog-content" id="field-dialog-form" method="dialog">
+          <div class="panel-heading">
+            <h2>Field</h2>
+          </div>
+          <div class="config-form">
+            <label>Name<input name="name" autocomplete="off" /></label>
+            <label>Type
+              <select name="type">
+                <option value="string">string</option>
+                <option value="number">number</option>
+                <option value="date">date</option>
+                <option value="datetime">datetime</option>
+                <option value="boolean">boolean</option>
+                <option value="enum">enum</option>
+                <option value="array">array</option>
+                <option value="object">object</option>
+              </select>
+            </label>
+            <label class="checkbox-row"><input name="required" type="checkbox" /> Required</label>
+            <label>Enum values<input name="values" autocomplete="off" /></label>
+          </div>
+          <div class="dialog-actions">
+            <button data-close-dialog="field-dialog" type="button">Cancel</button>
+            <button class="primary" type="submit">Save</button>
+          </div>
+        </form>
+      </dialog>
+    </main>
+
+    <script>
+      const baseUrl = "/api/v1/extensions/gaard-extract";
+      const token = localStorage.getItem("gaard_admin_token");
+      const chunkingModes = [
+        {
+          mode: "none",
+          title: "No chunking",
+          description: "Keep each content value as a single extraction unit.",
+        },
+        {
+          mode: "fixed_size",
+          title: "Fixed size",
+          description: "Split content into deterministic, size-limited chunks.",
+        },
+        {
+          mode: "semantic",
+          title: "Semantic",
+          description: "Split content around semantic or structural boundaries.",
+        },
+      ];
+      const state = {
+        activeStep: "source",
+        datasources: [],
+        selectedDatasourceId: null,
+        schema: null,
+        sourceModel: null,
+        selectedTable: "",
+        mainTable: "",
+        tableRoles: {},
+        chunkingMode: "fixed_size",
+        chunkingConfig: null,
+        embeddingConfig: null,
+        llmConfig: null,
+        jobs: [],
+        selectedJobId: null,
+        selectedInfoIndex: null,
+        showLlmSchema: false,
+      };
+      let keyClickTimer = null;
+      let jobsPollTimer = null;
+
+      async function api(path, options = {}) {
+        const response = await fetch(`${baseUrl}${path}`, {
+          method: options.method || "GET",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || response.statusText);
+        return payload;
+      }
+
+      function setMessage(text, isError = false, selector = "#message") {
+        const message = document.querySelector(selector);
+        if (!message) return;
+        message.textContent = text;
+        message.className = isError ? "message error" : "message";
+        postExtensionHeight();
+      }
+
+      async function load() {
+        try {
+          setMessage("Loading...");
+          const [
+            datasourcesResponse,
+            modelsResponse,
+            chunkingResponse,
+            embeddingResponse,
+            llmResponse,
+            jobsResponse,
+          ] = await Promise.all([
+            api("/datasources"),
+            api("/source-models"),
+            api("/chunking-config"),
+            api("/embedding-config"),
+            api("/llm-extracting-config"),
+            api("/jobs"),
+          ]);
+          state.datasources = datasourcesResponse.items || [];
+          state.chunkingConfig = chunkingResponse.item || null;
+          state.chunkingMode = state.chunkingConfig?.mode || "fixed_size";
+          state.embeddingConfig = embeddingResponse.item || null;
+          state.llmConfig = llmResponse.item || null;
+          state.jobs = jobsResponse.items || [];
+          const savedModel = (modelsResponse.items || [])[0] || null;
+          const savedDatasourceExists = state.datasources.some(
+            datasource => datasource.id === savedModel?.datasource_connector_id,
+          );
+          if (savedModel && savedDatasourceExists) {
+            state.selectedDatasourceId = savedModel.datasource_connector_id;
+          } else if (!state.selectedDatasourceId) {
+            state.selectedDatasourceId = state.datasources[0]?.id || null;
+          }
+          renderDatasourceSelect();
+          await loadSelectedDatasource();
+          setMessage("Ready.");
+          setMessage("Ready.", false, "#chunking-message");
+          setMessage("Ready.", false, "#embedding-message");
+          setMessage("Ready.", false, "#llm-message");
+        } catch (error) {
+          setMessage(error.message, true);
+        }
+      }
+
+      async function loadSelectedDatasource() {
+        state.schema = null;
+        state.sourceModel = null;
+        state.selectedTable = "";
+        state.mainTable = "";
+        state.tableRoles = {};
+        if (!state.selectedDatasourceId) {
+          render();
+          return;
+        }
+
+        const modelResponse = await api(`/source-models/${state.selectedDatasourceId}`);
+        state.sourceModel = modelResponse.item || null;
+        if (state.sourceModel) {
+          state.mainTable = state.sourceModel.main_table;
+          state.selectedTable = state.sourceModel.main_table;
+          state.tableRoles = state.sourceModel.table_roles || {};
+        }
+
+        try {
+          const schemaResponse = await api(`/datasources/${state.selectedDatasourceId}/schema`);
+          state.schema = schemaResponse.item;
+          state.selectedTable = state.selectedTable || state.schema.tables?.[0]?.name || "";
+          state.mainTable = state.mainTable || state.selectedTable;
+        } catch (error) {
+          state.schema = null;
+          setMessage(error.message, true);
+        }
+        render();
+      }
+
+      function render() {
+        renderStepTabs();
+        renderStepPanels();
+        renderDatasourceSelect();
+        renderSelectedTables();
+        renderTables();
+        renderColumns();
+        renderChunkingOptions();
+        renderEmbeddingConfig();
+        renderLlmConfig();
+        renderJobs();
+        scheduleJobsPolling();
+        postExtensionHeight();
+      }
+
+      function renderStepTabs() {
+        document.querySelectorAll("[data-step]").forEach(button => {
+          button.classList.toggle("active", button.dataset.step === state.activeStep);
+        });
+      }
+
+      function renderStepPanels() {
+        document.querySelectorAll("[data-step-panel]").forEach(panel => {
+          panel.hidden = panel.dataset.stepPanel !== state.activeStep;
+        });
+      }
+
+      function renderChunkingOptions() {
+        const target = document.querySelector("#chunking-options");
+        if (!target) return;
+        target.innerHTML = chunkingModes
+          .map(option => {
+            const selected = option.mode === state.chunkingMode;
+            return `
+              <label class="chunking-option ${selected ? "selected" : ""}">
+                <span class="chunking-option-title">
+                  <input ${selected ? "checked" : ""} name="chunking-mode" type="radio" value="${escapeAttr(option.mode)}" />
+                  ${escapeHtml(option.title)}
+                </span>
+                <p>${escapeHtml(option.description)}</p>
+              </label>`;
+          })
+          .join("");
+        document.querySelectorAll("[name='chunking-mode']").forEach(input => {
+          input.addEventListener("change", async () => {
+            if (input.checked) {
+              await updateChunkingMode(input.value);
+            }
+          });
+        });
+      }
+
+      function renderEmbeddingConfig() {
+        const target = document.querySelector("#embedding-config");
+        if (!target) return;
+
+        const config = state.embeddingConfig || defaultEmbeddingConfig();
+        const enabled = Boolean(config.enabled);
+        const apiKeyStatus = config.api_key_configured
+          ? `Configured (${escapeHtml(config.api_key_preview || "hidden")})`
+          : "Not configured";
+        const apiKeyPlaceholder = config.api_key_configured
+          ? "Leave blank to keep current key"
+          : "Enter API key";
+
+        target.innerHTML = `
+          <div class="config-form">
+            <div class="mode-options">
+              <label class="mode-option ${enabled ? "" : "selected"}">
+                <span class="mode-option-title">
+                  <input ${enabled ? "" : "checked"} name="embedding-enabled" type="radio" value="disabled" />
+                  Disabled
+                </span>
+                <p>Skip embedding generation. Extraction can still run on chunks.</p>
+              </label>
+              <label class="mode-option ${enabled ? "selected" : ""}">
+                <span class="mode-option-title">
+                  <input ${enabled ? "checked" : ""} name="embedding-enabled" type="radio" value="enabled" />
+                  Enabled
+                </span>
+                <p>Automatically embed Extract chunks using this dedicated endpoint.</p>
+              </label>
+            </div>
+            <form id="embedding-config-form" class="config-form" ${enabled ? "" : "hidden"}>
+              <label>Provider<input name="provider" value="${escapeAttr(config.provider || "openai-compatible")}" /></label>
+              <label>Base URL<input name="base_url" value="${escapeAttr(config.base_url || "")}" /></label>
+              <label>
+                API key <span class="muted">${apiKeyStatus}</span>
+                <input name="api_key" type="password" value="" placeholder="${escapeAttr(apiKeyPlaceholder)}" autocomplete="new-password" />
+              </label>
+              <label class="checkbox-row"><input name="clear_api_key" type="checkbox" /> Clear API key</label>
+              <label>Model<input name="model" value="${escapeAttr(config.model || "")}" /></label>
+              <label>LLM timeout seconds<input name="timeout_seconds" type="number" min="1" max="600" value="${escapeAttr(config.timeout_seconds || 60)}" /></label>
+              <label>Extra body JSON<textarea name="extra_body">${escapeHtml(config.extra_body_json || "{}")}</textarea></label>
+            </form>
+          </div>`;
+
+        const testButton = document.querySelector("#test-embedding");
+        if (testButton) testButton.disabled = !enabled;
+
+        document.querySelectorAll("[name='embedding-enabled']").forEach(input => {
+          input.addEventListener("change", () => {
+            state.embeddingConfig = {
+              ...defaultEmbeddingConfig(),
+              ...(state.embeddingConfig || {}),
+              enabled: input.value === "enabled",
+            };
+            render();
+          });
+        });
+        document.querySelector("#embedding-config-form")?.addEventListener("submit", event => {
+          event.preventDefault();
+          saveEmbedding();
+        });
+      }
+
+      function defaultEmbeddingConfig() {
+        return {
+          enabled: false,
+          provider: "openai-compatible",
+          base_url: "https://api.openai.com/v1",
+          api_key_configured: false,
+          api_key_preview: null,
+          model: "text-embedding-3-small",
+          timeout_seconds: 60,
+          extra_body: {},
+          extra_body_json: "{}",
+        };
+      }
+
+      function renderLlmConfig() {
+        const target = document.querySelector("#llm-config");
+        if (!target) return;
+
+        const config = normalizedLlmConfig();
+        const scope = config.extraction_scope;
+        const schemaJson = config.json_schema_json || JSON.stringify(config.json_schema || buildExtractionSchema(config.information_types), null, 2);
+
+        target.innerHTML = `
+          <form id="llm-config-form" class="config-form">
+            <div class="llm-grid">
+              <div class="panel">
+                <div class="panel-heading">
+                  <h3>Blueprint</h3>
+                </div>
+                <div class="form-grid">
+                  <label>Key<input name="blueprint_key" value="${escapeAttr(config.blueprint_key)}" /></label>
+                  <label>Language<input name="language" value="${escapeAttr(config.language)}" /></label>
+                  <label class="full-row">Name<input name="name" value="${escapeAttr(config.name)}" /></label>
+                  <label class="full-row">Description<input name="description" value="${escapeAttr(config.description || "")}" /></label>
+                  <label class="full-row">Domain<textarea name="domain_description">${escapeHtml(config.domain_description || "")}</textarea></label>
+                  <label class="full-row">Case grain<textarea name="case_grain_description">${escapeHtml(config.case_grain_description || "")}</textarea></label>
+                </div>
+
+                <div class="panel-heading">
+                  <h3>Scope</h3>
+                </div>
+                <div class="config-form">
+                  <label>Chunks
+                    <select name="chunk_selection">
+                      <option value="all_chunks" ${scope.chunk_selection === "all_chunks" ? "selected" : ""}>All configured chunks</option>
+                      <option value="embedding_neighbors" ${scope.chunk_selection === "embedding_neighbors" ? "selected" : ""}>Chunks with embedding neighbors</option>
+                    </select>
+                  </label>
+                  <label class="checkbox-row"><input ${scope.use_embeddings ? "checked" : ""} name="use_embeddings" type="checkbox" /> Use embedding context</label>
+                  <label>Max neighbor chunks<input name="max_neighbor_chunks" type="number" min="0" max="20" value="${escapeAttr(scope.max_neighbor_chunks)}" /></label>
+                  <label>Min similarity<input name="min_similarity" type="number" min="0" max="1" step="0.01" value="${escapeAttr(scope.min_similarity)}" /></label>
+                  <label>Max chunks per case<input name="max_chunks_per_case" type="number" min="1" max="10000" value="${escapeAttr(scope.max_chunks_per_case ?? "")}" /></label>
+                  <label class="checkbox-row"><input ${scope.include_case_metadata ? "checked" : ""} name="include_case_metadata" type="checkbox" /> Include case metadata</label>
+                  <label class="checkbox-row"><input ${scope.require_evidence_text ? "checked" : ""} name="require_evidence_text" type="checkbox" /> Require evidence text</label>
+                </div>
+
+                <div class="panel-heading">
+                  <h3>Review</h3>
+                </div>
+                <div class="form-grid">
+                  <label>Auto approve<input name="auto_approve_threshold" type="number" min="0" max="1" step="0.01" value="${escapeAttr(config.review_policy.auto_approve_threshold)}" /></label>
+                  <label>Needs review<input name="needs_review_threshold" type="number" min="0" max="1" step="0.01" value="${escapeAttr(config.review_policy.needs_review_threshold)}" /></label>
+                  <label>Reject below<input name="reject_below_threshold" type="number" min="0" max="1" step="0.01" value="${escapeAttr(config.review_policy.reject_below_threshold)}" /></label>
+                </div>
+
+                <label>Global rules<textarea name="global_rules">${escapeHtml((config.global_rules || []).join("\n"))}</textarea></label>
+              </div>
+
+              <div class="panel">
+                <div class="panel-heading">
+                  <h3>Information Types</h3>
+                </div>
+                ${renderInformationTypesPanel(config.information_types)}
+
+                <div class="panel-title-row">
+                  <h3>JSON Schema</h3>
+                  <button id="toggle-llm-schema" type="button">${state.showLlmSchema ? "Hide" : "Show"}</button>
+                </div>
+                <textarea class="schema-editor" name="json_schema" ${state.showLlmSchema ? "" : "hidden"}>${escapeHtml(schemaJson)}</textarea>
+              </div>
+            </div>
+          </form>`;
+
+        bindLlmControls();
+        updateLlmEmbeddingControls();
+      }
+
+      function renderInformationTypesPanel(informationTypes) {
+        const selectedInfo = getSelectedInformationType(informationTypes);
+        return `
+          <div class="information-types-panel">
+            <div class="key-panel">
+              <div class="panel-title-row">
+                <h3>Keys</h3>
+                <button aria-label="Add key" class="icon-button" id="add-info-key" title="Add key" type="button">+</button>
+              </div>
+              <div class="key-buttons">
+                ${renderKeyButtons(informationTypes)}
+              </div>
+            </div>
+            <div class="fields-panel">
+              <div class="panel-title-row">
+                <h3>Fields</h3>
+                ${selectedInfo ? `
+                  <span class="title-actions">
+                    <button id="suggest-info-fields" type="button">Suggest</button>
+                    <button aria-label="Add field" class="icon-button" id="add-info-field" title="Add field" type="button">+</button>
+                  </span>` : ""}
+              </div>
+              <div class="field-buttons">
+                ${selectedInfo ? renderFieldButtons(selectedInfo) : ""}
+              </div>
+            </div>
+          </div>`;
+      }
+
+      function renderKeyButtons(informationTypes) {
+        if (!informationTypes.length) {
+          return "";
+        }
+        return informationTypes
+          .map((infoType, index) => {
+            const selected = index === state.selectedInfoIndex;
+            return `
+              <span class="key-chip">
+                <button
+                  class="key-select-button ${selected ? "selected" : ""}"
+                  data-select-info="${index}"
+                  title="${escapeAttr(infoType.kind || "")}"
+                  type="button"
+                >${escapeHtml(infoType.key || "unnamed_key")}</button>
+                <button
+                  aria-label="Remove key ${escapeAttr(infoType.key || "")}"
+                  class="chip-remove-button"
+                  data-remove-info="${index}"
+                  title="Remove key"
+                  type="button"
+                >🗑</button>
+              </span>`;
+          })
+          .join("");
+      }
+
+      function renderFieldButtons(infoType) {
+        const fields = infoType.fields || [];
+        if (!fields.length) {
+          return "";
+        }
+        return fields
+          .map((field, fieldIndex) => `
+            <span class="field-chip">
+              <button class="field-select-button" data-edit-field="${fieldIndex}" type="button">${escapeHtml(field.name || "unnamed_field")} · ${escapeHtml(field.type || "string")}</button>
+              <button
+                aria-label="Remove field ${escapeAttr(field.name || "")}"
+                class="chip-remove-button"
+                data-remove-field="${fieldIndex}"
+                title="Remove field"
+                type="button"
+              >🗑</button>
+            </span>`)
+          .join("");
+      }
+
+      function getSelectedInformationType(informationTypes = null) {
+        const items = informationTypes || normalizedLlmConfig().information_types || [];
+        const index = state.selectedInfoIndex;
+        if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+          return null;
+        }
+        return items[index];
+      }
+
+      function bindLlmControls() {
+        document.querySelector("#llm-config-form")?.addEventListener("submit", event => {
+          event.preventDefault();
+          saveLlm("draft");
+        });
+        document.querySelector("#add-info-key")?.addEventListener("click", openKeyDialog);
+        document.querySelector("#add-info-field")?.addEventListener("click", openFieldDialog);
+        document.querySelector("#suggest-info-fields")?.addEventListener("click", suggestInfoFields);
+        document.querySelector("#toggle-llm-schema")?.addEventListener("click", () => {
+          state.showLlmSchema = !state.showLlmSchema;
+          render();
+        });
+        document.querySelectorAll("[data-select-info]").forEach(button => {
+          button.addEventListener("click", () => {
+            clearTimeout(keyClickTimer);
+            keyClickTimer = setTimeout(() => {
+              syncLlmDraftFromForm();
+              state.selectedInfoIndex = Number(button.dataset.selectInfo);
+              render();
+            }, 220);
+          });
+          button.addEventListener("dblclick", () => {
+            clearTimeout(keyClickTimer);
+            keyClickTimer = null;
+            openKeyDialog(Number(button.dataset.selectInfo));
+          });
+        });
+        document.querySelectorAll("[data-remove-info]").forEach(button => {
+          button.addEventListener("click", async () => {
+            syncLlmDraftFromForm();
+            const index = Number(button.dataset.removeInfo);
+            const infoType = state.llmConfig.information_types[index];
+            if (!confirm(`Delete key "${infoType?.key || "unnamed_key"}"?`)) {
+              return;
+            }
+            state.llmConfig.information_types.splice(index, 1);
+            state.selectedInfoIndex = null;
+            refreshLlmSchemaFromState();
+            await persistLlmConfig("Key deleted.");
+          });
+        });
+        document.querySelectorAll("[data-remove-field]").forEach(button => {
+          button.addEventListener("click", async () => {
+            syncLlmDraftFromForm();
+            const infoType = getSelectedInformationType(state.llmConfig.information_types);
+            const fieldIndex = Number(button.dataset.removeField);
+            const field = infoType?.fields?.[fieldIndex];
+            if (!infoType || !field) return;
+            if (!confirm(`Delete field "${field.name || "unnamed_field"}"?`)) {
+              return;
+            }
+            infoType.fields.splice(fieldIndex, 1);
+            refreshLlmSchemaFromState();
+            await persistLlmConfig("Field deleted.");
+          });
+        });
+        document.querySelectorAll("[data-edit-field]").forEach(button => {
+          button.addEventListener("dblclick", () => {
+            openFieldDialog(Number(button.dataset.editField));
+          });
+        });
+        document.querySelector("[name='chunk_selection']")?.addEventListener("change", updateLlmEmbeddingControls);
+        document.querySelector("[name='use_embeddings']")?.addEventListener("change", updateLlmEmbeddingControls);
+      }
+
+      function openKeyDialog(index = null) {
+        syncLlmDraftFromForm();
+        const form = document.querySelector("#key-dialog-form");
+        form.reset();
+        const editIndex = Number.isInteger(index) ? index : null;
+        const infoType = editIndex === null ? null : state.llmConfig.information_types?.[editIndex];
+        if (editIndex !== null) {
+          state.selectedInfoIndex = editIndex;
+        }
+        form.dataset.editIndex = editIndex === null ? "" : String(editIndex);
+        form.querySelector("h2").textContent = editIndex === null ? "Key" : "Edit key";
+        form.elements.key.value = infoType?.key || "";
+        form.elements.kind.value = infoType?.kind || "fact";
+        form.elements.description.value = infoType?.description || "";
+        showDialog("key-dialog");
+      }
+
+      async function saveKeyDialog(event) {
+        event.preventDefault();
+        syncLlmDraftFromForm();
+        const form = event.currentTarget;
+        const key = form.elements.key.value.trim();
+        const kind = form.elements.kind.value.trim();
+        const description = form.elements.description.value.trim();
+
+        if (!isValidIdentifier(key)) {
+          setMessage("Key must start with a letter or underscore and contain only letters, numbers, and underscores.", true, "#llm-message");
+          return;
+        }
+        const keyEditValue = form.dataset.editIndex || "";
+        const editIndex = keyEditValue === "" ? null : Number(keyEditValue);
+        if ((state.llmConfig.information_types || []).some((item, index) => item.key === key && index !== editIndex)) {
+          setMessage(`Key "${key}" already exists.`, true, "#llm-message");
+          return;
+        }
+
+        if (editIndex === null) {
+          state.llmConfig.information_types.push({
+            key,
+            kind,
+            description,
+            fields: [],
+          });
+          state.selectedInfoIndex = state.llmConfig.information_types.length - 1;
+        } else {
+          const infoType = state.llmConfig.information_types[editIndex];
+          infoType.key = key;
+          infoType.kind = kind;
+          infoType.description = description;
+          state.selectedInfoIndex = editIndex;
+        }
+        refreshLlmSchemaFromState();
+        closeDialog("key-dialog");
+        await persistLlmConfig(editIndex === null ? "Key added and saved." : "Key updated and saved.");
+      }
+
+      async function suggestKeyDescription() {
+        const form = document.querySelector("#key-dialog-form");
+        const button = document.querySelector("#suggest-key-description");
+        if (!form || !button) return;
+
+        const key = form.elements.key.value.trim();
+        const kind = form.elements.kind.value.trim();
+        if (!isValidIdentifier(key)) {
+          setMessage("Key must start with a letter or underscore and contain only letters, numbers, and underscores.", true, "#llm-message");
+          return;
+        }
+        if (!kind) {
+          setMessage("Select key kind before requesting a description suggestion.", true, "#llm-message");
+          return;
+        }
+
+        const context = getLlmPayload(null, { parseSchema: false });
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = "Suggesting...";
+        setMessage("Requesting description suggestion...", false, "#llm-message");
+
+        try {
+          const response = await api("/llm-extracting-config/key-description-suggestion", {
+            method: "POST",
+            body: {
+              key,
+              kind,
+              domain_description: context.domain_description || "",
+              case_grain_description: context.case_grain_description || "",
+              language: context.language || "pl",
+            },
+          });
+          const description = response.item?.description || "";
+          if (!description) {
+            throw new Error("LLM returned an empty description suggestion.");
+          }
+          form.elements.description.value = description;
+          setMessage("Description suggestion inserted. Review it and save the key.", false, "#llm-message");
+        } catch (error) {
+          setMessage(error.message, true, "#llm-message");
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+      }
+
+      async function suggestInfoFields() {
+        syncLlmDraftFromForm();
+        const infoType = getSelectedInformationType(state.llmConfig.information_types);
+        const button = document.querySelector("#suggest-info-fields");
+        if (!infoType || !button) {
+          setMessage("Select a key before requesting field suggestions.", true, "#llm-message");
+          return;
+        }
+        if (!isValidIdentifier(infoType.key || "")) {
+          setMessage("Selected key has an invalid name.", true, "#llm-message");
+          return;
+        }
+        if ((infoType.fields || []).length && !confirm(`Replace fields for "${infoType.key}" with suggested fields?`)) {
+          return;
+        }
+
+        const context = getLlmPayload(null, { parseSchema: false });
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = "Suggesting...";
+        setMessage("Requesting field suggestions...", false, "#llm-message");
+
+        try {
+          const response = await api("/llm-extracting-config/key-fields-suggestion", {
+            method: "POST",
+            body: {
+              key: infoType.key,
+              kind: infoType.kind || "fact",
+              description: infoType.description || "",
+              domain_description: context.domain_description || "",
+              case_grain_description: context.case_grain_description || "",
+              language: context.language || "pl",
+            },
+          });
+          const fields = response.item?.fields || [];
+          if (!Array.isArray(fields) || !fields.length) {
+            throw new Error("LLM returned no field suggestions.");
+          }
+          infoType.fields = fields.map(field => ({
+            name: field.name || "",
+            type: field.type || "string",
+            required: Boolean(field.required),
+            values: field.values || [],
+          }));
+          refreshLlmSchemaFromState();
+          await persistLlmConfig("Field suggestions inserted and saved.");
+        } catch (error) {
+          setMessage(error.message, true, "#llm-message");
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+      }
+
+      function openFieldDialog(fieldIndex = null) {
+        syncLlmDraftFromForm();
+        const infoType = getSelectedInformationType(state.llmConfig.information_types);
+        if (!infoType) {
+          setMessage("Select a key before adding a field.", true, "#llm-message");
+          return;
+        }
+        const form = document.querySelector("#field-dialog-form");
+        form.reset();
+        const editIndex = Number.isInteger(fieldIndex) ? fieldIndex : null;
+        const field = editIndex === null ? null : infoType.fields?.[editIndex];
+        form.dataset.editIndex = editIndex === null ? "" : String(editIndex);
+        form.querySelector("h2").textContent = editIndex === null ? "Field" : "Edit field";
+        form.elements.name.value = field?.name || "";
+        form.elements.type.value = field?.type || "string";
+        form.elements.required.checked = Boolean(field?.required);
+        form.elements.values.value = (field?.values || []).join(", ");
+        showDialog("field-dialog");
+      }
+
+      async function saveFieldDialog(event) {
+        event.preventDefault();
+        syncLlmDraftFromForm();
+        const form = event.currentTarget;
+        const infoType = getSelectedInformationType(state.llmConfig.information_types);
+        if (!infoType) {
+          setMessage("Select a key before adding a field.", true, "#llm-message");
+          return;
+        }
+
+        const name = form.elements.name.value.trim();
+        const type = form.elements.type.value.trim();
+        const required = Boolean(form.elements.required.checked);
+        const values = String(form.elements.values.value || "")
+          .split(",")
+          .map(value => value.trim())
+          .filter(Boolean);
+
+        if (!isValidIdentifier(name)) {
+          setMessage("Field name must start with a letter or underscore and contain only letters, numbers, and underscores.", true, "#llm-message");
+          return;
+        }
+        const fieldEditValue = form.dataset.editIndex || "";
+        const editIndex = fieldEditValue === "" ? null : Number(fieldEditValue);
+        if ((infoType.fields || []).some((field, index) => field.name === name && index !== editIndex)) {
+          setMessage(`Field "${name}" already exists for key "${infoType.key}".`, true, "#llm-message");
+          return;
+        }
+        if (type === "enum" && !values.length) {
+          setMessage("Enum field must define at least one value.", true, "#llm-message");
+          return;
+        }
+
+        infoType.fields = infoType.fields || [];
+        if (editIndex === null) {
+          infoType.fields.push({
+            name,
+            type,
+            required,
+            values,
+          });
+        } else {
+          infoType.fields[editIndex] = {
+            name,
+            type,
+            required,
+            values,
+          };
+        }
+        refreshLlmSchemaFromState();
+        closeDialog("field-dialog");
+        await persistLlmConfig(editIndex === null ? "Field added and saved." : "Field updated and saved.");
+      }
+
+      async function persistLlmConfig(successMessage) {
+        try {
+          const response = await api("/llm-extracting-config", {
+            method: "PUT",
+            body: getLlmPayload(state.llmConfig?.status || "draft", { parseSchema: false }),
+          });
+          state.llmConfig = response.item;
+          setMessage(successMessage, false, "#llm-message");
+        } catch (error) {
+          setMessage(`Local change kept, but save failed: ${error.message}`, true, "#llm-message");
+        }
+        render();
+      }
+
+      function showDialog(id) {
+        const dialog = document.querySelector(`#${id}`);
+        if (!dialog) return;
+        if (typeof dialog.showModal === "function") {
+          dialog.showModal();
+        } else {
+          dialog.setAttribute("open", "");
+        }
+        positionDialogInVisibleViewport(dialog);
+        dialog.querySelector("input, select, textarea")?.focus();
+        postExtensionHeight();
+      }
+
+      function positionDialogInVisibleViewport(dialog) {
+        const fallbackViewport = window.visualViewport || {
+          height: window.innerHeight,
+          offsetLeft: 0,
+          offsetTop: 0,
+          width: window.innerWidth,
+        };
+        let viewportLeft = fallbackViewport.offsetLeft || 0;
+        let viewportTop = fallbackViewport.offsetTop || 0;
+        let viewportWidth = fallbackViewport.width || window.innerWidth;
+        let viewportHeight = fallbackViewport.height || window.innerHeight;
+        let frameRect = {
+          bottom: viewportHeight,
+          left: 0,
+          right: viewportWidth,
+          top: 0,
+        };
+
+        try {
+          if (window.frameElement && window.parent) {
+            const parentViewport = window.parent.visualViewport || {
+              height: window.parent.innerHeight,
+              offsetLeft: 0,
+              offsetTop: 0,
+              width: window.parent.innerWidth,
+            };
+            viewportLeft = parentViewport.offsetLeft || 0;
+            viewportTop = parentViewport.offsetTop || 0;
+            viewportWidth = parentViewport.width || window.parent.innerWidth;
+            viewportHeight = parentViewport.height || window.parent.innerHeight;
+            frameRect = window.frameElement.getBoundingClientRect();
+          }
+        } catch {
+          // Cross-origin or host restrictions fall back to the iframe viewport.
+        }
+
+        const viewportRight = viewportLeft + viewportWidth;
+        const viewportBottom = viewportTop + viewportHeight;
+        const visibleLeft = Math.max(viewportLeft, frameRect.left);
+        const visibleRight = Math.min(viewportRight, frameRect.right);
+        const visibleTop = Math.max(viewportTop, frameRect.top);
+        const visibleBottom = Math.min(viewportBottom, frameRect.bottom);
+        const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+        const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+
+        const centerX = visibleWidth
+          ? visibleLeft + visibleWidth / 2 - frameRect.left
+          : viewportWidth / 2;
+        const centerY = visibleHeight
+          ? visibleTop + visibleHeight / 2 - frameRect.top
+          : viewportHeight / 2;
+
+        dialog.style.left = `${Math.max(16, centerX)}px`;
+        dialog.style.top = `${Math.max(16, centerY)}px`;
+        dialog.style.maxHeight = `${Math.max(240, visibleHeight - 32 || viewportHeight - 32)}px`;
+        dialog.style.maxWidth = `${Math.max(320, visibleWidth - 32 || viewportWidth - 32)}px`;
+      }
+
+      function closeDialog(id) {
+        const dialog = document.querySelector(`#${id}`);
+        if (!dialog) return;
+        if (typeof dialog.close === "function") {
+          dialog.close();
+        } else {
+          dialog.removeAttribute("open");
+        }
+        postExtensionHeight();
+      }
+
+      function isValidIdentifier(value) {
+        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+      }
+
+      function refreshLlmSchemaFromState() {
+        state.llmConfig = {
+          ...normalizedLlmConfig(),
+          ...(state.llmConfig || {}),
+        };
+        const schema = buildExtractionSchema(state.llmConfig.information_types || []);
+        state.llmConfig.json_schema = schema;
+        state.llmConfig.json_schema_json = JSON.stringify(schema, null, 2);
+      }
+
+      function updateLlmEmbeddingControls() {
+        const form = document.querySelector("#llm-config-form");
+        if (!form) return;
+        const useEmbeddings = form.elements.use_embeddings?.checked || form.elements.chunk_selection?.value === "embedding_neighbors";
+        ["max_neighbor_chunks", "min_similarity"].forEach(name => {
+          const input = form.elements[name];
+          if (input) input.disabled = !useEmbeddings;
+        });
+      }
+
+      function defaultLlmConfig() {
+        const embeddingEnabled = Boolean((state.embeddingConfig || defaultEmbeddingConfig()).enabled);
+        const informationTypes = [
+          {
+            key: "case_status",
+            kind: "fact",
+            description: "Status sprawy wynikający z notatki.",
+            fields: [
+              { name: "status", type: "string", required: true, values: [] },
+              { name: "valid_from", type: "date", required: false, values: [] },
+            ],
+          },
+        ];
+        const schema = buildExtractionSchema(informationTypes);
+        return {
+          blueprint_key: "generic_case_notes",
+          name: "Generic Case Notes",
+          description: "",
+          domain_description: "",
+          case_grain_description: "Jeden case reprezentuje jedną sprawę. Dokumenty i chunki są powiązane przez skonfigurowane case_id.",
+          language: "pl",
+          status: "draft",
+          information_types: informationTypes,
+          global_rules: [
+            "Nie zgaduj informacji, których nie ma w tekście.",
+            "Każdy element musi mieć evidence_text.",
+            "Daty normalizuj do ISO-8601, gdy jest to możliwe.",
+            "Jeżeli data jest względna lub niepełna, oznacz element jako wymagający review.",
+          ],
+          review_policy: {
+            auto_approve_threshold: 0.9,
+            needs_review_threshold: 0.6,
+            reject_below_threshold: 0.3,
+          },
+          extraction_scope: {
+            source_mode: "active_source_model",
+            content_tables: getActiveContentTables(),
+            chunk_selection: embeddingEnabled ? "embedding_neighbors" : "all_chunks",
+            use_embeddings: embeddingEnabled,
+            max_neighbor_chunks: 3,
+            min_similarity: 0.75,
+            max_chunks_per_case: null,
+            include_case_metadata: true,
+            require_evidence_text: true,
+          },
+          json_schema: schema,
+          json_schema_json: JSON.stringify(schema, null, 2),
+        };
+      }
+
+      function normalizedLlmConfig() {
+        const defaults = defaultLlmConfig();
+        const config = {
+          ...defaults,
+          ...(state.llmConfig || {}),
+          review_policy: {
+            ...defaults.review_policy,
+            ...((state.llmConfig || {}).review_policy || {}),
+          },
+          extraction_scope: {
+            ...defaults.extraction_scope,
+            ...((state.llmConfig || {}).extraction_scope || {}),
+          },
+        };
+        if (!Array.isArray(config.information_types)) {
+          config.information_types = defaults.information_types;
+        }
+        if (!config.json_schema_json) {
+          config.json_schema = config.json_schema || buildExtractionSchema(config.information_types);
+          config.json_schema_json = JSON.stringify(config.json_schema, null, 2);
+        }
+        return config;
+      }
+
+      function defaultInformationType(kind) {
+        const index = (state.llmConfig?.information_types || []).length + 1;
+        return {
+          key: `${kind}_${index}`,
+          kind,
+          description: "",
+          fields: [],
+        };
+      }
+
+      function syncLlmDraftFromForm() {
+        const form = document.querySelector("#llm-config-form");
+        if (!form) {
+          state.llmConfig = normalizedLlmConfig();
+          return;
+        }
+        state.llmConfig = getLlmPayload(null, { parseSchema: false });
+      }
+
+      function getLlmPayload(statusOverride = null, options = {}) {
+        const parseSchema = options.parseSchema !== false;
+        const config = normalizedLlmConfig();
+        const form = document.querySelector("#llm-config-form");
+        if (!form) return config;
+        const informationTypes = getInformationTypesFromForm();
+        const schemaText = form.elements.json_schema?.value || config.json_schema_json || "{}";
+        const jsonSchema = parseSchema
+          ? parseJsonObject(schemaText, "JSON Schema")
+          : config.json_schema || buildExtractionSchema(informationTypes);
+        const maxChunksValue = form.elements.max_chunks_per_case?.value || "";
+        return {
+          blueprint_key: form.elements.blueprint_key?.value || config.blueprint_key,
+          name: form.elements.name?.value || config.name,
+          description: form.elements.description?.value || "",
+          domain_description: form.elements.domain_description?.value || "",
+          case_grain_description: form.elements.case_grain_description?.value || "",
+          language: form.elements.language?.value || "pl",
+          status: statusOverride || config.status || "draft",
+          information_types: informationTypes,
+          global_rules: String(form.elements.global_rules?.value || "")
+            .split("\n")
+            .map(rule => rule.trim())
+            .filter(Boolean),
+          review_policy: {
+            auto_approve_threshold: Number(form.elements.auto_approve_threshold?.value || 0.9),
+            needs_review_threshold: Number(form.elements.needs_review_threshold?.value || 0.6),
+            reject_below_threshold: Number(form.elements.reject_below_threshold?.value || 0.3),
+          },
+          extraction_scope: {
+            source_mode: "active_source_model",
+            content_tables: getActiveContentTables(),
+            chunk_selection: form.elements.chunk_selection?.value || "all_chunks",
+            use_embeddings: Boolean(form.elements.use_embeddings?.checked),
+            max_neighbor_chunks: Number(form.elements.max_neighbor_chunks?.value || 0),
+            min_similarity: Number(form.elements.min_similarity?.value || 0.75),
+            max_chunks_per_case: maxChunksValue ? Number(maxChunksValue) : null,
+            include_case_metadata: Boolean(form.elements.include_case_metadata?.checked),
+            require_evidence_text: Boolean(form.elements.require_evidence_text?.checked),
+          },
+          json_schema: jsonSchema,
+          json_schema_json: JSON.stringify(jsonSchema, null, 2),
+        };
+      }
+
+      function getInformationTypesFromForm() {
+        const config = state.llmConfig || normalizedLlmConfig();
+        return (config.information_types || []).map(infoType => ({
+          key: infoType.key || "",
+          kind: infoType.kind || "fact",
+          description: infoType.description || "",
+          fields: (infoType.fields || []).map(field => ({
+            name: field.name || "",
+            type: field.type || "string",
+            required: Boolean(field.required),
+            values: field.values || [],
+          })),
+        }));
+      }
+
+      function buildExtractionSchema(informationTypes) {
+        return {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          additionalProperties: false,
+          required: ["entities", "events", "facts", "relations", "warnings"],
+          properties: {
+            entities: buildKindArraySchema(informationTypes, "entity"),
+            events: buildKindArraySchema(informationTypes, "event"),
+            facts: buildKindArraySchema(informationTypes, "fact"),
+            relations: buildKindArraySchema(informationTypes, "relation"),
+            warnings: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+        };
+      }
+
+      function buildKindArraySchema(informationTypes, kind) {
+        const matchingTypes = (informationTypes || []).filter(item => item.kind === kind);
+        if (!matchingTypes.length) return { type: "array", maxItems: 0 };
+        return {
+          type: "array",
+          items: {
+            oneOf: matchingTypes.map(buildInformationTypeSchema),
+          },
+        };
+      }
+
+      function buildInformationTypeSchema(infoType) {
+        return {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "attributes", "evidence_text", "confidence"],
+          properties: {
+            type: { const: infoType.key },
+            attributes: buildAttributesSchema(infoType.fields || []),
+            evidence_text: { type: "string", minLength: 1 },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        };
+      }
+
+      function buildAttributesSchema(fields) {
+        const required = (fields || [])
+          .filter(field => field.required)
+          .map(field => field.name)
+          .filter(Boolean);
+        const schema = {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries((fields || []).map(field => [field.name, buildFieldSchema(field)])),
+        };
+        if (required.length) schema.required = required;
+        return schema;
+      }
+
+      function buildFieldSchema(field) {
+        if (field.type === "enum") return { type: "string", enum: field.values || [] };
+        if (field.type === "number") return { type: "number" };
+        if (field.type === "boolean") return { type: "boolean" };
+        if (field.type === "array") return { type: "array" };
+        if (field.type === "object") return { type: "object" };
+        if (field.type === "date") return { type: "string", format: "date" };
+        if (field.type === "datetime") return { type: "string", format: "date-time" };
+        return { type: "string" };
+      }
+
+      function postExtensionHeight() {
+        requestAnimationFrame(() => {
+          const height = Math.max(
+            document.body.scrollHeight,
+            document.documentElement.offsetHeight,
+            document.body.offsetHeight,
+          );
+          window.parent?.postMessage(
+            {
+              type: "gaard:extension:height",
+              height,
+            },
+            window.location.origin,
+          );
+        });
+      }
+
+      function renderDatasourceSelect() {
+        const select = document.querySelector("#datasource-select");
+        select.innerHTML = state.datasources
+          .map(
+            datasource => `
+              <option value="${escapeAttr(datasource.id)}" ${datasource.id === state.selectedDatasourceId ? "selected" : ""}>
+                ${escapeHtml(datasource.name)} (${escapeHtml(datasource.connector_key)})${datasource.has_schema_cache ? "" : " — no schema"}
+              </option>`,
+          )
+          .join("");
+      }
+
+      function renderSelectedTables() {
+        const target = document.querySelector("#selected-tables");
+        const tables = getTables().filter(table => hasAnyRole(table.name));
+        if (!tables.length) {
+          target.innerHTML = `<span class="muted">No configured tables yet.</span>`;
+          return;
+        }
+        target.innerHTML = tables
+          .map(table => {
+            const kind = table.name === state.mainTable ? "main" : hasContentRole(table.name) ? "content" : "mapped";
+            return `<button class="selected-table-button ${kind}" data-configured-table="${escapeAttr(table.name)}" type="button">${escapeHtml(table.name)}</button>`;
+          })
+          .join("");
+        document.querySelectorAll("[data-configured-table]").forEach(button => {
+          button.addEventListener("click", () => {
+            state.selectedTable = button.dataset.configuredTable || "";
+            render();
+          });
+        });
+      }
+
+      function renderTables() {
+        const target = document.querySelector("#tables");
+        const tables = getTables();
+        if (!state.selectedDatasourceId) {
+          target.innerHTML = `<p class="muted">No datasources configured.</p>`;
+          return;
+        }
+        if (!state.schema) {
+          target.innerHTML = `<p class="muted">Run Schema introspection in Configuration → Data sources first.</p>`;
+          return;
+        }
+
+        target.innerHTML = `
+          <div class="table-list">
+            <div class="table-header">
+              <span>main</span>
+              <span>table name</span>
+              <span>type</span>
+            </div>
+            ${tables.map(renderTableRow).join("")}
+          </div>`;
+        bindTableControls();
+      }
+
+      function renderTableRow(table) {
+        const isActive = table.name === state.selectedTable;
+        const isMain = table.name === state.mainTable;
+        return `
+          <div class="table-row">
+            <label class="table-main-radio" title="Main table">
+              <input ${isMain ? "checked" : ""} data-main-table="${escapeAttr(table.name)}" name="main-table" type="radio" />
+            </label>
+            <button class="table-name-button ${isActive ? "selected" : ""}" data-table="${escapeAttr(table.name)}" type="button">
+              ${escapeHtml(table.name)}
+            </button>
+            <span class="badge neutral">${escapeHtml(table.object_type || "table")}</span>
+          </div>`;
+      }
+
+      function bindTableControls() {
+        document.querySelectorAll("[data-table]").forEach(button => {
+          button.addEventListener("click", () => {
+            state.selectedTable = button.dataset.table || "";
+            render();
+          });
+        });
+        document.querySelectorAll("[data-main-table]").forEach(input => {
+          input.addEventListener("change", () => {
+            state.mainTable = input.dataset.mainTable || "";
+            state.selectedTable = state.mainTable;
+            render();
+          });
+        });
+      }
+
+      function renderColumns() {
+        const target = document.querySelector("#columns");
+        const table = getTables().find(item => item.name === state.selectedTable);
+        if (!table) {
+          target.innerHTML = `<p class="muted">Select a table.</p>`;
+          return;
+        }
+        target.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Type</th>
+                <th>
+                  <div class="role-header">
+                    <span class="role-header-labels"><span>case_id</span><span>content</span><span>clear</span></span>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(table.columns || []).map(column => renderColumnRow(column)).join("")}
+            </tbody>
+          </table>`;
+        bindColumnRoleControls();
+      }
+
+      function renderColumnRow(column) {
+        const name = column.name;
+        const roles = state.tableRoles[state.selectedTable] || {};
+        const caseIdChecked = roles.case_id_column === name ? "checked" : "";
+        const contentChecked = roles.content_column === name ? "checked" : "";
+        return `
+          <tr>
+            <td>${escapeHtml(name)}</td>
+            <td class="column-type" title="${escapeAttr(column.type || "")}">${escapeHtml(formatColumnType(column.type))}</td>
+            <td>
+              <div class="role-radios">
+                <label class="role-radio">
+                  <input ${caseIdChecked} data-role-column="${escapeAttr(name)}" data-role="case_id" name="${escapeAttr(state.selectedTable)}__case_id" type="radio" />
+                </label>
+                <label class="role-radio">
+                  <input ${contentChecked} data-role-column="${escapeAttr(name)}" data-role="content" name="${escapeAttr(state.selectedTable)}__content" type="radio" />
+                </label>
+                <button class="clear-role" data-clear-column="${escapeAttr(name)}" type="button">Clear</button>
+              </div>
+            </td>
+          </tr>`;
+      }
+
+      function formatColumnType(type) {
+        return String(type || "")
+          .replace(/\s+collate\s+.*/i, "")
+          .trim();
+      }
+
+      function bindColumnRoleControls() {
+        document.querySelectorAll("[data-role-column]").forEach(input => {
+          input.addEventListener("change", () => {
+            if (input.checked) assignRole(input.dataset.roleColumn, input.dataset.role);
+          });
+        });
+        document.querySelectorAll("[data-clear-column]").forEach(button => {
+          button.addEventListener("click", () => {
+            clearColumnRoles(button.dataset.clearColumn || "");
+          });
+        });
+      }
+
+      function assignRole(column, role) {
+        const tableName = state.selectedTable;
+        const roles = { ...(state.tableRoles[tableName] || {}) };
+        if (role === "case_id") {
+          roles.case_id_column = column;
+          if (roles.content_column === column) roles.content_column = "";
+        } else if (role === "content") {
+          roles.content_column = column;
+          if (roles.case_id_column === column) roles.case_id_column = "";
+        }
+        saveTableRoles(tableName, roles);
+        render();
+      }
+
+      function clearColumnRoles(column) {
+        const tableName = state.selectedTable;
+        const roles = { ...(state.tableRoles[tableName] || {}) };
+        if (roles.case_id_column === column) roles.case_id_column = "";
+        if (roles.content_column === column) roles.content_column = "";
+        saveTableRoles(tableName, roles);
+        render();
+      }
+
+      function saveTableRoles(tableName, roles) {
+        if (roles.case_id_column || roles.content_column) {
+          state.tableRoles[tableName] = roles;
+        } else {
+          delete state.tableRoles[tableName];
+        }
+      }
+
+      function renderJobs() {
+        const target = document.querySelector("#jobs-list");
+        if (!target) return;
+        const jobs = state.jobs || [];
+        if (!jobs.length) {
+          target.innerHTML = `<p class="muted">No jobs yet.</p>`;
+          return;
+        }
+
+        target.innerHTML = `
+          <div class="jobs-table">
+            <div class="jobs-row header">
+              <span>Created</span>
+              <span>Status</span>
+              <span>Progress</span>
+              <span>Counts</span>
+              <span>Output</span>
+              <span>Actions</span>
+            </div>
+            ${jobs.map(renderJobRow).join("")}
+          </div>
+          ${renderSelectedJobDetails()}`;
+
+        document.querySelectorAll("[data-job-details]").forEach(button => {
+          button.addEventListener("click", () => loadJobDetails(button.dataset.jobDetails || ""));
+        });
+        document.querySelectorAll("[data-rerun-job]").forEach(button => {
+          button.addEventListener("click", () => loadHistoricalJobConfig(button.dataset.rerunJob || ""));
+        });
+        document.querySelectorAll("[data-refresh-job]").forEach(button => {
+          button.addEventListener("click", () => refreshHistoricalJob(button.dataset.refreshJob || ""));
+        });
+      }
+
+      function renderJobRow(job) {
+        const output = job.output_datasource_key
+          ? job.output_datasource_key
+          : job.error_message
+            ? job.error_message
+            : job.output_path || "—";
+        return `
+          <div class="jobs-row">
+            <span>${escapeHtml(formatDateTime(job.created_at))}</span>
+            <span>${renderStatusBadge(job.status)}</span>
+            <span>${escapeHtml(formatJobProgress(job))}</span>
+            <span>${escapeHtml(formatJobCounts(job))}</span>
+            <span title="${escapeAttr(output)}">${escapeHtml(output)}</span>
+            <span class="job-actions">${renderJobActions(job)}</span>
+          </div>`;
+      }
+
+      function renderStatusBadge(status) {
+        const value = status || "queued";
+        return `<span class="status-badge ${escapeAttr(value)}">${escapeHtml(value)}</span>`;
+      }
+
+      function renderJobActions(job) {
+        const detailsButton = `<button data-job-details="${escapeAttr(job.id)}" type="button">Details</button>`;
+        if (job.status !== "succeeded") return detailsButton;
+        return `
+          ${detailsButton}
+          <button data-rerun-job="${escapeAttr(job.id)}" type="button">Re-run</button>
+          <button data-refresh-job="${escapeAttr(job.id)}" type="button">Refresh</button>`;
+      }
+
+      function renderSelectedJobDetails() {
+        const job = (state.jobs || []).find(item => item.id === state.selectedJobId);
+        if (!job) return "";
+        const events = job.events || [];
+        const error = job.error_message
+          ? `<p class="error">${escapeHtml(job.error_message)}</p>`
+          : "";
+        const eventRows = events.length
+          ? events.map(renderJobEvent).join("")
+          : `<p class="muted">No job events loaded yet.</p>`;
+        return `
+          <div class="job-detail-panel">
+            <div class="panel-title-row">
+              <h3>Job details</h3>
+              <span class="muted">${escapeHtml(job.id)}</span>
+            </div>
+            ${error}
+            <div class="job-event-list">${eventRows}</div>
+          </div>`;
+      }
+
+      function renderJobEvent(event) {
+        return `
+          <div class="job-event ${escapeAttr(event.level || "")}">
+            <span>${escapeHtml(formatDateTime(event.created_at))}</span>
+            <span>${escapeHtml(event.level || "info")}</span>
+            <span>${escapeHtml(event.message || "")}</span>
+          </div>`;
+      }
+
+      function formatJobProgress(job) {
+        const total = Number(job.progress_total || 0);
+        const current = Number(job.progress_current || 0);
+        if (!total) return "0/0";
+        return `${current}/${total}`;
+      }
+
+      function formatJobCounts(job) {
+        return `Cases ${Number(job.cases_total || 0)} · Chunks ${Number(job.chunks_total || 0)} · Items ${Number(job.items_total || 0)}`;
+      }
+
+      function formatDateTime(value) {
+        if (!value) return "—";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return String(value);
+        return date.toLocaleString();
+      }
+
+      function hasActiveJobs() {
+        return (state.jobs || []).some(job => job.status === "queued" || job.status === "running");
+      }
+
+      function scheduleJobsPolling() {
+        if (jobsPollTimer) {
+          clearTimeout(jobsPollTimer);
+          jobsPollTimer = null;
+        }
+        if (!hasActiveJobs()) return;
+        jobsPollTimer = setTimeout(() => {
+          loadJobs({ silent: true });
+        }, 3000);
+      }
+
+      async function loadJobs(options = {}) {
+        try {
+          if (!options.silent) {
+            setMessage("Refreshing jobs...", false, "#jobs-message");
+          }
+          const response = await api("/jobs");
+          state.jobs = response.items || [];
+          if (state.selectedJobId && state.jobs.some(job => job.id === state.selectedJobId)) {
+            const detailsResponse = await api(`/jobs/${encodeURIComponent(state.selectedJobId)}`);
+            const details = detailsResponse.item;
+            state.jobs = state.jobs.map(job => job.id === details.id ? details : job);
+          }
+          if (!options.silent) {
+            setMessage("Jobs refreshed.", false, "#jobs-message");
+          }
+          render();
+        } catch (error) {
+          setMessage(error.message, true, "#jobs-message");
+        }
+      }
+
+      async function runCurrentJob() {
+        try {
+          setMessage("Queuing Extract job...", false, "#jobs-message");
+          const response = await api("/jobs", { method: "POST" });
+          state.jobs = [response.item, ...(state.jobs || []).filter(job => job.id !== response.item.id)];
+          state.selectedJobId = response.item.id;
+          state.activeStep = "jobs";
+          setMessage("Extract job queued.", false, "#jobs-message");
+          await loadJobs({ silent: true });
+        } catch (error) {
+          setMessage(error.message, true, "#jobs-message");
+        }
+      }
+
+      async function refreshHistoricalJob(jobId) {
+        if (!jobId) return;
+        try {
+          setMessage("Queuing refresh job...", false, "#jobs-message");
+          const response = await api(`/jobs/${encodeURIComponent(jobId)}/refresh`, { method: "POST" });
+          state.jobs = [response.item, ...(state.jobs || []).filter(job => job.id !== response.item.id)];
+          state.selectedJobId = response.item.id;
+          setMessage("Refresh job queued.", false, "#jobs-message");
+          await loadJobs({ silent: true });
+        } catch (error) {
+          setMessage(error.message, true, "#jobs-message");
+        }
+      }
+
+      async function loadJobDetails(jobId) {
+        if (!jobId) return;
+        try {
+          const response = await api(`/jobs/${encodeURIComponent(jobId)}`);
+          const details = response.item;
+          state.selectedJobId = details.id;
+          state.jobs = (state.jobs || []).map(job => job.id === details.id ? details : job);
+          if (!state.jobs.some(job => job.id === details.id)) {
+            state.jobs = [details, ...(state.jobs || [])];
+          }
+          render();
+        } catch (error) {
+          setMessage(error.message, true, "#jobs-message");
+        }
+      }
+
+      async function loadHistoricalJobConfig(jobId) {
+        if (!jobId) return;
+        try {
+          setMessage("Loading historical configuration...", false, "#jobs-message");
+          const response = await api(`/jobs/${encodeURIComponent(jobId)}/config`);
+          await applyJobConfigSnapshot(response.item || {});
+          setMessage("Historical configuration loaded. Review tabs and save before running current config.");
+        } catch (error) {
+          setMessage(error.message, true, "#jobs-message");
+        }
+      }
+
+      async function applyJobConfigSnapshot(snapshot) {
+        const sourceModel = clonePlain(snapshot.source_model || {});
+        const datasourceId = Number(sourceModel.datasource_connector_id || 0);
+        if (!datasourceId) {
+          throw new Error("Historical configuration has no source datasource.");
+        }
+        if (!state.datasources.some(datasource => datasource.id === datasourceId)) {
+          throw new Error("Historical source datasource is no longer available.");
+        }
+
+        state.selectedDatasourceId = datasourceId;
+        state.sourceModel = sourceModel;
+        state.mainTable = sourceModel.main_table || "";
+        state.selectedTable = state.mainTable;
+        state.tableRoles = clonePlain(sourceModel.table_roles || {});
+        state.chunkingConfig = clonePlain(snapshot.chunking_config || null);
+        state.chunkingMode = state.chunkingConfig?.mode || "fixed_size";
+        state.embeddingConfig = {
+          ...defaultEmbeddingConfig(),
+          ...clonePlain(snapshot.embedding_config || {}),
+        };
+        state.llmConfig = clonePlain(snapshot.llm_config || null);
+        state.selectedInfoIndex = null;
+        state.showLlmSchema = false;
+
+        const schemaResponse = await api(`/datasources/${datasourceId}/schema`);
+        state.schema = schemaResponse.item;
+        state.selectedTable = state.selectedTable || state.schema.tables?.[0]?.name || "";
+        state.mainTable = state.mainTable || state.selectedTable;
+        state.activeStep = "source";
+        render();
+      }
+
+      function clonePlain(value) {
+        return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
+      }
+
+      async function save() {
+        try {
+          if (!state.selectedDatasourceId) throw new Error("Select a datasource first.");
+          const payload = {
+            main_table: state.mainTable,
+            table_roles: state.tableRoles,
+          };
+          const response = await api(`/source-models/${state.selectedDatasourceId}`, {
+            method: "PUT",
+            body: payload,
+          });
+          state.sourceModel = response.item;
+          state.tableRoles = response.item.table_roles || {};
+          setMessage("Source model saved.");
+          render();
+        } catch (error) {
+          setMessage(error.message, true);
+        }
+      }
+
+      async function updateChunkingMode(mode) {
+        const previousMode = state.chunkingMode;
+        if (mode === previousMode) return;
+        state.chunkingMode = mode;
+        setMessage("Saving chunking configuration...", false, "#chunking-message");
+        renderChunkingOptions();
+        try {
+          const response = await api("/chunking-config", {
+            method: "PUT",
+            body: {
+              mode,
+            },
+          });
+          state.chunkingConfig = response.item;
+          state.chunkingMode = response.item.mode;
+          setMessage("Chunking configuration saved.", false, "#chunking-message");
+        } catch (error) {
+          state.chunkingMode = previousMode;
+          setMessage(error.message, true, "#chunking-message");
+        }
+        render();
+      }
+
+      async function saveEmbedding() {
+        try {
+          const response = await api("/embedding-config", {
+            method: "PUT",
+            body: getEmbeddingPayload(),
+          });
+          state.embeddingConfig = response.item;
+          setMessage("Embedding configuration saved.", false, "#embedding-message");
+          render();
+        } catch (error) {
+          setMessage(error.message, true, "#embedding-message");
+        }
+      }
+
+      async function testEmbedding() {
+        try {
+          setMessage("Testing embedding configuration...", false, "#embedding-message");
+          const response = await api("/embedding-config/test", {
+            method: "POST",
+            body: getEmbeddingPayload(),
+          });
+          const dimensions = response.item?.embedding_dimensions;
+          setMessage(
+            dimensions ? `OK — embedding vector dimensions: ${dimensions}.` : "OK.",
+            false,
+            "#embedding-message",
+          );
+        } catch (error) {
+          setMessage(error.message, true, "#embedding-message");
+        }
+      }
+
+      async function saveLlm(status = "draft") {
+        try {
+          const response = await api("/llm-extracting-config", {
+            method: "PUT",
+            body: getLlmPayload(status),
+          });
+          state.llmConfig = response.item;
+          setMessage(
+            status === "approved" ? "Extraction blueprint approved." : "Extraction blueprint saved.",
+            false,
+            "#llm-message",
+          );
+          render();
+        } catch (error) {
+          setMessage(error.message, true, "#llm-message");
+        }
+      }
+
+      function rebuildLlmSchema() {
+        try {
+          syncLlmDraftFromForm();
+          const schema = buildExtractionSchema(state.llmConfig.information_types);
+          state.llmConfig.json_schema = schema;
+          state.llmConfig.json_schema_json = JSON.stringify(schema, null, 2);
+          const schemaTextarea = document.querySelector("[name='json_schema']");
+          if (schemaTextarea) schemaTextarea.value = state.llmConfig.json_schema_json;
+          setMessage("JSON Schema rebuilt from information types.", false, "#llm-message");
+        } catch (error) {
+          setMessage(error.message, true, "#llm-message");
+        }
+      }
+
+      function getEmbeddingPayload() {
+        const config = {
+          ...defaultEmbeddingConfig(),
+          ...(state.embeddingConfig || {}),
+        };
+        const form = document.querySelector("#embedding-config-form");
+        const extraBody = parseJsonObject(form?.elements.extra_body?.value || "{}", "Extra body JSON");
+        return {
+          enabled: Boolean(config.enabled),
+          provider: form?.elements.provider?.value || config.provider,
+          base_url: form?.elements.base_url?.value || config.base_url,
+          api_key: form?.elements.api_key?.value || "",
+          clear_api_key: Boolean(form?.elements.clear_api_key?.checked),
+          model: form?.elements.model?.value || config.model,
+          timeout_seconds: Number(form?.elements.timeout_seconds?.value || config.timeout_seconds || 60),
+          extra_body: extraBody,
+        };
+      }
+
+      function parseJsonObject(value, label = "JSON") {
+        const parsed = JSON.parse(String(value || "{}"));
+        if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+          throw new Error(`${label} must be an object.`);
+        }
+        return parsed;
+      }
+
+      function getTables() {
+        return state.schema?.tables || [];
+      }
+
+      function getActiveContentTables() {
+        return Object.entries(state.tableRoles || {})
+          .filter(([, roles]) => roles?.content_column)
+          .map(([tableName]) => tableName);
+      }
+
+      function hasAnyRole(tableName) {
+        const roles = state.tableRoles[tableName] || {};
+        return Boolean(roles.case_id_column || roles.content_column);
+      }
+
+      function hasContentRole(tableName) {
+        return Boolean((state.tableRoles[tableName] || {}).content_column);
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value);
+      }
+
+      document.querySelector("#datasource-select").addEventListener("change", async event => {
+        state.selectedDatasourceId = Number(event.target.value);
+        await loadSelectedDatasource();
+      });
+      document.querySelector("#refresh").addEventListener("click", load);
+      document.querySelector("#save").addEventListener("click", save);
+      document.querySelector("#save-embedding").addEventListener("click", saveEmbedding);
+      document.querySelector("#test-embedding").addEventListener("click", testEmbedding);
+      document.querySelector("#build-llm-schema").addEventListener("click", rebuildLlmSchema);
+      document.querySelector("#save-llm").addEventListener("click", () => saveLlm("draft"));
+      document.querySelector("#approve-llm").addEventListener("click", () => saveLlm("approved"));
+      document.querySelector("#refresh-jobs").addEventListener("click", () => loadJobs());
+      document.querySelector("#run-current-job").addEventListener("click", runCurrentJob);
+      document.querySelector("#suggest-key-description").addEventListener("click", suggestKeyDescription);
+      document.querySelector("#key-dialog-form").addEventListener("submit", saveKeyDialog);
+      document.querySelector("#field-dialog-form").addEventListener("submit", saveFieldDialog);
+      document.querySelectorAll("[data-close-dialog]").forEach(button => {
+        button.addEventListener("click", () => {
+          closeDialog(button.dataset.closeDialog || "");
+        });
+      });
+      document.querySelectorAll("[data-step]").forEach(button => {
+        button.addEventListener("click", () => {
+          state.activeStep = button.dataset.step || "source";
+          render();
+        });
+      });
+      window.addEventListener("resize", postExtensionHeight);
+
+      load();
+    </script>
+  </body>
+</html>
