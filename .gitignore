@@ -8,6 +8,7 @@ metadata.db
 .venv/
 dist/
 build/
+extensions/
 __pycache__/
 *.py[cod]
 *.pyd

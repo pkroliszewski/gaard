@@ -126,7 +126,7 @@ class Settings:
         )
     )
     gaard_package_directory: str = field(
-        default_factory=lambda: env_value("GAARD_PACKAGE_DIRECTORY", "packages")
+        default_factory=lambda: env_value("GAARD_PACKAGE_DIRECTORY", "extensions")
     )
     gaard_package_install_timeout_seconds: int = field(
         default_factory=lambda: env_int_value(
