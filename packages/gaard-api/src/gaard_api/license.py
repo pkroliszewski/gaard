@@ -16,6 +16,7 @@ from gaard_core.errors import GaardError
 
 from gaard_api.admin.models import AdminSetting, DatasourceConnector
 from gaard_api.core.settings import settings
+from gaard_api.tls_http import http_error_summary, post as tls_post
 
 
 logger = logging.getLogger(__name__)
@@ -266,7 +267,7 @@ class LicenseService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._consecutive_transient_failures = 0
-        self._http_post = httpx.post
+        self._http_post = tls_post
 
     @property
     def state(self) -> LicenseState:
@@ -281,7 +282,7 @@ class LicenseService:
         with self._state_lock:
             self._state = community_state()
             self._consecutive_transient_failures = 0
-        self._http_post = httpx.post
+        self._http_post = tls_post
 
     def start(self) -> None:
         self.refresh(force=True)
@@ -595,7 +596,7 @@ class LicenseService:
         except httpx.HTTPError as exc:
             return LicenseValidationResult(
                 kind="transient",
-                message=f"Online license validation failed: {exc.__class__.__name__}.",
+                message=f"Online license validation failed: {http_error_summary(exc)}.",
             )
 
         status_code = int(response.status_code)
