@@ -89,8 +89,9 @@ and request metadata.
 
 Datasource connectors are configured in the admin UI and persisted in the
 metadata database. For required database permissions, MySQL, PostgreSQL and
-SQLite connection examples, schema introspection, views, and business logic
-settings for tables and views, see
+SQLite connection examples, plus Oracle, Microsoft SQL Server, IBM Db2 and
+Teradata URL formats, schema introspection, views, and business logic settings
+for tables and views, see
 [Datasource Configuration](DatasourceConfiguration.md).
 
 ## How to use GAARD in your Reports
@@ -117,5 +118,4 @@ Details coming soon.
 - [Extensions](Extensions.md)
 - [Project Structure](ProjectStructure.md)
 - [Requirements](Requirements.md)
-
 

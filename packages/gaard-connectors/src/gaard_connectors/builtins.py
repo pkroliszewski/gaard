@@ -4,6 +4,8 @@ from gaard_connectors.registry import ConnectorDefinition, ConnectorRegistry
 from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
 from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 
+from typing import Any
+
 
 def create_builtin_connector_registry() -> ConnectorRegistry:
     registry = ConnectorRegistry()
@@ -29,6 +31,34 @@ def create_builtin_connector_registry() -> ConnectorRegistry:
             sql_dialect="mysql",
             url_prefixes=("mysql://", "mysql+pymysql://"),
             description="MySQL database accessed through SQLAlchemy.",
+        ),
+        _sqlalchemy_connector(
+            type_key="oracle",
+            label="Oracle Database",
+            sql_dialect="oracle",
+            url_prefixes=("oracle://", "oracle+oracledb://", "oracle+cx_oracle://"),
+            description="Oracle Database accessed through SQLAlchemy.",
+        ),
+        _sqlalchemy_connector(
+            type_key="mssql",
+            label="Microsoft SQL Server",
+            sql_dialect="tsql",
+            url_prefixes=("mssql://", "mssql+pyodbc://", "mssql+pymssql://"),
+            description="Microsoft SQL Server database accessed through SQLAlchemy.",
+        ),
+        _sqlalchemy_connector(
+            type_key="ibm_db2",
+            label="IBM Db2",
+            sql_dialect="db2",
+            url_prefixes=("db2+ibm_db://", "ibm_db_sa://"),
+            description="IBM Db2 database accessed through SQLAlchemy.",
+        ),
+        _sqlalchemy_connector(
+            type_key="teradata",
+            label="Teradata",
+            sql_dialect="teradata",
+            url_prefixes=("teradatasql://", "teradata://"),
+            description="Teradata database accessed through SQLAlchemy.",
         ),
     ):
         registry.register(definition)
@@ -67,6 +97,9 @@ def _sqlalchemy_config_schema(type_key: str) -> dict[str, object]:
         "format": "uri",
         "title": "Database URL",
     }
+
+    properties: dict[str, dict[str, Any]] = {}
+
     if type_key == "sqlite":
         properties = {
             "database_url": database_url,
@@ -102,6 +135,58 @@ def _sqlalchemy_config_schema(type_key: str) -> dict[str, object]:
             "charset": {"type": "string", "title": "Charset", "default": "utf8mb4"},
         }
         required = ["host", "port", "database", "username"]
+    elif type_key == "oracle":
+        properties = {
+            "database_url": database_url,
+            "host": {"type": "string", "title": "Host", "default": "localhost"},
+            "port": {"type": "integer", "title": "Port", "default": 1521},
+            "service_name": {"type": "string", "title": "Service name"},
+            "username": {"type": "string", "title": "Username"},
+            "password": {"type": "string", "title": "Password", "format": "password"},
+        }
+        required = ["host", "port", "service_name", "username"]
+    elif type_key == "mssql":
+        properties = {
+            "database_url": database_url,
+            "host": {"type": "string", "title": "Host", "default": "localhost"},
+            "port": {"type": "integer", "title": "Port", "default": 1433},
+            "database": {"type": "string", "title": "Database"},
+            "username": {"type": "string", "title": "Username"},
+            "password": {"type": "string", "title": "Password", "format": "password"},
+            "driver": {
+                "type": "string",
+                "title": "ODBC driver",
+                "default": "ODBC Driver 18 for SQL Server",
+            },
+            "Encrypt": {"type": "string", "title": "Encrypt", "default": "yes"},
+            "TrustServerCertificate": {
+                "type": "string",
+                "title": "Trust server certificate",
+                "default": "no",
+            },
+        }
+        required = ["host", "port", "database", "username"]
+    elif type_key == "ibm_db2":
+        properties = {
+            "database_url": database_url,
+            "host": {"type": "string", "title": "Host", "default": "localhost"},
+            "port": {"type": "integer", "title": "Port", "default": 50000},
+            "database": {"type": "string", "title": "Database"},
+            "username": {"type": "string", "title": "Username"},
+            "password": {"type": "string", "title": "Password", "format": "password"},
+        }
+        required = ["host", "port", "database", "username"]
+    elif type_key == "teradata":
+        properties = {
+            "database_url": database_url,
+            "host": {"type": "string", "title": "Host", "default": "localhost"},
+            "dbs_port": {"type": "integer", "title": "Port", "default": 1025},
+            "database": {"type": "string", "title": "Database"},
+            "username": {"type": "string", "title": "Username"},
+            "password": {"type": "string", "title": "Password", "format": "password"},
+            "tmode": {"type": "string", "title": "Transaction mode", "default": "DEFAULT"},
+        }
+        required = ["host", "dbs_port", "username"]
     else:
         properties = {"database_url": database_url}
         required = ["database_url"]

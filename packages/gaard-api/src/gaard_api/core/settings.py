@@ -101,5 +101,39 @@ class Settings:
 
     gaard_sql_dialect: str = field(default_factory=lambda: env_value("GAARD_SQL_DIALECT", "sqlite"))
 
+    gaard_license_key: str = field(
+        default_factory=lambda: env_value("GAARD_LICENSE_KEY", "")
+    )
+    gaard_license_verify_url: str = field(
+        default_factory=lambda: env_value(
+            "GAARD_LICENSE_VERIFY_URL",
+            "https://getgaard.com/api/license/validate",
+        )
+    )
+    gaard_license_check_interval_seconds: int = field(
+        default_factory=lambda: env_int_value(
+            "GAARD_LICENSE_CHECK_INTERVAL_SECONDS",
+            86_400,
+        )
+    )
+    gaard_license_offline_grace_days: int = field(
+        default_factory=lambda: env_int_value("GAARD_LICENSE_OFFLINE_GRACE_DAYS", 7)
+    )
+    gaard_package_download_url: str = field(
+        default_factory=lambda: env_value(
+            "GAARD_PACKAGE_DOWNLOAD_URL",
+            "https://getgaard.com/api/packages/download",
+        )
+    )
+    gaard_package_directory: str = field(
+        default_factory=lambda: env_value("GAARD_PACKAGE_DIRECTORY", "packages")
+    )
+    gaard_package_install_timeout_seconds: int = field(
+        default_factory=lambda: env_int_value(
+            "GAARD_PACKAGE_INSTALL_TIMEOUT_SECONDS",
+            600,
+        )
+    )
+
 
 settings = Settings()

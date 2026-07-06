@@ -1,12 +1,13 @@
 // src/main.ts
 var app = document.querySelector("#app");
+var licensePackageUpdatePollTimer = null;
 var builtInSectionLabels = {
   overview: "Overview",
   widgets: "Widgets",
   "data-audit": "Data audit",
   prompts: "Prompts",
   "schema-cache": "Schema cache",
-  "business-logic": "Business logic suggestions",
+  "business-logic": "Business logic",
   "llm-config": "LLM",
   reasoning: "Reasoning",
   "governance-policy": "Governance policy",
@@ -30,6 +31,11 @@ var state = {
   selectedOverviewWidgetKey: "",
   overviewEditorWidgetKey: null,
   overviewPlacementSlot: null,
+  confirmDialog: null,
+  draggedOverviewWidgetKey: null,
+  overviewResizeState: null,
+  overviewExtraSlots: 0,
+  overviewRemovedEmptySlots: [],
   overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
   overviewRefreshing: false,
   overviewTablePages: {},
@@ -60,8 +66,15 @@ var state = {
   datasourceSchemaDraftTables: null,
   extensionSections: [],
   extensionsLoaded: false,
-  license: null
+  license: null,
+  licensePackageUpdate: null
 };
+var packageUpdateStages = [
+  { key: "downloading", label: "Downloading" },
+  { key: "decompressing", label: "Decompressing" },
+  { key: "analyzing", label: "Analyzing" },
+  { key: "installing", label: "Installing" }
+];
 var dataAuditTypes = [
   { value: "", label: "All types" },
   { value: "info", label: "Info" },
@@ -79,6 +92,8 @@ var outputClassifications = [
 var OVERVIEW_TABLE_PAGE_SIZE = 10;
 var OVERVIEW_GRID_COLUMNS = 4;
 var OVERVIEW_MIN_GRID_SLOTS = 8;
+var OVERVIEW_SLOT_INCREMENT = 1;
+var OVERVIEW_MAX_GRID_SLOTS = 40;
 var ALLOWED_WIDGET_HTML_TAGS = /* @__PURE__ */ new Set(["A", "B", "I", "UL", "LI"]);
 var DROPPED_WIDGET_HTML_TAGS = /* @__PURE__ */ new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE", "SVG", "MATH"]);
 function getMenuGroups() {
@@ -96,8 +111,7 @@ function getMenuGroups() {
       sections: [
         { key: "data-audit", label: builtInSectionLabels["data-audit"] },
         { key: "business-logic", label: builtInSectionLabels["business-logic"] },
-        { key: "admin-audit", label: builtInSectionLabels["admin-audit"] },
-        { key: "license", label: builtInSectionLabels.license }
+        { key: "admin-audit", label: builtInSectionLabels["admin-audit"] }
       ]
     },
     {
@@ -110,7 +124,8 @@ function getMenuGroups() {
         { key: "prompts", label: builtInSectionLabels.prompts },
         { key: "widgets", label: builtInSectionLabels.widgets },
         { key: "identity", label: builtInSectionLabels.identity },
-        { key: "governance-policy", label: builtInSectionLabels["governance-policy"] }
+        { key: "governance-policy", label: builtInSectionLabels["governance-policy"] },
+        { key: "license", label: builtInSectionLabels.license }
       ]
     },
     {
@@ -150,7 +165,10 @@ function renderSidebar() {
   return `
       <aside class="sidebar${state.mobileMenuOpen ? " menu-open" : ""}">
         <div class="sidebar-header">
-          <div class="brand"><strong>GAARD Admin Console</strong><span>Community edition</span></div>
+          <div class="brand">
+            <img class="brand-logo" src="/admin/assets/getgaard.svg" alt="" aria-hidden="true" />
+            <div class="brand-copy"><strong>GAARD Admin Console</strong><span>${escapeHtml(formatLicenseEditionLabel(state.license))}</span></div>
+          </div>
           <button class="menu-toggle" id="mobile-menu-button" type="button" aria-label="${state.mobileMenuOpen ? "Close navigation" : "Open navigation"}" aria-expanded="${state.mobileMenuOpen}" aria-controls="admin-navigation">
             <span></span><span></span><span></span>
           </button>
@@ -248,6 +266,30 @@ function formatAuditTime(value) {
     return `${match[1]} ${match[2]}:${match[3]}:${match[4]}:${millis}`;
   }
   return raw;
+}
+function formatLicenseDate(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  if (match) return `${match[1]} ${match[2]}:${match[3]}`;
+  return raw;
+}
+function formatLicenseEditionLabel(license) {
+  const plan = String(license?.plan || "community")
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  const normalized = plan || "community";
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)} edition`;
+}
+function formatLicenseMessage(license) {
+  const message = String(license?.message || "").trim();
+  if (!message) return "";
+  if (/account is deleted/i.test(message)) {
+    return "License validation returned a deleted status. Update the key or run a recheck after changes in GAARD Website.";
+  }
+  return message;
 }
 function extractErrorMessage(value) {
   if (typeof value === "string") {
@@ -355,6 +397,7 @@ function renderLogin() {
       persistAuth(result.token, result.username, result.must_change_password);
       state.overviewLoading = !result.must_change_password && state.section === "overview";
       setMessage("success", "");
+      await loadShellLicense();
       render();
       if (!result.must_change_password) await loadCurrentSection();
     } catch (error) {
@@ -396,6 +439,7 @@ function renderPasswordChange() {
       state.overviewLoading = !state.mustChangePassword && state.section === "overview";
       localStorage.setItem("gaard_admin_must_change", String(result.must_change_password));
       setMessage("success", "Password changed.");
+      await loadShellLicense();
       render();
       await loadCurrentSection();
     } catch (error) {
@@ -420,7 +464,8 @@ function renderShell() {
         </section>
       </main>
     </div>
-    ${renderOverviewWidgetModal()}`;
+    ${renderOverviewWidgetModal()}
+    ${renderConfirmDialog()}`;
   attachShellHandlers();
   resizeExtensionFrames();
 }
@@ -596,6 +641,8 @@ function renderOverview() {
   const widgets = overview?.widgets || [];
   const isLoading = state.overviewLoading || state.overviewRefreshing;
   const showInitialLoader = isLoading && !overview;
+  const slotCount = showInitialLoader ? OVERVIEW_MIN_GRID_SLOTS : getOverviewSlotCount(widgets);
+  const canAddSlots = slotCount < OVERVIEW_MAX_GRID_SLOTS;
   return `
     <div class="toolbar overview-toolbar">
       <div class="refresh-status" aria-live="polite">
@@ -604,7 +651,11 @@ function renderOverview() {
       <button class="primary" type="button" id="overview-refresh" ${isLoading ? "disabled" : ""}>Refresh</button>
     </div>
     <div class="overview-grid">
-      ${showInitialLoader ? renderOverviewLoading() : renderOverviewGrid(widgets)}
+      ${showInitialLoader ? renderOverviewLoading() : renderOverviewGrid(widgets, slotCount)}
+    </div>
+    <div class="overview-grid-actions">
+      <button type="button" id="overview-add-slots" ${showInitialLoader || !canAddSlots ? "disabled" : ""}>Add empty slots</button>
+      <span>${escapeHtml(`${slotCount}/${OVERVIEW_MAX_GRID_SLOTS} slots`)}</span>
     </div>`;
 }
 function renderOverviewLoading() {
@@ -614,22 +665,61 @@ function renderOverviewLoading() {
       <span>Refreshing</span>
     </section>`;
 }
-function renderOverviewGrid(widgets) {
+function getOverviewBaseSlotCount(widgets) {
   const layout = buildOverviewLayout(widgets);
   const occupiedSlots = Array.from(layout.occupiedSlots);
-  const slotCount = Math.max(
-    OVERVIEW_MIN_GRID_SLOTS,
-    occupiedSlots.length ? Math.max(...occupiedSlots) + 1 : 0
+  return Math.min(
+    OVERVIEW_MAX_GRID_SLOTS,
+    Math.max(
+      OVERVIEW_MIN_GRID_SLOTS,
+      state.overviewExtraSlots,
+      occupiedSlots.length ? Math.max(...occupiedSlots) + 1 : 0
+    )
   );
-  return Array.from({ length: slotCount }, (_, slot) => {
-    const widget = layout.widgetSlots.get(slot);
-    if (widget) {
-      return renderOverviewGridWidget(widget);
+}
+function getOverviewRemovedEmptySlots(widgets, baseSlotCount = getOverviewBaseSlotCount(widgets)) {
+  const layout = buildOverviewLayout(widgets);
+  return state.overviewRemovedEmptySlots.filter((slot, index, items) => Number.isInteger(slot) && slot >= 0 && slot < baseSlotCount && !layout.occupiedSlots.has(slot) && items.indexOf(slot) === index).sort((left, right) => left - right);
+}
+function getOverviewSlotCount(widgets) {
+  const baseSlotCount = getOverviewBaseSlotCount(widgets);
+  return Math.max(OVERVIEW_MIN_GRID_SLOTS, baseSlotCount - getOverviewRemovedEmptySlots(widgets, baseSlotCount).length);
+}
+function logicalToDisplayOverviewSlot(logicalSlot, removedSlots) {
+  let removedBefore = 0;
+  for (const removedSlot of removedSlots) {
+    if (removedSlot < logicalSlot) {
+      removedBefore += 1;
+      continue;
     }
-    if (layout.occupiedSlots.has(slot)) {
+    break;
+  }
+  return logicalSlot - removedBefore;
+}
+function displayToLogicalOverviewSlot(displaySlot, removedSlots) {
+  let logicalSlot = displaySlot;
+  for (const removedSlot of removedSlots) {
+    if (removedSlot <= logicalSlot) {
+      logicalSlot += 1;
+    } else {
+      break;
+    }
+  }
+  return logicalSlot;
+}
+function renderOverviewGrid(widgets, slotCount = getOverviewSlotCount(widgets)) {
+  const layout = buildOverviewLayout(widgets);
+  const removedSlots = getOverviewRemovedEmptySlots(widgets);
+  return Array.from({ length: slotCount }, (_, displaySlot) => {
+    const logicalSlot = displayToLogicalOverviewSlot(displaySlot, removedSlots);
+    const widget = layout.widgetSlots.get(logicalSlot);
+    if (widget) {
+      return renderOverviewGridWidget(widget, displaySlot);
+    }
+    if (layout.occupiedSlots.has(logicalSlot)) {
       return "";
     }
-    return renderOverviewEmptySlot(slot);
+    return renderOverviewEmptySlot(logicalSlot, displaySlot);
   }).join("");
 }
 function buildOverviewLayout(widgets) {
@@ -647,6 +737,83 @@ function buildOverviewLayout(widgets) {
     }
   });
   return { widgetSlots, occupiedSlots };
+}
+function getActiveOverviewWidgets() {
+  return (state.overview?.widgets || []).filter((widget) => widget.active !== false);
+}
+function getOverviewWidgetByKey(widgetKey) {
+  return getActiveOverviewWidgets().find((widget) => widget.widget_key === widgetKey) || null;
+}
+function getOverviewOccupiedSlots(widgets) {
+  const occupiedSlots = /* @__PURE__ */ new Set();
+  widgets.forEach((widget) => {
+    const slot = overviewSlotFromPosition(widget.position);
+    const width = getOverviewWidgetGridWidth(widget);
+    for (let offset = 0; offset < width; offset += 1) {
+      occupiedSlots.add(slot + offset);
+    }
+  });
+  return occupiedSlots;
+}
+function getOverviewLayoutForWidgets(widgets) {
+  return buildOverviewLayout(
+    widgets.map((widget) => ({ ...widget }))
+  );
+}
+function getOverviewLayoutWithoutWidget(widgetKey) {
+  return getOverviewLayoutForWidgets(
+    getActiveOverviewWidgets().filter((widget) => widget.widget_key !== widgetKey)
+  );
+}
+function getOverviewResizeBounds(widgetKey) {
+  const widget = getOverviewWidgetByKey(widgetKey);
+  if (!widget) return null;
+  const slot = overviewSlotFromPosition(widget.position);
+  const width = getOverviewWidgetGridWidth(widget);
+  const rowStart = Math.floor(slot / OVERVIEW_GRID_COLUMNS) * OVERVIEW_GRID_COLUMNS;
+  const rowEnd = rowStart + OVERVIEW_GRID_COLUMNS - 1;
+  const startRight = slot + width - 1;
+  const occupiedSlots = getOverviewLayoutWithoutWidget(widgetKey).occupiedSlots;
+  let freeLeft = 0;
+  for (let candidate = slot - 1; candidate >= rowStart && !occupiedSlots.has(candidate); candidate -= 1) {
+    freeLeft += 1;
+  }
+  let freeRight = 0;
+  for (let candidate = startRight + 1; candidate <= rowEnd && !occupiedSlots.has(candidate); candidate += 1) {
+    freeRight += 1;
+  }
+  return {
+    slot,
+    width,
+    rowStart,
+    rowEnd,
+    startRight,
+    minLeftSlot: slot - freeLeft,
+    maxRightSlot: startRight + freeRight
+  };
+}
+function getOverviewResizeProposal(resizeState, clientX) {
+  if (!resizeState) return null;
+  if (resizeState.edge === "left") {
+    const deltaColumns = Math.round((resizeState.startX - clientX) / resizeState.columnUnit);
+    const proposedLeft = Math.max(
+      resizeState.minLeftSlot,
+      Math.min(resizeState.startRight, resizeState.startSlot - deltaColumns)
+    );
+    return {
+      slot: proposedLeft,
+      width: resizeState.startRight - proposedLeft + 1
+    };
+  }
+  const deltaColumns = Math.round((clientX - resizeState.startX) / resizeState.columnUnit);
+  const proposedRight = Math.max(
+    resizeState.startSlot,
+    Math.min(resizeState.maxRightSlot, resizeState.startRight + deltaColumns)
+  );
+  return {
+    slot: resizeState.startSlot,
+    width: proposedRight - resizeState.startSlot + 1
+  };
 }
 function canPlaceOverviewWidget(slot, width, occupiedSlots) {
   if (slot < 0) {
@@ -685,21 +852,30 @@ function getOverviewWidgetGridWidth(widget) {
   const width = Number(widget.grid_width || fallback);
   return Math.max(1, Math.min(OVERVIEW_GRID_COLUMNS, Number.isFinite(width) ? Math.floor(width) : fallback));
 }
-function renderOverviewGridWidget(widget) {
+function getOverviewGridPlacementStyle(slot, width = 1) {
+  const columnStart = slot % OVERVIEW_GRID_COLUMNS + 1;
+  const rowStart = Math.floor(slot / OVERVIEW_GRID_COLUMNS) + 1;
+  return `grid-column: ${columnStart} / span ${width}; grid-row: ${rowStart};`;
+}
+function renderOverviewGridWidget(widget, slot) {
   const result = widget.result;
   const width = getOverviewWidgetGridWidth(widget);
   return `
-    <section class="widget-card overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}" style="grid-column: span ${escapeHtml(width)};">
+    <section class="widget-card overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}" draggable="true" data-overview-widget-key="${escapeHtml(widget.widget_key)}" data-overview-widget-slot="${escapeHtml(slot)}" style="${escapeHtml(getOverviewGridPlacementStyle(slot, width))}">
       <div class="widget-card-header">
         <div>
           <span>${escapeHtml(widget.datasource_key)}</span>
           <strong>${escapeHtml(widget.label)}</strong>
         </div>
-        ${renderEditWidgetButton(widget.widget_key)}
+        <div class="widget-card-actions">
+          ${renderEditWidgetButton(widget.widget_key)}
+        </div>
       </div>
       <div class="widget-card-main">
         ${renderOverviewWidgetBody(widget, result)}
       </div>
+      <button class="overview-resize-handle overview-resize-handle-left" type="button" data-overview-resize-handle="${escapeHtml(widget.widget_key)}" data-edge="left" aria-label="Resize widget from left edge" title="Resize from left edge"></button>
+      <button class="overview-resize-handle overview-resize-handle-right" type="button" data-overview-resize-handle="${escapeHtml(widget.widget_key)}" data-edge="right" aria-label="Resize widget from right edge" title="Resize from right edge"></button>
     </section>`;
 }
 function renderOverviewWidgetBody(widget, result) {
@@ -721,11 +897,22 @@ function renderOverviewWidgetBody(widget, result) {
   }
   return renderTimeSeriesChart(result);
 }
-function renderOverviewEmptySlot(slot) {
+function renderOverviewEmptySlot(logicalSlot, displaySlot = logicalSlot) {
   return `
-    <section class="overview-empty-slot">
-      <button type="button" data-overview-empty-slot="${escapeHtml(slot)}" aria-label="Add widget to slot ${escapeHtml(slot + 1)}">+</button>
-      ${state.overviewPlacementSlot === slot ? renderOverviewPlacementPanel(slot) : ""}
+    <section class="overview-empty-slot" style="${escapeHtml(getOverviewGridPlacementStyle(displaySlot, 1))}">
+      <div class="overview-empty-slot-actions">
+        <button type="button" data-overview-empty-slot="${escapeHtml(logicalSlot)}" aria-label="Add widget to slot ${escapeHtml(displaySlot + 1)}">+</button>
+        <button type="button" class="icon-button danger" data-overview-remove-slot="${escapeHtml(logicalSlot)}" aria-label="Remove empty slot ${escapeHtml(displaySlot + 1)}" title="Remove empty slot">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M3 6h18" />
+            <path d="M8 6V4h8v2" />
+            <path d="M19 6l-1 14H6L5 6" />
+            <path d="M10 11v5" />
+            <path d="M14 11v5" />
+          </svg>
+        </button>
+      </div>
+      ${state.overviewPlacementSlot === logicalSlot ? renderOverviewPlacementPanel(logicalSlot) : ""}
     </section>`;
 }
 function renderOverviewPlacementPanel(slot) {
@@ -766,8 +953,6 @@ function renderOverviewWidgetModal() {
           <button type="button" data-close-overview-widget>Close</button>
         </div>
         <form class="form-grid" data-overview-widget-form="${escapeHtml(widget.widget_key)}">
-        <input type="hidden" name="position" value="${escapeHtml(widget.position || 100)}" />
-        <input type="hidden" name="grid_width" value="${escapeHtml(getOverviewWidgetGridWidth(widget))}" />
         <input type="hidden" name="active" value="${escapeHtml(widget.active !== false ? "true" : "false")}" />
         <label>Label<input name="label" value="${escapeHtml(widget.label)}" /></label>
         <div class="subgrid">
@@ -784,6 +969,38 @@ function renderOverviewWidgetModal() {
         </form>
       </section>
     </div>`;
+}
+function renderConfirmDialog() {
+  const dialog = state.confirmDialog;
+  if (!dialog) return "";
+  return `
+    <div class="modal-backdrop" data-confirm-backdrop>
+      <section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        <div class="modal-header">
+          <div>
+            <h2 id="confirm-dialog-title">${escapeHtml(dialog.title || "Confirm action")}</h2>
+            <p>${escapeHtml(dialog.message || "")}</p>
+          </div>
+        </div>
+        <div class="panel-actions modal-actions">
+          <button type="button" data-confirm-cancel>Cancel</button>
+          <button type="button" class="danger" data-confirm-accept>${escapeHtml(dialog.confirmLabel || "Delete")}</button>
+        </div>
+      </section>
+    </div>`;
+}
+function requestConfirmation({ title, message, confirmLabel = "Delete" }) {
+  return new Promise((resolve) => {
+    state.confirmDialog = { title, message, confirmLabel, resolve };
+    render();
+  });
+}
+function closeConfirmDialog(accepted) {
+  const dialog = state.confirmDialog;
+  if (!dialog) return;
+  state.confirmDialog = null;
+  dialog.resolve(accepted);
+  render();
 }
 function getOverviewEditorWidget() {
   if (!state.overviewEditorWidgetKey) return null;
@@ -963,7 +1180,7 @@ function renderWidgetConfigListItem(widget, active) {
       <input type="checkbox" data-overview-widget-active="${escapeHtml(widget.widget_key)}" aria-label="Enable ${escapeHtml(widget.label)}" ${widget.active ? "checked" : ""} />
       <button class="widget-config-select" type="button" data-overview-widget-select="${escapeHtml(widget.widget_key)}">
         <strong>${escapeHtml(widget.label)}</strong>
-        <span>${escapeHtml(widget.widget_key)} \xB7 ${escapeHtml(widget.widget_type)} \xB7 ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))} \xB7 ${escapeHtml(formatOverviewWidgetSize(widget))} \xB7 slot ${escapeHtml(overviewSlotFromPosition(widget.position) + 1)}</span>
+        <span>${escapeHtml(widget.widget_key)} \xB7 ${escapeHtml(widget.widget_type)} \xB7 ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))}</span>
       </button>
       <button class="icon-button danger widget-config-delete" type="button" data-overview-widget-delete="${escapeHtml(widget.widget_key)}" aria-label="Delete ${escapeHtml(widget.label)}" title="Delete widget">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -988,20 +1205,8 @@ function getOverviewWidgetFormPosition(widget) {
   }
   return overviewPositionFromSlot(state.overviewPlacementSlot ?? 0);
 }
-function formatOverviewWidgetSize(widget) {
-  return `${getOverviewWidgetGridWidth(widget)}/${OVERVIEW_GRID_COLUMNS}`;
-}
 function getDefaultOverviewWidgetGridWidth(widgetType) {
   return widgetType === "scalar" ? 1 : OVERVIEW_GRID_COLUMNS;
-}
-function renderOverviewWidgetSizeOptions(selected) {
-  const options = [
-    { value: 1, label: "Small (1 col)" },
-    { value: 2, label: "Medium (2 cols)" },
-    { value: 3, label: "Wide (3 cols)" },
-    { value: 4, label: "Full (4 cols)" }
-  ];
-  return options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
 }
 function renderOverviewWidgetResultModeOptions(selected = "data") {
   const options = [
@@ -1015,9 +1220,6 @@ function formatOverviewWidgetResultMode(value = "data") {
 }
 function renderOverviewWidgetSettingsForm(widget) {
   const creating = widget === null;
-  const position = getOverviewWidgetFormPosition(widget);
-  const widgetType = widget?.widget_type || "scalar";
-  const gridWidth = widget ? getOverviewWidgetGridWidth(widget) : getDefaultOverviewWidgetGridWidth(widgetType);
   const resultMode = widget?.result_mode || "data";
   return `
     <form class="form-grid" id="overview-widget-settings-form" data-widget-mode="${creating ? "create" : "update"}" data-widget-key="${escapeHtml(widget?.widget_key || "")}">
@@ -1026,10 +1228,6 @@ function renderOverviewWidgetSettingsForm(widget) {
       <div class="subgrid">
         <label>Type<select name="widget_type">${renderWidgetTypeOptions(widget?.widget_type || "scalar")}</select></label>
         <label>Datasource<select name="datasource_key">${renderOverviewDatasourceOptions(widget?.datasource_key || "metadata-db")}</select></label>
-      </div>
-      <div class="subgrid">
-        <label>Position<input name="position" type="number" min="10" step="10" value="${escapeHtml(position)}" /></label>
-        <label>Size<select name="grid_width">${renderOverviewWidgetSizeOptions(gridWidth)}</select></label>
       </div>
       <label>Result mode<select name="result_mode">${renderOverviewWidgetResultModeOptions(resultMode)}</select></label>
       <label class="inline-check"><input name="active" type="checkbox" ${widget?.active || creating ? "checked" : ""} /> Enabled</label>
@@ -1480,7 +1678,73 @@ function renderStub(title, text) {
   return `<section class="panel"><div class="panel-header"><h2>${escapeHtml(title)}</h2><span class="badge planned">planned</span></div><div class="panel-body"><p class="muted">${escapeHtml(text)}</p></div></section>`;
 }
 function renderLicense() {
-  return `<section class="panel"><div class="panel-header"><h2>License</h2></div><div class="panel-body mono">${escapeHtml(JSON.stringify(state.license || {}, null, 2))}</div></section>`;
+  const license = state.license || {};
+  const statusClass = license.valid ? "ok" : license.status === "missing" ? "planned" : "danger";
+  const canUpdatePackages = license.plan && license.plan !== "community";
+  const packageUpdateRunning = state.licensePackageUpdate?.status === "running";
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <h2>License</h2>
+        <span class="badge ${statusClass}">${escapeHtml(license.status || "missing")}</span>
+      </div>
+      <div class="panel-body">
+        <div class="license-status-grid">
+          ${renderLicenseStatusItem("Plan", license.plan || "community")}
+          ${renderLicenseStatusItem("Valid", license.valid ? "yes" : "no")}
+          ${renderLicenseStatusItem("Current period end", formatLicenseDate(license.current_period_end))}
+          ${renderLicenseStatusItem("Grace until", formatLicenseDate(license.grace_until))}
+          ${renderLicenseStatusItem("Last checked", formatLicenseDate(license.last_checked_at))}
+          ${renderLicenseStatusItem("Next check", formatLicenseDate(license.next_check_at))}
+        </div>
+        ${formatLicenseMessage(license) ? `<p class="muted">${escapeHtml(formatLicenseMessage(license))}</p>` : ""}
+        <form id="license-key-form" class="form-grid license-key-form">
+          <label>License key<input name="license_key" type="password" autocomplete="off" placeholder="gaard_live_xxx" /></label>
+          <div class="form-actions">
+            <button type="button" class="danger" id="clear-license-key">Clear key</button>
+            <button type="button" id="check-license-now">Check now</button>
+            ${canUpdatePackages ? `<button type="button" id="update-license-packages"${packageUpdateRunning ? " disabled" : ""}>Update packages</button>` : ""}
+            <button class="primary" type="submit">Save key</button>
+          </div>
+        </form>
+        ${renderLicensePackageProgress()}
+      </div>
+    </section>`;
+}
+function renderLicenseStatusItem(label, value) {
+  return `
+    <div class="stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>`;
+}
+function renderLicensePackageProgress() {
+  const job = state.licensePackageUpdate;
+  if (!job) return "";
+  const stage = job.stage || "queued";
+  const percent = Math.max(0, Math.min(100, Number(job.percent || 0)));
+  const activeIndex = packageUpdateStages.findIndex((item) => item.key === stage);
+  const complete = job.status === "succeeded";
+  const failed = job.status === "failed";
+  const statusLabel = failed ? "Failed" : complete ? "Complete" : job.message || "Updating packages.";
+  return `
+    <div class="package-update-progress ${failed ? "failed" : complete ? "complete" : ""}">
+      <div class="package-update-progress-header">
+        <strong>Package update</strong>
+        <span>${failed ? "Failed" : `${percent}%`}</span>
+      </div>
+      <div class="package-update-track" aria-label="Package update progress">
+        <div class="package-update-fill" style="width: ${percent}%"></div>
+      </div>
+      <div class="package-update-steps">
+        ${packageUpdateStages.map((item, index) => {
+          const done = complete || (activeIndex >= 0 && index < activeIndex);
+          const active = !complete && !failed && item.key === stage;
+          return `<div class="package-update-step ${done ? "done" : ""} ${active ? "active" : ""}"><span></span>${escapeHtml(item.label)}</div>`;
+        }).join("")}
+      </div>
+      <p class="muted">${escapeHtml(failed ? job.error?.message || job.message || "Package update failed." : statusLabel)}</p>
+    </div>`;
 }
 function renderAdminAudit() {
   return `
@@ -1493,6 +1757,8 @@ function renderAdminAudit() {
 }
 function attachSectionHandlers() {
   document.querySelector("#overview-refresh")?.addEventListener("click", refreshOverview);
+  document.querySelector("#overview-add-slots")?.addEventListener("click", addOverviewSlots);
+  attachOverviewDragAndDropHandlers();
   document.querySelectorAll("[data-overview-empty-slot]").forEach((button) => {
     button.addEventListener("click", async () => {
       const slot = Number(button.dataset.overviewEmptySlot || 0);
@@ -1502,6 +1768,9 @@ function attachSectionHandlers() {
       }
       render();
     });
+  });
+  document.querySelectorAll("[data-overview-remove-slot]").forEach((button) => {
+    button.addEventListener("click", removeOverviewSlot);
   });
   document.querySelectorAll("[data-overview-place-widget]").forEach((button) => {
     button.addEventListener("click", placeOverviewWidget);
@@ -1532,6 +1801,9 @@ function attachSectionHandlers() {
   document.querySelectorAll("[data-overview-widget-delete]").forEach((button) => {
     button.addEventListener("click", deleteOverviewWidget);
   });
+  document.querySelectorAll("[data-overview-resize-handle]").forEach((button) => {
+    button.addEventListener("mousedown", startOverviewResize);
+  });
   document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
   document.querySelectorAll("[data-edit-overview-widget]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1551,6 +1823,17 @@ function attachSectionHandlers() {
       render();
     }
   });
+  document.querySelector("[data-confirm-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      closeConfirmDialog(false);
+    }
+  });
+  document.querySelector("[data-confirm-cancel]")?.addEventListener("click", () => {
+    closeConfirmDialog(false);
+  });
+  document.querySelector("[data-confirm-accept]")?.addEventListener("click", () => {
+    closeConfirmDialog(true);
+  });
   document.querySelectorAll("[data-overview-widget-form]").forEach((form) => {
     form.addEventListener("submit", saveOverviewWidget);
   });
@@ -1569,6 +1852,10 @@ function attachSectionHandlers() {
   document.querySelector("#data-audit-output-classification")?.addEventListener("change", loadDataAuditForFilters);
   document.querySelector("#prompt-form")?.addEventListener("submit", savePrompt);
   document.querySelector("#schema-cache-form")?.addEventListener("submit", saveSchemaCacheTtl);
+  document.querySelector("#license-key-form")?.addEventListener("submit", saveLicenseKey);
+  document.querySelector("#clear-license-key")?.addEventListener("click", clearLicenseKey);
+  document.querySelector("#check-license-now")?.addEventListener("click", checkLicenseNow);
+  document.querySelector("#update-license-packages")?.addEventListener("click", updateLicensePackages);
   document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
   document.querySelector("#test-llm-config")?.addEventListener("click", testLlmConfig);
   document.querySelector("#reasoning-config-form")?.addEventListener("submit", saveReasoningConfig);
@@ -1669,6 +1956,8 @@ async function saveOverviewWidget(event) {
   const widgetKey = formElement.dataset.overviewWidgetForm;
   if (!widgetKey) return;
   const form = new FormData(formElement);
+  const widget = getOverviewEditorWidget();
+  if (!widget) return;
   try {
     await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}`, {
       method: "PUT",
@@ -1678,8 +1967,8 @@ async function saveOverviewWidget(event) {
         datasource_key: form.get("datasource_key"),
         question: form.get("question"),
         result_mode: form.get("result_mode") || "data",
-        position: Number(form.get("position") || 100),
-        grid_width: Number(form.get("grid_width") || 1),
+        position: widget.position,
+        grid_width: getOverviewWidgetGridWidth(widget),
         active: form.get("active") !== "false"
       })
     });
@@ -1734,7 +2023,11 @@ async function deleteOverviewWidget(event) {
   const widgetKey = button.dataset.overviewWidgetDelete || "";
   const widget = state.overviewWidgetConfigs.find((item) => item.widget_key === widgetKey);
   if (!widgetKey || !widget) return;
-  if (!window.confirm(`Delete widget "${widget.label}"?`)) {
+  if (!await requestConfirmation({
+    title: "Delete widget",
+    message: `Delete widget "${widget.label}"?`,
+    confirmLabel: "Delete"
+  })) {
     return;
   }
   try {
@@ -1768,22 +2061,231 @@ async function updateOverviewWidgetState(widgetKey, active, position, gridWidth)
     })
   });
 }
+function addOverviewSlots() {
+  const widgets = state.overview?.widgets || [];
+  const currentSlots = getOverviewSlotCount(widgets);
+  const baseSlotCount = getOverviewBaseSlotCount(widgets);
+  if (baseSlotCount >= OVERVIEW_MAX_GRID_SLOTS) {
+    return;
+  }
+  state.overviewExtraSlots = Math.min(
+    OVERVIEW_MAX_GRID_SLOTS,
+    Math.max(baseSlotCount, state.overviewExtraSlots) + OVERVIEW_SLOT_INCREMENT
+  );
+  render();
+}
+function removeOverviewSlot(event) {
+  event.stopPropagation();
+  const button = event.currentTarget;
+  const slot = Number(button.dataset.overviewRemoveSlot || -1);
+  if (!Number.isFinite(slot) || slot < 0) {
+    return;
+  }
+  state.overviewPlacementSlot = state.overviewPlacementSlot === slot ? null : state.overviewPlacementSlot;
+  if (!state.overviewRemovedEmptySlots.includes(slot)) {
+    state.overviewRemovedEmptySlots = [...state.overviewRemovedEmptySlots, slot].sort((left, right) => left - right);
+  }
+  render();
+}
+async function moveOverviewWidgetToSlot(widgetKey, requestedSlot) {
+  const widget = getOverviewWidgetByKey(widgetKey);
+  if (!widget) return;
+  const width = getOverviewWidgetGridWidth(widget);
+  const layout = getOverviewLayoutWithoutWidget(widgetKey);
+  const actualSlot = findAvailableOverviewSlot(requestedSlot, width, layout.occupiedSlots);
+  await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(actualSlot), width);
+}
+async function swapOverviewWidgets(sourceKey, targetKey) {
+  if (!sourceKey || !targetKey || sourceKey === targetKey) return;
+  const sourceWidget = getOverviewWidgetByKey(sourceKey);
+  const targetWidget = getOverviewWidgetByKey(targetKey);
+  if (!sourceWidget || !targetWidget) return;
+  const sourceSlot = overviewSlotFromPosition(sourceWidget.position);
+  const targetSlot = overviewSlotFromPosition(targetWidget.position);
+  const sourceWidth = getOverviewWidgetGridWidth(sourceWidget);
+  const targetWidth = getOverviewWidgetGridWidth(targetWidget);
+  const remainingWidgets = getActiveOverviewWidgets().filter((widget) => widget.widget_key !== sourceKey && widget.widget_key !== targetKey);
+  const occupiedSlots = getOverviewOccupiedSlots(remainingWidgets);
+  if (!canPlaceOverviewWidget(targetSlot, sourceWidth, occupiedSlots)) {
+    throw new Error("The dragged widget does not fit in that slot.");
+  }
+  const withSourcePlaced = new Set(occupiedSlots);
+  for (let offset = 0; offset < sourceWidth; offset += 1) {
+    withSourcePlaced.add(targetSlot + offset);
+  }
+  if (!canPlaceOverviewWidget(sourceSlot, targetWidth, withSourcePlaced)) {
+    throw new Error("The target widget cannot be moved into the previous slot.");
+  }
+  await updateOverviewWidgetState(sourceKey, true, overviewPositionFromSlot(targetSlot), sourceWidth);
+  await updateOverviewWidgetState(targetKey, true, overviewPositionFromSlot(sourceSlot), targetWidth);
+}
+async function resizeOverviewWidgetState(widgetKey, nextSlot, nextWidth) {
+  const widget = getOverviewWidgetByKey(widgetKey);
+  if (!widget) return;
+  const currentSlot = overviewSlotFromPosition(widget.position);
+  const currentWidth = getOverviewWidgetGridWidth(widget);
+  if ((nextWidth === currentWidth && nextSlot === currentSlot) || nextWidth < 1 || nextWidth > OVERVIEW_GRID_COLUMNS) {
+    return;
+  }
+  await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(nextSlot), nextWidth);
+}
+function startOverviewResize(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const handle = event.currentTarget;
+  const widgetKey = handle.dataset.overviewResizeHandle || "";
+  const widget = getOverviewWidgetByKey(widgetKey);
+  const card = handle.closest("[data-overview-widget-key]");
+  const grid = handle.closest(".overview-grid");
+  if (!widget || !card || !grid) return;
+  const bounds = getOverviewResizeBounds(widgetKey);
+  if (!bounds) return;
+  const gridRect = grid.getBoundingClientRect();
+  const gridStyle = window.getComputedStyle(grid);
+  const gap = Number.parseFloat(gridStyle.columnGap || gridStyle.gap || "12") || 12;
+  const columnWidth = (gridRect.width - gap * (OVERVIEW_GRID_COLUMNS - 1)) / OVERVIEW_GRID_COLUMNS;
+  state.overviewResizeState = {
+    widgetKey,
+    edge: handle.dataset.edge === "left" ? "left" : "right",
+    startX: event.clientX,
+    startSlot: bounds.slot,
+    startRight: bounds.startRight,
+    startWidth: bounds.width,
+    minLeftSlot: bounds.minLeftSlot,
+    maxRightSlot: bounds.maxRightSlot,
+    columnUnit: Math.max(1, columnWidth + gap),
+    latestClientX: event.clientX
+  };
+  card.classList.add("is-resizing");
+  window.addEventListener("mousemove", handleOverviewResizeMove);
+  window.addEventListener("mouseup", finishOverviewResize, { once: true });
+}
+function handleOverviewResizeMove(event) {
+  const resizeState = state.overviewResizeState;
+  if (!resizeState) return;
+  resizeState.latestClientX = event.clientX;
+  const card = document.querySelector(`[data-overview-widget-key="${CSS.escape(resizeState.widgetKey)}"]`);
+  if (!card) return;
+  const proposal = getOverviewResizeProposal(resizeState, event.clientX);
+  if (!proposal) return;
+  const columnStart = proposal.slot % OVERVIEW_GRID_COLUMNS + 1;
+  card.style.gridColumn = `${columnStart} / span ${proposal.width}`;
+}
+async function finishOverviewResize() {
+  const resizeState = state.overviewResizeState;
+  window.removeEventListener("mousemove", handleOverviewResizeMove);
+  if (!resizeState) return;
+  state.overviewResizeState = null;
+  const card = document.querySelector(`[data-overview-widget-key="${CSS.escape(resizeState.widgetKey)}"]`);
+  if (card) {
+    card.classList.remove("is-resizing");
+    card.style.gridColumn = "";
+  }
+  const proposal = getOverviewResizeProposal(resizeState, resizeState.latestClientX);
+  if (!proposal) {
+    render();
+    return;
+  }
+  try {
+    await resizeOverviewWidgetState(resizeState.widgetKey, proposal.slot, proposal.width);
+    if (proposal.width !== resizeState.startWidth || proposal.slot !== resizeState.startSlot) {
+      setMessage("success", "Widget size updated.");
+      await loadOverview();
+    } else {
+      render();
+    }
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+function attachOverviewDragAndDropHandlers() {
+  document.querySelectorAll("[data-overview-widget-key]").forEach((element) => {
+    element.addEventListener("dragstart", handleOverviewWidgetDragStart);
+    element.addEventListener("dragend", handleOverviewWidgetDragEnd);
+    element.addEventListener("dragover", handleOverviewDragOver);
+    element.addEventListener("drop", handleOverviewWidgetDrop);
+  });
+  document.querySelectorAll(".overview-empty-slot").forEach((element) => {
+    element.addEventListener("dragover", handleOverviewDragOver);
+    element.addEventListener("drop", handleOverviewEmptySlotDrop);
+  });
+}
+function handleOverviewWidgetDragStart(event) {
+  const element = event.currentTarget;
+  const widgetKey = element.dataset.overviewWidgetKey || "";
+  state.draggedOverviewWidgetKey = widgetKey;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", widgetKey);
+  }
+  element.classList.add("is-dragging");
+}
+function handleOverviewWidgetDragEnd(event) {
+  state.draggedOverviewWidgetKey = null;
+  event.currentTarget.classList.remove("is-dragging");
+  document.querySelectorAll(".overview-drop-target").forEach((element) => {
+    element.classList.remove("overview-drop-target");
+  });
+}
+function handleOverviewDragOver(event) {
+  if (!state.draggedOverviewWidgetKey) return;
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+  event.currentTarget.classList.add("overview-drop-target");
+}
+async function handleOverviewWidgetDrop(event) {
+  event.preventDefault();
+  event.currentTarget.classList.remove("overview-drop-target");
+  const sourceKey = state.draggedOverviewWidgetKey;
+  const targetKey = event.currentTarget.dataset.overviewWidgetKey || "";
+  if (!sourceKey || !targetKey || sourceKey === targetKey) return;
+  try {
+    await swapOverviewWidgets(sourceKey, targetKey);
+    setMessage("success", "Widgets swapped.");
+    await loadOverview();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function handleOverviewEmptySlotDrop(event) {
+  if (!state.draggedOverviewWidgetKey) return;
+  event.preventDefault();
+  event.currentTarget.classList.remove("overview-drop-target");
+  const button = event.currentTarget.querySelector("[data-overview-empty-slot]");
+  const slot = Number(button?.dataset.overviewEmptySlot || 0);
+  if (!Number.isFinite(slot)) return;
+  try {
+    await moveOverviewWidgetToSlot(state.draggedOverviewWidgetKey, slot);
+    setMessage("success", "Widget moved.");
+    await loadOverview();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
 async function saveOverviewWidgetSettings(event) {
   event.preventDefault();
   const formElement = event.currentTarget;
   const mode = formElement.dataset.widgetMode || "update";
+  const creating = mode === "create";
   const form = new FormData(formElement);
   const widgetKey = String(form.get("widget_key") || "").trim();
   if (!widgetKey) return;
+  const selectedWidget = getSelectedOverviewWidgetConfig();
+  const widgetType = String(form.get("widget_type") || "scalar");
   const payload = {
     widget_key: widgetKey,
     label: form.get("label"),
-    widget_type: form.get("widget_type"),
+    widget_type: widgetType,
     datasource_key: form.get("datasource_key"),
     question: form.get("question"),
     result_mode: form.get("result_mode") || "data",
-    position: Number(form.get("position") || 100),
-    grid_width: Number(form.get("grid_width") || 1),
+    position: creating ? getOverviewWidgetFormPosition(null) : selectedWidget?.position || 100,
+    grid_width: creating ? getDefaultOverviewWidgetGridWidth(widgetType) : getOverviewWidgetGridWidth(selectedWidget || { widget_type: widgetType, grid_width: getDefaultOverviewWidgetGridWidth(widgetType) }),
     active: form.get("active") === "on"
   };
   try {
@@ -1859,6 +2361,97 @@ async function deleteBusinessLogicSuggestion(event) {
     });
     setMessage("success", "Business logic suggestion deleted.");
     await loadBusinessLogicSuggestions();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function saveLicenseKey(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const licenseKey = String(form.get("license_key") || "").trim();
+  if (!licenseKey) {
+    setMessage("error", "License key is required.");
+    return;
+  }
+  try {
+    state.license = await api("/api/v1/admin/license/key", {
+      method: "PUT",
+      body: JSON.stringify({ license_key: licenseKey })
+    });
+    setMessage("success", "License key saved.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function clearLicenseKey() {
+  try {
+    state.license = await api("/api/v1/admin/license/key", {
+      method: "PUT",
+      body: JSON.stringify({ clear_license_key: true })
+    });
+    setMessage("success", "License key cleared.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function checkLicenseNow() {
+  try {
+    state.license = await api("/api/v1/admin/license/check", {
+      method: "POST"
+    });
+    setMessage("success", "License status refreshed.");
+    render();
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function updateLicensePackages() {
+  try {
+    state.licensePackageUpdate = {
+      status: "running",
+      stage: "queued",
+      percent: 0,
+      message: "Starting package update."
+    };
+    render();
+    const job = await api("/api/v1/admin/license/packages/update", {
+      method: "POST"
+    });
+    state.licensePackageUpdate = job;
+    render();
+    pollLicensePackageUpdate(job.job_id);
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function pollLicensePackageUpdate(jobId) {
+  if (!jobId || state.licensePackageUpdate?.job_id !== jobId) return;
+  if (licensePackageUpdatePollTimer) {
+    clearTimeout(licensePackageUpdatePollTimer);
+    licensePackageUpdatePollTimer = null;
+  }
+  try {
+    const job = await api(`/api/v1/admin/license/packages/update/${encodeURIComponent(jobId)}`);
+    state.licensePackageUpdate = job;
+    if (job.status === "running") {
+      render();
+      licensePackageUpdatePollTimer = setTimeout(() => pollLicensePackageUpdate(jobId), 700);
+      return;
+    }
+    if (job.status === "succeeded") {
+      await loadExtensions(false);
+      setMessage("success", job.result?.message || job.message || "Packages updated.");
+    } else {
+      setMessage("error", job.error?.message || job.message || "Package update failed.");
+    }
+    render();
   } catch (error) {
     setMessage("error", error.message);
     render();
@@ -2095,7 +2688,11 @@ async function activateDatasource() {
 async function deleteDatasource() {
   const selected = getSelectedDatasource();
   if (!selected || selected.system_managed) return;
-  if (!confirm(`Delete datasource "${selected.name}"?`)) return;
+  if (!await requestConfirmation({
+    title: "Delete datasource",
+    message: `Delete datasource "${selected.name}"?`,
+    confirmLabel: "Delete"
+  })) return;
   try {
     await api(`/api/v1/admin/datasources/${selected.id}`, { method: "DELETE" });
     state.selectedDatasourceId = null;
@@ -2352,9 +2949,19 @@ async function loadGovernancePolicy() {
   state.governancePolicy = result.item || null;
   render();
 }
-async function loadLicense() {
-  state.license = await api("/api/v1/admin/license");
-  render();
+async function loadLicense(shouldRender = true) {
+  state.license = await api("/api/v1/admin/license/status");
+  if (shouldRender) {
+    render();
+  }
+}
+async function loadShellLicense() {
+  if (!state.token || state.mustChangePassword) return;
+  try {
+    await loadLicense(false);
+  } catch (error) {
+    setMessage("error", error.message);
+  }
 }
 async function loadAdminAudit() {
   const result = await api("/api/v1/admin/audit/admin-events");
@@ -2369,6 +2976,7 @@ async function bootstrap() {
     state.username = me.username;
     state.mustChangePassword = me.must_change_password;
     localStorage.setItem("gaard_admin_must_change", String(state.mustChangePassword));
+    await loadShellLicense();
     render();
     await loadCurrentSection();
   } catch (error) {

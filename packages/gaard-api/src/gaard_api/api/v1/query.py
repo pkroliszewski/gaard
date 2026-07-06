@@ -51,9 +51,11 @@ from gaard_api.admin.services import (
     record_data_query_sql_error_audit,
 )
 from gaard_api.extensions import get_query_hook_registry
+from gaard_api.license import license_service
 from gaard_api.query_hooks import (
     DatasourceContext,
     DatasourceContexts,
+    QueryExecutor,
     SqlDialectPlan,
 )
 
@@ -309,7 +311,8 @@ def create_datasource_executor(
     datasource_contexts: DatasourceContexts,
     runtime_config: QueryRuntimeConfig,
     dialect_plan: SqlDialectPlan,
-):
+) -> QueryExecutor:
+    license_service.ensure_datasource_contexts_allowed(datasource_contexts)
     return get_query_hook_registry().create_datasource_executor(
         datasource_contexts,
         runtime_config.query_max_rows,
@@ -696,6 +699,7 @@ def effective_query_request(
     request: QueryRequest,
 ) -> tuple[QueryRequest, DatasourceContexts]:
     effective_context = get_query_hook_registry().resolve_effective_query_context(request)
+    license_service.ensure_datasource_contexts_allowed(effective_context.datasource_contexts)
     return effective_context.request, effective_context.datasource_contexts
 
 

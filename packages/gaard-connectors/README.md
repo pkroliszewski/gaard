@@ -7,4 +7,8 @@ GAARD allows applications and users to ask questions about relational databases 
 For more informacion see https://github.com/pkroliszewski/gaard
 
 # This package
-Package gaard-connectors extends gaard functionality by adding support for various database connection schemes
+Package gaard-connectors extends gaard functionality by adding support for various database connection schemes.
+
+Built-in SQLAlchemy datasource types include SQLite, PostgreSQL, MySQL, Oracle Database,
+Microsoft SQL Server, IBM Db2, and Teradata. Install the matching optional dependency
+extra for drivers that are not part of the default package.

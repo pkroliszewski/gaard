@@ -1,9 +1,10 @@
 from collections.abc import Iterator
 import json
+import threading
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.engine import Engine
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, Table
 from sqlalchemy.orm import Session, sessionmaker
 
 from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
@@ -20,10 +21,13 @@ from gaard_api.admin.models import (
 from gaard_api.admin.security import hash_password
 from gaard_api.core.settings import settings
 
+from typing import cast
+
 
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
 _engine_url: str | None = None
+_init_lock = threading.RLock()
 LEGACY_PROMPT_KEYS = {"investigation_readiness"}
 
 
@@ -66,23 +70,24 @@ def create_session() -> Session:
 
 
 def init_metadata_store() -> None:
-    engine = get_engine()
-    Base.metadata.create_all(engine)
-    ensure_data_query_audit_schema(engine)
-    ensure_overview_widget_schema(engine)
+    with _init_lock:
+        engine = get_engine()
+        Base.metadata.create_all(engine)
+        ensure_data_query_audit_schema(engine)
+        ensure_overview_widget_schema(engine)
 
-    if _session_factory is None:
-        raise RuntimeError("Admin metadata session factory is not initialized.")
+        if _session_factory is None:
+            raise RuntimeError("Admin metadata session factory is not initialized.")
 
-    with _session_factory() as session:
-        seed_admin_user(session)
-        seed_settings(session)
-        apply_runtime_settings(session)
-        seed_prompts(session)
-        seed_datasource_connectors(session)
-        seed_overview_widgets(session)
-        backfill_data_query_audit_types(session)
-        session.commit()
+        with _session_factory() as session:
+            seed_admin_user(session)
+            seed_settings(session)
+            apply_runtime_settings(session)
+            seed_prompts(session)
+            seed_datasource_connectors(session)
+            seed_overview_widgets(session)
+            backfill_data_query_audit_types(session)
+            session.commit()
 
 
 def seed_admin_user(session: Session) -> None:
@@ -129,7 +134,6 @@ def seed_settings(session: Session) -> None:
         ),
         "data_query_audit_retention_days": str(settings.gaard_audit_retention_days),
         "schema_cache_ttl_seconds": str(settings.gaard_schema_cache_ttl_seconds),
-        "license_edition": "community",
     }
 
     for key, value in defaults.items():
@@ -138,6 +142,9 @@ def seed_settings(session: Session) -> None:
             session.add(AdminSetting(key=key, value=value))
         elif setting.updated_by == "system" and setting.value != value:
             setting.value = value
+
+    if session.get(AdminSetting, "license_edition") is None:
+        session.add(AdminSetting(key="license_edition", value="community"))
 
 
 def apply_runtime_settings(session: Session) -> None:
@@ -374,8 +381,8 @@ def seed_overview_widgets(session: Session) -> None:
             existing.active = False
 
         if existing is not None and existing.updated_by == "system":
-            existing.position = int(item["position"])
-            existing.grid_width = int(item["grid_width"])
+            existing.position = int(cast(int,item["position"])) 
+            existing.grid_width = int(cast(int,item["grid_width"]))
             existing.result_mode = str(item["result_mode"])
 
 
@@ -416,7 +423,10 @@ def ensure_data_query_audit_schema(engine: Engine) -> None:
             )
 
     with engine.begin() as connection:
-        for index in DataQueryAuditLog.__table__.indexes:
+
+        audit_log_table = cast(Table, DataQueryAuditLog.__table__)
+
+        for index in audit_log_table.indexes:
             index.create(bind=connection, checkfirst=True)
 
 

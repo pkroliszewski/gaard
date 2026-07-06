@@ -120,13 +120,77 @@ GRANT SELECT ON app_db.orders TO 'gaard_reader'@'%';
 GRANT SELECT, SHOW VIEW ON app_db.monthly_sales_view TO 'gaard_reader'@'%';
 ```
 
+## Oracle Database
+
+W panelu admina ustaw:
+
+```text
+Database type: oracle
+SQL dialect: oracle
+Database URL: oracle+oracledb://gaard_reader:password@db.example.com:1521?service_name=appdb
+```
+
+Akceptowane prefiksy URL:
+
+- `oracle://`
+- `oracle+oracledb://`
+- `oracle+cx_oracle://`
+
+Domyślny URL generowany z pól formularza używa sterownika `oracledb`.
+Zainstaluj opcjonalne zależności `gaard-api[oracle]` albo odpowiedni sterownik
+Oracle w środowisku uruchomieniowym.
+
+Przykładowy użytkownik tylko do odczytu:
+
+```sql
+CREATE USER gaard_reader IDENTIFIED BY "strong-password";
+GRANT CREATE SESSION TO gaard_reader;
+GRANT SELECT ON app_schema.orders TO gaard_reader;
+GRANT SELECT ON app_schema.monthly_sales_view TO gaard_reader;
+```
+
+## Microsoft SQL Server
+
+W panelu admina ustaw:
+
+```text
+Database type: mssql
+SQL dialect: tsql
+Database URL: mssql+pyodbc://gaard_reader:password@db.example.com:1433/app_db?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no
+```
+
+Akceptowane prefiksy URL:
+
+- `mssql://`
+- `mssql+pyodbc://`
+- `mssql+pymssql://`
+
+Domyślny URL generowany z pól formularza używa sterownika `pyodbc`.
+Zainstaluj opcjonalne zależności `gaard-api[mssql]` i właściwy sterownik ODBC
+SQL Server w systemie.
+
+Przykładowy użytkownik tylko do odczytu:
+
+```sql
+CREATE LOGIN gaard_reader WITH PASSWORD = 'strong-password';
+CREATE USER gaard_reader FOR LOGIN gaard_reader;
+GRANT SELECT TO gaard_reader;
+```
+
+Jeśli chcesz ograniczyć dostęp tylko do wybranych schematów lub obiektów:
+
+```sql
+GRANT SELECT ON SCHEMA::reporting TO gaard_reader;
+GRANT SELECT ON OBJECT::dbo.orders TO gaard_reader;
+```
+
 ## PostgreSQL
 
 W panelu admina ustaw:
 
 ```text
 Database type: postgresql
-SQL dialect: postgresql
+SQL dialect: postgres
 Database URL: postgresql+psycopg://gaard_reader:password@db.example.com:5432/app_db
 ```
 
@@ -198,6 +262,62 @@ plik bazy jako tylko do odczytu dla użytkownika uruchamiającego GAARD.
 
 SQLite przechowuje definicje tabel i widoków w `sqlite_master`; introspekcja
 widoków będzie działać, jeśli proces ma dostęp do pliku bazy.
+
+## IBM Db2
+
+W panelu admina ustaw:
+
+```text
+Database type: ibm_db2
+SQL dialect: db2
+Database URL: db2+ibm_db://gaard_reader:password@db.example.com:50000/app_db
+```
+
+Akceptowane prefiksy URL:
+
+- `db2+ibm_db://`
+- `ibm_db_sa://`
+
+Domyślny URL generowany z pól formularza używa dialektu `ibm-db-sa`.
+Zainstaluj opcjonalne zależności `gaard-api[ibm_db2]` w środowisku
+uruchomieniowym. SQLGlot nie ma obecnie natywnego parsera `db2`, więc GAARD
+używa dialektu `db2` w promptach, a walidację składni wykonuje parserem
+ogólnym.
+
+Przykładowy użytkownik tylko do odczytu:
+
+```sql
+CREATE USER gaard_reader USING PASSWORD 'strong-password';
+GRANT CONNECT ON DATABASE TO USER gaard_reader;
+GRANT SELECT ON TABLE app_schema.orders TO USER gaard_reader;
+GRANT SELECT ON TABLE app_schema.monthly_sales_view TO USER gaard_reader;
+```
+
+## Teradata
+
+W panelu admina ustaw:
+
+```text
+Database type: teradata
+SQL dialect: teradata
+Database URL: teradatasql://gaard_reader:password@db.example.com?dbs_port=1025&database=app_db
+```
+
+Akceptowane prefiksy URL:
+
+- `teradatasql://`
+- `teradata://`
+
+Domyślny URL generowany z pól formularza używa sterownika
+`teradatasqlalchemy`. Zainstaluj opcjonalne zależności `gaard-api[teradata]` w
+środowisku uruchomieniowym.
+
+Przykładowy użytkownik tylko do odczytu:
+
+```sql
+GRANT LOGON ON ALL TO gaard_reader;
+GRANT SELECT ON app_db TO gaard_reader;
+```
 
 ## Konfiguracja w panelu admina
 

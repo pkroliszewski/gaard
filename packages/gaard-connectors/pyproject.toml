@@ -4,19 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-connectors"
-version = "0.2.1"
+version = "0.2.2"
 description = "Database connectors for GAARD based on SQLAlchemy"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "gaard-core==0.2.1",
-    "gaard-plugin-api>=0.2.0,<0.3.0",
+    "gaard-core==0.2.2",
+    "gaard-plugin-api>=0.2.2,<0.3.0",
     "sqlalchemy>=2.0.0",
 ]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2.0"]
 mysql = ["pymysql>=1.1.0"]
+oracle = ["oracledb>=2.0.0"]
+mssql = ["pyodbc>=5.0.0"]
+ibm_db2 = ["ibm-db-sa>=0.4.4"]
+teradata = ["teradatasqlalchemy>=20.0.0.9"]
+all-datasources = [
+    "psycopg[binary]>=3.2.0",
+    "pymysql>=1.1.0",
+    "oracledb>=2.0.0",
+    "pyodbc>=5.0.0",
+    "ibm-db-sa>=0.4.4",
+    "teradatasqlalchemy>=20.0.0.9",
+]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.5.0",

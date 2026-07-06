@@ -1,6 +1,11 @@
 import json
 import os
-from typing import Any
+
+from collections.abc import AsyncIterator
+from importlib.resources import as_file, files  
+from pathlib import Path
+
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx2 as httpx
@@ -8,15 +13,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from importlib.resources import files
 
 
-CLIENT_WEB_DIR = files("gaard_client").joinpath("client-web")
+with as_file(files("gaard_client").joinpath("client-web")) as _path:
+    CLIENT_WEB_DIR: Path = Path(_path).absolute()
+    
 DEFAULT_BACKEND_URL = "http://localhost:8000"
+
 
 app = FastAPI(
     title="GAARD Client",
-    version="0.2.1",
+    version="0.2.2",
     description="Community client for asking governed natural-language questions.",
 )
 
@@ -110,7 +117,7 @@ async def query_backend(request: ClientQueryRequest) -> dict[str, Any]:
             else response.text,
         )
 
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 @app.post("/api/widgets/from-query")
@@ -145,7 +152,7 @@ async def create_widget_from_query(request: ClientWidgetFromQueryRequest) -> dic
             else response.text,
         )
 
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 @app.post("/api/query/stream")
@@ -153,7 +160,7 @@ async def query_backend_stream(request: ClientQueryRequest) -> StreamingResponse
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     query_url = f"{backend_url}/api/v1/query/stream"
 
-    async def stream_backend():
+    async def stream_backend() -> AsyncIterator[str]:
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
@@ -201,7 +208,7 @@ async def analysis_backend_stream(request: ClientQueryRequest) -> StreamingRespo
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     analysis_url = f"{backend_url}/api/v1/analysis/stream"
 
-    async def stream_backend():
+    async def stream_backend() -> AsyncIterator[str]:
         async for chunk in proxy_stream(
             url=analysis_url,
             payload={
@@ -222,7 +229,7 @@ async def analysis_message_backend_stream(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     analysis_url = f"{backend_url}/api/v1/analysis/{session_id}/messages/stream"
 
-    async def stream_backend():
+    async def stream_backend() -> AsyncIterator[str]:
         async for chunk in proxy_stream(
             url=analysis_url,
             payload={
@@ -234,7 +241,7 @@ async def analysis_message_backend_stream(
     return StreamingResponse(stream_backend(), media_type="application/x-ndjson")
 
 
-async def proxy_stream(url: str, payload: dict[str, Any]):
+async def proxy_stream(url: str, payload: dict[str, Any]) -> AsyncIterator[str]:
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             async with client.stream("POST", url, json=payload) as response:

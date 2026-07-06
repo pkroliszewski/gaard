@@ -122,6 +122,17 @@ fi
 
 cd "$project_root"
 
+sync_package_resources() {
+  case "$1" in
+    packages/gaard-api)
+      install -d "packages/gaard-api/src/gaard_api/admin-web/assets"
+      install -m 0644 \
+        "resources/getgaard.svg" \
+        "packages/gaard-api/src/gaard_api/admin-web/assets/getgaard.svg"
+      ;;
+  esac
+}
+
 if ! "$python_bin" -c 'import build, twine' >/dev/null 2>&1; then
   echo "Missing build tools for $python_bin." >&2
   echo "Install them with: $python_bin -m pip install --upgrade build twine" >&2
@@ -132,6 +143,7 @@ rm -rf "$dist_dir"
 mkdir -p "$dist_dir"
 
 for package in "${packages[@]}"; do
+  sync_package_resources "$package"
   echo "Building $package"
   "$python_bin" -m build "$package" --outdir "$dist_dir"
 done
