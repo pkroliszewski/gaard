@@ -287,6 +287,19 @@ def test_package_update_requires_paid_license(license_client: TestClient) -> Non
     assert response.json()["error"]["code"] == "LICENSE_ENTITLEMENT_REQUIRED"
 
 
+def test_package_updates_default_to_extensions_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(settings, "gaard_package_directory", "")
+
+    package_root = package_update_service._package_root()
+
+    assert package_root == tmp_path / "extensions"
+    assert package_root.is_dir()
+
+
 def test_paid_license_can_download_extract_and_install_package_updates(
     license_client: TestClient,
     tmp_path: Path,

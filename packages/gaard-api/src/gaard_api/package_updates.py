@@ -898,7 +898,7 @@ class PackageUpdateService:
         }
 
     def _package_root(self) -> Path:
-        configured = str(settings.gaard_package_directory or "packages").strip() or "packages"
+        configured = str(settings.gaard_package_directory or "extensions").strip() or "extensions"
         path = Path(configured)
         if not path.is_absolute():
             path = Path.cwd() / path
