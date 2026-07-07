@@ -8,6 +8,7 @@ from gaard_plugin_api import ExtensionManager
 from gaard_api.api_registry import ApiRegistry
 
 if TYPE_CHECKING:
+    from gaard_api.auth_hooks import AuthProviderRegistry
     from gaard_api.query_hooks import QueryHookRegistry
 
 EXTRACT_JOBS_FEATURE = "extract_jobs"
@@ -54,6 +55,19 @@ def get_query_hook_registry() -> "QueryHookRegistry":
         "query",
         registry,
         services=_create_query_extension_services(),
+    )
+    return registry
+
+
+@lru_cache
+def get_auth_provider_registry() -> "AuthProviderRegistry":
+    from gaard_api.auth_hooks import AuthProviderRegistry
+
+    registry = AuthProviderRegistry()
+    get_extension_manager().activate(
+        "auth",
+        registry,
+        services=_create_auth_extension_services(),
     )
     return registry
 
@@ -122,4 +136,14 @@ def _create_query_extension_services() -> dict[str, object]:
         "active_business_logic_prompt": get_active_business_logic_prompt_safe,
         "list_datasource_connectors": list_datasource_connectors,
         "license": license_service,
+    }
+
+
+def _create_auth_extension_services() -> dict[str, object]:
+    from gaard_api.admin.database import create_session
+    from gaard_api.admin.services import record_admin_audit
+
+    return {
+        "metadata_session_factory": create_session,
+        "audit": record_admin_audit,
     }

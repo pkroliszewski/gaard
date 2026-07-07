@@ -1,6 +1,7 @@
 import json
 import re
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Annotated
 
@@ -101,7 +102,12 @@ from gaard_api.admin.services import (
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
-from gaard_api.extensions import get_api_registry, get_connector_registry, get_extension_manager
+from gaard_api.extensions import (
+    get_api_registry,
+    get_auth_provider_registry,
+    get_connector_registry,
+    get_extension_manager,
+)
 from gaard_api.license import license_service, redact_license_key
 from gaard_api.package_updates import package_update_jobs, package_update_service
 from gaard_api.query_hooks import sqlglot_read_dialect
@@ -118,6 +124,7 @@ class LoginResponse(BaseModel):
     token: str
     username: str
     must_change_password: bool
+    role: str = "admin"
 
 
 class ChangePasswordRequest(BaseModel):
@@ -128,6 +135,13 @@ class ChangePasswordRequest(BaseModel):
 class MeResponse(BaseModel):
     username: str
     must_change_password: bool
+    role: str = "admin"
+
+
+@dataclass(frozen=True)
+class AuthenticatedSession:
+    session: AdminSession
+    user: AdminUser
 
 
 class PromptUpdateRequest(BaseModel):
@@ -835,10 +849,10 @@ def get_authorization_token(authorization: str | None) -> str:
     return token
 
 
-def get_current_admin_allow_password_change(
+def get_current_authenticated_session(
     authorization: Annotated[str | None, Header()] = None,
     session: Session = Depends(get_session),
-) -> AdminUser:
+) -> AuthenticatedSession:
     token = get_authorization_token(authorization)
     token_hash = hash_token(token)
 
@@ -860,7 +874,29 @@ def get_current_admin_allow_password_change(
             detail="Invalid admin session.",
         )
 
-    return user
+    return AuthenticatedSession(session=admin_session, user=user)
+
+
+def get_current_api_user(
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
+) -> AuthenticatedSession:
+    if principal.session.role not in {"user", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user does not have API access.",
+        )
+    return principal
+
+
+def get_current_admin_allow_password_change(
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
+) -> AdminUser:
+    if principal.session.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role is required.",
+        )
+    return principal.user
 
 
 def get_current_admin(
@@ -879,37 +915,107 @@ def get_current_admin(
 def login(request: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
     user = session.scalar(select(AdminUser).where(AdminUser.username == request.username))
 
-    if user is None or not verify_password(request.password, user.password_hash):
+    if user is not None and verify_password(request.password, user.password_hash):
+        token = create_session_token()
+        session.add(
+            AdminSession(
+                token_hash=hash_token(token),
+                user_id=user.id,
+                username=user.username,
+                role="admin",
+                auth_provider="local",
+            )
+        )
+        record_admin_audit(
+            session=session,
+            actor=user.username,
+            action="auth.login",
+            resource_type="admin_user",
+            resource_id=user.username,
+        )
+        session.commit()
+
+        return LoginResponse(
+            token=token,
+            username=user.username,
+            must_change_password=user.must_change_password,
+            role="admin",
+        )
+
+    identity = get_auth_provider_registry().authenticate(
+        session,
+        request.username,
+        request.password,
+    )
+
+    if identity is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password.",
         )
 
+    user = get_or_create_external_auth_user(session, identity.provider_id, identity.username)
     token = create_session_token()
-    session.add(AdminSession(token_hash=hash_token(token), user_id=user.id))
+    session.add(
+        AdminSession(
+            token_hash=hash_token(token),
+            user_id=user.id,
+            username=identity.username,
+            role=identity.role,
+            auth_provider=identity.provider_id,
+        )
+    )
     record_admin_audit(
         session=session,
-        actor=user.username,
+        actor=identity.username,
         action="auth.login",
-        resource_type="admin_user",
-        resource_id=user.username,
+        resource_type="external_user",
+        resource_id=identity.username,
+        details={
+            "provider_id": identity.provider_id,
+            "provider_name": identity.provider_name,
+            "role": identity.role,
+        },
     )
     session.commit()
 
     return LoginResponse(
         token=token,
-        username=user.username,
-        must_change_password=user.must_change_password,
+        username=identity.username,
+        must_change_password=False,
+        role=identity.role,
     )
+
+
+def get_or_create_external_auth_user(
+    session: Session,
+    provider_id: str,
+    username: str,
+) -> AdminUser:
+    local_username = f"{provider_id}:{username}"
+    user = session.scalar(select(AdminUser).where(AdminUser.username == local_username))
+    if user is not None:
+        user.must_change_password = False
+        return user
+
+    user = AdminUser(
+        username=local_username,
+        password_hash="external$disabled",
+        must_change_password=False,
+    )
+    session.add(user)
+    session.flush()
+    return user
 
 
 @router.get("/me", response_model=MeResponse)
 def get_me(
-    user: AdminUser = Depends(get_current_admin_allow_password_change),
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> MeResponse:
     return MeResponse(
-        username=user.username,
-        must_change_password=user.must_change_password,
+        username=principal.session.username or principal.user.username,
+        must_change_password=principal.user.must_change_password,
+        role=principal.session.role,
     )
 
 

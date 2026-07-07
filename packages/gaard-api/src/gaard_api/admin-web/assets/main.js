@@ -394,6 +394,10 @@ function renderLogin() {
         method: "POST",
         body: JSON.stringify({ username: form.get("username"), password: form.get("password") })
       });
+      if (result.role !== 'admin') {
+        logout();
+        throw new Error("Admin role is required.");
+      }
       persistAuth(result.token, result.username, result.must_change_password);
       state.overviewLoading = !result.must_change_password && state.section === "overview";
       setMessage("success", "");

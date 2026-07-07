@@ -213,6 +213,35 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "<svg" in logo_response.text
 
 
+def test_query_endpoint_requires_authentication(admin_client: TestClient) -> None:
+    response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "How many active patients are there?",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_query_endpoint_accepts_authenticated_user(admin_client: TestClient) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    response = admin_client.post(
+        "/api/v1/query",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "question": "How many active patients are there?",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer"]
+
+
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
