@@ -28,6 +28,8 @@ from packaging.version import InvalidVersion, Version
 
 from gaard_api.core.settings import settings
 from gaard_api.license import LicensePlan, LicenseState, gaard_api_version
+from gaard_api.tls_http import get as tls_get
+from gaard_api.tls_http import http_error_summary, post as tls_post
 
 
 logger = logging.getLogger(__name__)
@@ -190,15 +192,15 @@ def default_pip_runner(
 
 class PackageUpdateService:
     def __init__(self) -> None:
-        self._http_post: HttpRequest = httpx.post
-        self._http_get: HttpRequest = httpx.get
+        self._http_post: HttpRequest = tls_post
+        self._http_get: HttpRequest = tls_get
         self._package_version: PackageVersionResolver = version
         self._pip_runner: PipRunner = default_pip_runner
         self._lock = threading.Lock()
 
     def reset_for_tests(self) -> None:
-        self._http_post = httpx.post
-        self._http_get = httpx.get
+        self._http_post = tls_post
+        self._http_get = tls_get
         self._package_version = version
         self._pip_runner = default_pip_runner
 
@@ -442,7 +444,8 @@ class PackageUpdateService:
             )
         except httpx.HTTPError as exc:
             raise PackageUpdateError(
-                f"Package download failed before receiving a response: {exc.__class__.__name__}."
+                "Package download failed before receiving a response: "
+                f"{http_error_summary(exc)}."
             ) from exc
 
         status_code = int(response.status_code)
@@ -575,7 +578,8 @@ class PackageUpdateService:
             )
         except httpx.HTTPError as exc:
             raise PackageUpdateError(
-                f"Package file download failed before receiving a response: {exc.__class__.__name__}."
+                "Package file download failed before receiving a response: "
+                f"{http_error_summary(exc)}."
             ) from exc
 
         status_code = int(response.status_code)

@@ -12,3 +12,4 @@ build
 twine
 psycopg[binary]
 pymysql
+types-openpyxl
