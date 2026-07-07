@@ -2475,7 +2475,7 @@ def update_license_key(
     try:
         if request.clear_license_key:
             state = license_service.clear_license_key(user.username)
-            details = {"cleared": True}
+            details: dict[str, Any] = {"cleared": True}
         else:
             if request.license_key is None:
                 raise ValueError("License key is required.")

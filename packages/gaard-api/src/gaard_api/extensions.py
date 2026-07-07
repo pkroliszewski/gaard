@@ -9,6 +9,7 @@ from gaard_api.api_registry import ApiRegistry
 
 if TYPE_CHECKING:
     from gaard_api.query_hooks import QueryHookRegistry
+    from gaard_api.siem import SiemSinkRegistry
 
 EXTRACT_JOBS_FEATURE = "extract_jobs"
 EXTRACT_JOBS_LICENSE_MESSAGE = "Extract jobs require an active Enterprise license."
@@ -58,6 +59,19 @@ def get_query_hook_registry() -> "QueryHookRegistry":
     return registry
 
 
+@lru_cache
+def get_siem_registry() -> "SiemSinkRegistry":
+    from gaard_api.siem import SiemSinkRegistry
+
+    registry = SiemSinkRegistry()
+    get_extension_manager().activate(
+        "siem",
+        registry,
+        services=_create_siem_extension_services(),
+    )
+    return registry
+
+
 def enforce_extension_license_entitlements(request: Request) -> None:
     if not is_extract_job_mutation(request.method, request.url.path):
         return
@@ -85,8 +99,12 @@ def _create_api_extension_services() -> dict[str, object]:
     from gaard_api.admin.database import create_session
     from gaard_api.admin.services import (
         get_llm_runtime_config_safe,
+        get_setting,
         introspect_datasource_connector,
+        json_dumps,
+        json_loads,
         record_admin_audit,
+        set_setting,
     )
     from gaard_api.extension_services import DatasourceHostService
     from gaard_api.license import license_service
@@ -94,6 +112,10 @@ def _create_api_extension_services() -> dict[str, object]:
     return {
         "metadata_session_factory": create_session,
         "audit": record_admin_audit,
+        "get_setting": get_setting,
+        "set_setting": set_setting,
+        "json_dumps": json_dumps,
+        "json_loads": json_loads,
         "connector_registry": get_connector_registry,
         "datasources": DatasourceHostService(create_session),
         "datasource_schema_introspection": introspect_datasource_connector,
@@ -122,4 +144,24 @@ def _create_query_extension_services() -> dict[str, object]:
         "active_business_logic_prompt": get_active_business_logic_prompt_safe,
         "list_datasource_connectors": list_datasource_connectors,
         "license": license_service,
+    }
+
+
+def _create_siem_extension_services() -> dict[str, object]:
+    from gaard_api.admin.database import create_session
+    from gaard_api.admin.services import (
+        get_setting,
+        json_dumps,
+        json_loads,
+        record_admin_audit,
+        set_setting,
+    )
+
+    return {
+        "metadata_session_factory": create_session,
+        "audit": record_admin_audit,
+        "get_setting": get_setting,
+        "set_setting": set_setting,
+        "json_dumps": json_dumps,
+        "json_loads": json_loads,
     }

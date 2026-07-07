@@ -33,6 +33,12 @@ from gaard_api.admin.models import (
 )
 from gaard_api.core.settings import settings
 from gaard_api.extensions import get_connector_registry
+from gaard_api.siem import (
+    build_admin_audit_event,
+    build_data_query_audit_event,
+    dispatch_siem_event,
+    queue_siem_event,
+)
 
 
 def json_dumps(value: Any) -> str:
@@ -289,6 +295,16 @@ def record_admin_audit(
             details_json=json_dumps(details or {}),
         )
     )
+    queue_siem_event(
+        session,
+        build_admin_audit_event(
+            actor=actor,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            details=details,
+        ),
+    )
 
 
 DATA_QUERY_AUDIT_INFO = DataQueryAuditType.INFO.value
@@ -499,6 +515,14 @@ def _record_data_query_audit(
         )
         session.add(log)
         session.commit()
+        dispatch_siem_event(
+            build_data_query_audit_event(
+                request.user_id,
+                request.datasource_id,
+                log,
+                audit_metadata,
+            )
+        )
         return log
     except SQLAlchemyError:
         session.rollback()

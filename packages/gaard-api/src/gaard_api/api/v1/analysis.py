@@ -34,6 +34,7 @@ from gaard_api.api.v1.query import (
     run_sql_request,
 )
 from gaard_api.query_hooks import DatasourceContext, DatasourceContexts
+from gaard_api.siem import build_analysis_event, dispatch_siem_event
 
 router = APIRouter()
 
@@ -203,6 +204,13 @@ def append_analysis_event(
                 "occurred_at": utc_iso(),
                 event_type: payload,
             }
+            dispatch_siem_event(
+                build_analysis_event(
+                    session_id=session_id,
+                    event_type=event_type,
+                    payload=event,
+                )
+            )
             return event
 
         events = json_list(record.events_json)
@@ -217,6 +225,15 @@ def append_analysis_event(
         events.append(event)
         record.events_json = json_dumps(events)
         session.commit()
+        dispatch_siem_event(
+            build_analysis_event(
+                session_id=session_id,
+                event_type=event_type,
+                payload=event,
+                user_id=record.user_id,
+                datasource_id=record.datasource_id,
+            )
+        )
         return event
 
 

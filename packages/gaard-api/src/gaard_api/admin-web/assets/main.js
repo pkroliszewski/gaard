@@ -579,19 +579,18 @@ async function handleExtensionAdminApiRequest(frame, data) {
   const request = data.request || {};
   const method = String(request.method || "GET").toUpperCase();
   const path = String(request.path || "");
-  const allowedRequests = new Set([
-    "POST /api/v1/admin/datasources",
-    "POST /api/v1/admin/datasources/test"
-  ]);
+  const extensionId = extensionIdForFrame(frame);
+  const allowedRequests = allowedRequestsForExtension(extensionId);
   if (!requestId) return;
   try {
     if (!allowedRequests.has(`${method} ${path}`)) {
       throw new Error("Extension request is not allowed.");
     }
-    const payload = await api(path, {
-      method,
-      body: JSON.stringify(request.body || {})
-    });
+    const options = { method };
+    if (!["GET", "HEAD"].includes(method)) {
+      options.body = JSON.stringify(request.body || {});
+    }
+    const payload = await api(path, options);
     frame.contentWindow?.postMessage(
       {
         type: "gaard:admin-api-response",
@@ -612,6 +611,29 @@ async function handleExtensionAdminApiRequest(frame, data) {
       window.location.origin
     );
   }
+}
+function extensionIdForFrame(frame) {
+  try {
+    const url = new URL(frame.src, window.location.origin);
+    const match = url.pathname.match(/^\/admin\/extensions\/([^/]+)(?:\/|$)/);
+    return match ? match[1] : "";
+  } catch {
+    return "";
+  }
+}
+function allowedRequestsForExtension(extensionId) {
+  const allowedRequestsByExtension = {
+    "duckdb-excel-connector": new Set([
+      "POST /api/v1/admin/datasources",
+      "POST /api/v1/admin/datasources/test"
+    ]),
+    "siem-forwarder": new Set([
+      "GET /api/v1/extensions/siem-forwarder/siem/config",
+      "PUT /api/v1/extensions/siem-forwarder/siem/config",
+      "POST /api/v1/extensions/siem-forwarder/siem/test"
+    ])
+  };
+  return allowedRequestsByExtension[extensionId] || new Set();
 }
 function renderOverview() {
   const overview = state.overview;
