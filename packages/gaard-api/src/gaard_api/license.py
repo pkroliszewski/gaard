@@ -471,6 +471,9 @@ class LicenseService:
             )
         )
 
+    def identity_management_allowed(self) -> bool:
+        return bool(self.refresh_if_due().features.get("identity_management"))
+
     def ensure_datasource_type_allowed(self, database_type: str) -> None:
         if is_sql_source_type(database_type):
             self.require_feature(
@@ -536,9 +539,15 @@ class LicenseService:
         )
 
     def ensure_identity_management_allowed(self) -> None:
-        self.require_feature(
-            "identity_management",
-            "Identity management is available with the Enterprise plan.",
+        if self.identity_management_allowed():
+            return
+
+        state = self.state
+        raise LicenseAccessError(
+            (
+                "Identity management is available with the Enterprise plan. "
+                f"Current plan: {state.plan}."
+            )
         )
 
     def ensure_machine_consumer_limit(self, count: int) -> None:

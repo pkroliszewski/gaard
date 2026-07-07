@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any, Iterator, Protocol
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -26,6 +26,7 @@ from gaard_api.admin.services import (
     json_dumps,
     upsert_analysis_business_logic_suggestion,
 )
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 from gaard_api.api.v1.query import (
     create_llm_client,
     effective_query_request,
@@ -1200,7 +1201,10 @@ def start_stream_for_record(
 
 
 @router.post("/analysis/stream")
-def analysis_stream(request: QueryRequest) -> StreamingResponse:
+def analysis_stream(
+    request: QueryRequest,
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> StreamingResponse:
     effective_request, datasource_context = effective_query_request(request)
     record = create_analysis_session_record(effective_request)
 
@@ -1214,6 +1218,7 @@ def analysis_stream(request: QueryRequest) -> StreamingResponse:
 def analysis_message_stream(
     session_id: str,
     request: AnalysisMessageRequest,
+    _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> StreamingResponse:
     record = load_analysis_session_record(session_id)
     if record is None:
@@ -1251,7 +1256,10 @@ def analysis_message_stream(
 
 
 @router.get("/analysis/{session_id}")
-def get_analysis_session(session_id: str) -> dict[str, Any]:
+def get_analysis_session(
+    session_id: str,
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> dict[str, Any]:
     record = load_analysis_session_record(session_id)
     if record is None:
         raise HTTPException(

@@ -97,6 +97,42 @@ def change_password(client: TestClient, token: str) -> None:
     assert response.json()["must_change_password"] is False
 
 
+def test_login_does_not_query_extension_auth_without_identity_license(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    class ExplodingAuthRegistry:
+        def authenticate(self, *args, **kwargs):
+            raise AssertionError("extension auth provider should not be queried")
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "identity_management_allowed",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        admin_api,
+        "get_auth_provider_registry",
+        lambda: ExplodingAuthRegistry(),
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "external-user", "password": "external-password"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid username or password."
+
+
+def auth_headers(client: TestClient) -> dict[str, str]:
+    token = login(client)["token"]
+    change_password(client, token)
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_admin_lists_datasource_types_from_connector_registry(admin_client: TestClient) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -211,6 +247,35 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     logo_response = admin_client.get("/admin/assets/getgaard.svg")
     assert logo_response.status_code == 200
     assert "<svg" in logo_response.text
+
+
+def test_query_endpoint_requires_authentication(admin_client: TestClient) -> None:
+    response = admin_client.post(
+        "/api/v1/query",
+        json={
+            "question": "How many active patients are there?",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_query_endpoint_accepts_authenticated_user(admin_client: TestClient) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    response = admin_client.post(
+        "/api/v1/query",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "question": "How many active patients are there?",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer"]
 
 
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
@@ -1670,6 +1735,8 @@ def test_datasource_connector_builds_teradata_url_from_connection_fields(
 def test_sql_generation_prompt_uses_active_datasource_dialect(
     admin_client: TestClient,
 ) -> None:
+    headers = auth_headers(admin_client)
+
     with create_session() as session:
         for connector in session.scalars(select(DatasourceConnector)):
             connector.active = False
@@ -1696,6 +1763,7 @@ def test_sql_generation_prompt_uses_active_datasource_dialect(
 
     response = admin_client.post(
         "/api/v1/prompts/sql-generation",
+        headers=headers,
         json={"question": "ile jest wpisów w tabeli lead"},
     )
 
@@ -1851,11 +1919,11 @@ def test_datasource_schema_table_settings_are_saved(admin_client: TestClient) ->
 
 
 def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "How many active patients are there?",
             "user_id": "alice",
@@ -1866,7 +1934,7 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -1880,28 +1948,28 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
 
     classification_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?output_classification=neutral_data",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert classification_response.status_code == 200
     assert len(classification_response.json()["items"]) == 1
 
     sql_match_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?sql_contains=COUNT",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert sql_match_response.status_code == 200
     assert len(sql_match_response.json()["items"]) == 1
 
     sql_miss_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?sql_contains=missing_fragment",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert sql_miss_response.status_code == 200
     assert sql_miss_response.json()["items"] == []
 
     invalid_classification_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?output_classification=surprising",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert invalid_classification_response.status_code == 400
 
@@ -1916,11 +1984,11 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
 def test_query_endpoint_can_return_raw_sql_output_without_interpretation(
     admin_client: TestClient,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "pokaż wartość kontrolną",
             "user_id": "alice",
@@ -1940,7 +2008,7 @@ def test_query_endpoint_can_return_raw_sql_output_without_interpretation(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -1954,11 +2022,11 @@ def test_query_endpoint_can_return_raw_sql_output_without_interpretation(
 def test_query_endpoint_ignores_legacy_mode_field(
     admin_client: TestClient,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "pokaż wartość kontrolną",
             "user_id": "alice",
@@ -1975,7 +2043,7 @@ def test_query_endpoint_ignores_legacy_mode_field(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -1987,9 +2055,11 @@ def test_query_endpoint_ignores_legacy_mode_field(
 def test_query_stream_ignores_legacy_mode_field(
     admin_client: TestClient,
 ) -> None:
+    headers = auth_headers(admin_client)
 
     response = admin_client.post(
         "/api/v1/query/stream",
+        headers=headers,
         json={
             "question": "pokaż wartość kontrolną",
             "user_id": "alice",
@@ -2008,8 +2078,7 @@ def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
     admin_client: TestClient,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
     with create_session() as session:
         set_setting(session, "gaard_sql_generation_mode", "llm", "test")
         session.commit()
@@ -2036,6 +2105,7 @@ def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
     for question in questions:
         query_response = admin_client.post(
             "/api/v1/query",
+            headers=headers,
             json={
                 "question": question,
                 "user_id": "alice",
@@ -2061,7 +2131,7 @@ def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=access_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -2088,8 +2158,7 @@ def test_query_writes_access_audit_for_generated_non_select_sql(
     admin_client: TestClient,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     def generate_update_sql(self, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
@@ -2102,6 +2171,7 @@ def test_query_writes_access_audit_for_generated_non_select_sql(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "How many patients are there?",
             "user_id": "alice",
@@ -2119,7 +2189,7 @@ def test_query_writes_access_audit_for_generated_non_select_sql(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=access_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -2136,8 +2206,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
     admin_client: TestClient,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     class AllowIntentClassifier:
         def classify(self, request: QueryRequest) -> QueryIntentClassification:
@@ -2168,6 +2237,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "jakie zlecenia były ostatnio modyfikowane?",
             "user_id": "alice",
@@ -2179,7 +2249,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=sql_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -2198,8 +2268,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
     admin_client: TestClient,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     class AllowIntentClassifier:
         def classify(self, request: QueryRequest) -> QueryIntentClassification:
@@ -2230,6 +2299,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "jakie zlecenia były ostatnio modyfikowane?",
             "user_id": "alice",
@@ -2240,7 +2310,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=sql_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -2251,12 +2321,11 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
 
 
 def test_query_audit_uses_active_datasource_connector_key(admin_client: TestClient) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
 
     create_response = admin_client.post(
         "/api/v1/admin/datasources",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "connector_key": "con_db",
             "name": "Connected DB",
@@ -2271,6 +2340,7 @@ def test_query_audit_uses_active_datasource_connector_key(admin_client: TestClie
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "How many active patients are there?",
             "user_id": "alice",
@@ -2282,7 +2352,7 @@ def test_query_audit_uses_active_datasource_connector_key(admin_client: TestClie
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -2293,6 +2363,8 @@ def test_query_without_active_datasources_returns_before_ai(
     admin_client: TestClient,
     monkeypatch,
 ) -> None:
+    headers = auth_headers(admin_client)
+
     with create_session() as session:
         for connector in session.scalars(select(DatasourceConnector)):
             connector.active = False
@@ -2312,6 +2384,7 @@ def test_query_without_active_datasources_returns_before_ai(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "How many active patients are there?",
             "user_id": "alice",
@@ -2334,13 +2407,12 @@ def test_query_endpoint_writes_sql_error_data_query_audit(
     admin_client: TestClient,
     tmp_path: Path,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
     empty_db = tmp_path / "empty.db"
 
     create_response = admin_client.post(
         "/api/v1/admin/datasources",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "connector_key": "broken_db",
             "name": "Broken DB",
@@ -2355,6 +2427,7 @@ def test_query_endpoint_writes_sql_error_data_query_audit(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "How many active patients are there?",
             "user_id": "alice",
@@ -2366,7 +2439,7 @@ def test_query_endpoint_writes_sql_error_data_query_audit(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=sql_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert audit_response.status_code == 200
@@ -2393,7 +2466,7 @@ def test_query_endpoint_writes_sql_error_data_query_audit(
 
     info_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=info",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert info_response.status_code == 200
@@ -2405,8 +2478,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
     learning_llm = stub_business_logic_learning_llm(
         monkeypatch,
         {
@@ -2456,7 +2528,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     create_response = admin_client.post(
         "/api/v1/admin/datasources",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "connector_key": "con_db",
             "name": "Connected DB",
@@ -2472,6 +2544,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "Który pracownik zrealizował najwięcej projektów",
             "user_id": "alice",
@@ -2482,7 +2555,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=sql_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     audit_item = audit_response.json()["items"][0]
 
@@ -2498,7 +2571,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     suggestions_response = admin_client.get(
         "/api/v1/admin/business-logic-suggestions",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert suggestions_response.status_code == 200
@@ -2513,7 +2586,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     enable_response = admin_client.put(
         f"/api/v1/admin/business-logic-suggestions/{suggestions[0]['id']}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={"enabled": True},
     )
 
@@ -2524,7 +2597,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     edit_response = admin_client.put(
         f"/api/v1/admin/business-logic-suggestions/{suggestions[0]['id']}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "title": "Updated business logic",
             "rule_text": "Use `zlecenia_zlecenie` for customer project orders.",
@@ -2541,7 +2614,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     empty_edit_response = admin_client.put(
         f"/api/v1/admin/business-logic-suggestions/{suggestions[0]['id']}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={"rule_text": "   "},
     )
 
@@ -2549,7 +2622,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     delete_response = admin_client.delete(
         f"/api/v1/admin/business-logic-suggestions/{suggestions[0]['id']}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert delete_response.status_code == 200
@@ -2561,8 +2634,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
     stub_business_logic_learning_llm(
         monkeypatch,
         {
@@ -2618,7 +2690,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 
     create_response = admin_client.post(
         "/api/v1/admin/datasources",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "connector_key": "con_db",
             "name": "Connected DB",
@@ -2634,6 +2706,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "Podaj dane osobowe pracownika nr 42",
             "user_id": "alice",
@@ -2644,7 +2717,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=sql_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     audit_item = audit_response.json()["items"][0]
 
@@ -2654,7 +2727,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 
     suggestions_response = admin_client.get(
         "/api/v1/admin/business-logic-suggestions",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert suggestions_response.status_code == 200
@@ -2669,7 +2742,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 
     enable_response = admin_client.put(
         f"/api/v1/admin/business-logic-suggestions/{suggestions[0]['id']}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={"enabled": True},
     )
 
@@ -2682,8 +2755,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    headers = auth_headers(admin_client)
     learning_llm = stub_business_logic_learning_llm(
         monkeypatch,
         {
@@ -2744,7 +2816,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
 
     create_response = admin_client.post(
         "/api/v1/admin/datasources",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "connector_key": "con_db",
             "name": "Connected DB",
@@ -2759,6 +2831,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
 
     query_response = admin_client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "Pokaż klientów z największą liczbą zleceń",
             "user_id": "alice",
@@ -2769,7 +2842,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
 
     audit_response = admin_client.get(
         "/api/v1/admin/audit/data-queries?audit_type=sql_error",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     audit_item = audit_response.json()["items"][0]
 
@@ -2783,7 +2856,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
 
     suggestions_response = admin_client.get(
         "/api/v1/admin/business-logic-suggestions",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     suggestions = suggestions_response.json()["items"]

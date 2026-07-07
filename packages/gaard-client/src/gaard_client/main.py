@@ -9,7 +9,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx2 as httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -39,6 +39,12 @@ class ClientQueryRequest(BaseModel):
     question: str = Field(min_length=1)
     backend_url: str | None = None
     mode: str = "sql"
+
+
+class ClientLoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    backend_url: str | None = None
 
 
 class ClientAnalysisMessageRequest(BaseModel):
@@ -73,6 +79,21 @@ def normalize_backend_url(value: str) -> str:
     return normalized
 
 
+def backend_auth_headers(authorization: str | None) -> dict[str, str]:
+    return {"Authorization": authorization} if authorization else {}
+
+
+def backend_request_kwargs(
+    authorization: str | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"json": payload}
+    headers = backend_auth_headers(authorization)
+    if headers:
+        kwargs["headers"] = headers
+    return kwargs
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -89,7 +110,10 @@ def config_js() -> Response:
 
 
 @app.post("/api/query")
-async def query_backend(request: ClientQueryRequest) -> dict[str, Any]:
+async def query_backend(
+    request: ClientQueryRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     query_url = f"{backend_url}/api/v1/query"
 
@@ -97,10 +121,41 @@ async def query_backend(request: ClientQueryRequest) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 query_url,
-                json={
+                **backend_request_kwargs(authorization, {
                     "question": request.question,
                     "user_id": "client",
                     "mode": request.mode,
+                }),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.post("/api/auth/login")
+async def login_backend(request: ClientLoginRequest) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    login_url = f"{backend_url}/api/v1/admin/auth/login"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                login_url,
+                json={
+                    "username": request.username,
+                    "password": request.password,
                 },
             )
     except httpx.HTTPError as exc:
@@ -121,7 +176,10 @@ async def query_backend(request: ClientQueryRequest) -> dict[str, Any]:
 
 
 @app.post("/api/widgets/from-query")
-async def create_widget_from_query(request: ClientWidgetFromQueryRequest) -> dict[str, Any]:
+async def create_widget_from_query(
+    request: ClientWidgetFromQueryRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     widget_url = f"{backend_url}/api/v1/admin/overview/widgets/from-query"
 
@@ -129,14 +187,14 @@ async def create_widget_from_query(request: ClientWidgetFromQueryRequest) -> dic
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 widget_url,
-                json={
+                **backend_request_kwargs(authorization, {
                     "label": request.label,
                     "widget_type": request.widget_type,
                     "datasource_key": request.datasource_key,
                     "question": request.question,
                     "sql": request.sql,
                     "result_mode": request.result_mode,
-                },
+                }),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(
@@ -156,7 +214,10 @@ async def create_widget_from_query(request: ClientWidgetFromQueryRequest) -> dic
 
 
 @app.post("/api/query/stream")
-async def query_backend_stream(request: ClientQueryRequest) -> StreamingResponse:
+async def query_backend_stream(
+    request: ClientQueryRequest,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     query_url = f"{backend_url}/api/v1/query/stream"
 
@@ -166,11 +227,11 @@ async def query_backend_stream(request: ClientQueryRequest) -> StreamingResponse
                 async with client.stream(
                     "POST",
                     query_url,
-                    json={
+                    **backend_request_kwargs(authorization, {
                         "question": request.question,
                         "user_id": "client",
                         "mode": request.mode,
-                    },
+                    }),
                 ) as response:
                     if response.status_code >= 400:
                         body = await response.aread()
@@ -204,7 +265,10 @@ async def query_backend_stream(request: ClientQueryRequest) -> StreamingResponse
 
 
 @app.post("/api/analysis/stream")
-async def analysis_backend_stream(request: ClientQueryRequest) -> StreamingResponse:
+async def analysis_backend_stream(
+    request: ClientQueryRequest,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     analysis_url = f"{backend_url}/api/v1/analysis/stream"
 
@@ -215,6 +279,7 @@ async def analysis_backend_stream(request: ClientQueryRequest) -> StreamingRespo
                 "question": request.question,
                 "user_id": "client",
             },
+            authorization=authorization,
         ):
             yield chunk
 
@@ -225,6 +290,7 @@ async def analysis_backend_stream(request: ClientQueryRequest) -> StreamingRespo
 async def analysis_message_backend_stream(
     session_id: str,
     request: ClientAnalysisMessageRequest,
+    authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     analysis_url = f"{backend_url}/api/v1/analysis/{session_id}/messages/stream"
@@ -235,16 +301,25 @@ async def analysis_message_backend_stream(
             payload={
                 "message": request.message,
             },
+            authorization=authorization,
         ):
             yield chunk
 
     return StreamingResponse(stream_backend(), media_type="application/x-ndjson")
 
 
-async def proxy_stream(url: str, payload: dict[str, Any]) -> AsyncIterator[str]:
+async def proxy_stream(
+    url: str,
+    payload: dict[str, Any],
+    authorization: str | None,
+) -> AsyncIterator[str]:
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", url, json=payload) as response:
+            async with client.stream(
+                "POST",
+                url,
+                **backend_request_kwargs(authorization, payload),
+            ) as response:
                 if response.status_code >= 400:
                     body = await response.aread()
                     detail = body.decode("utf-8", errors="replace")

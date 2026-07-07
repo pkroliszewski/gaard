@@ -50,7 +50,41 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     reset_metadata_store_for_tests()
 
 
+def login(client: TestClient) -> dict:
+    response = client.post(
+        "/api/v1/admin/auth/login",
+        json={
+            "username": "admin",
+            "password": "admin",
+        },
+    )
+
+    assert response.status_code == 200
+    return response.json()
+
+
+def change_password(client: TestClient, token: str) -> None:
+    response = client.post(
+        "/api/v1/admin/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "admin",
+            "new_password": "new-admin-password",
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def auth_headers(client: TestClient) -> dict[str, str]:
+    token = login(client)["token"]
+    change_password(client, token)
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_query_returns_configuration_error_for_missing_llm_key(client: TestClient) -> None:
+    headers = auth_headers(client)
+
     with create_session() as session:
         set_setting(session, "gaard_sql_generation_mode", "llm", "test")
         set_setting(session, "gaard_llm_api_key", "change-me", "test")
@@ -58,6 +92,7 @@ def test_query_returns_configuration_error_for_missing_llm_key(client: TestClien
 
     response = client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "Ilu jest pacjentów?",
         },
@@ -75,6 +110,8 @@ def test_query_returns_configuration_error_for_missing_llm_key(client: TestClien
 def test_query_returns_configuration_error_for_missing_llm_key_in_interpreter(
     client: TestClient,
 ) -> None:
+    headers = auth_headers(client)
+
     with create_session() as session:
         set_setting(session, "gaard_sql_generation_mode", "mock", "test")
         set_setting(session, "gaard_result_interpretation_mode", "llm", "test")
@@ -83,6 +120,7 @@ def test_query_returns_configuration_error_for_missing_llm_key_in_interpreter(
 
     response = client.post(
         "/api/v1/query",
+        headers=headers,
         json={
             "question": "Ilu jest pacjentów?",
         },

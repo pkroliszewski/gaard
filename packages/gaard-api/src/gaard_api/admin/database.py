@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
 from gaard_api.admin.models import (
     AdminSetting,
+    AdminSession,
     AdminUser,
     Base,
     DataQueryAuditLog,
@@ -73,6 +74,7 @@ def init_metadata_store() -> None:
     with _init_lock:
         engine = get_engine()
         Base.metadata.create_all(engine)
+        ensure_admin_session_schema(engine)
         ensure_data_query_audit_schema(engine)
         ensure_overview_widget_schema(engine)
 
@@ -427,6 +429,31 @@ def ensure_data_query_audit_schema(engine: Engine) -> None:
         audit_log_table = cast(Table, DataQueryAuditLog.__table__)
 
         for index in audit_log_table.indexes:
+            index.create(bind=connection, checkfirst=True)
+
+
+def ensure_admin_session_schema(engine: Engine) -> None:
+    inspector = inspect(engine)
+
+    if "admin_sessions" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("admin_sessions")}
+
+    additions = {
+        "username": "ALTER TABLE admin_sessions ADD COLUMN username VARCHAR(255) DEFAULT ''",
+        "role": "ALTER TABLE admin_sessions ADD COLUMN role VARCHAR(50) DEFAULT 'admin'",
+        "auth_provider": (
+            "ALTER TABLE admin_sessions ADD COLUMN auth_provider VARCHAR(255) DEFAULT 'local'"
+        ),
+    }
+    with engine.begin() as connection:
+        for column_name, sql in additions.items():
+            if column_name not in columns:
+                connection.execute(text(sql))
+
+        session_table = cast(Table, AdminSession.__table__)
+        for index in session_table.indexes:
             index.create(bind=connection, checkfirst=True)
 
 

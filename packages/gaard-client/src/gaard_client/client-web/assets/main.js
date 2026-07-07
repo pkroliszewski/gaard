@@ -4,6 +4,8 @@ var params = new URLSearchParams(window.location.search);
 var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || window.GAARD_CLIENT_CONFIG?.backendUrl || "http://localhost:8000").replace(/\/+$/, "");
 var state = {
   backendUrl: configuredBackendUrl,
+  token: localStorage.getItem("gaard_client_token") || "",
+  username: localStorage.getItem("gaard_client_username") || "",
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
   nextMessageId: 1,
@@ -15,10 +17,18 @@ function escapeHtml(value) {
 }
 function render(options = {}) {
   if (!app) return;
+  if (!state.token) {
+    renderLogin();
+    return;
+  }
   app.innerHTML = `
     <main class="shell">
       <header class="header">
         <h1>GAARD - Governed AI Access to Relational Data</h1>
+        <div class="header-actions">
+          <span>${escapeHtml(state.username || "")}</span>
+          <button type="button" data-logout>Sign Out</button>
+        </div>
       </header>
       <section class="history" aria-live="polite">
         ${state.messages.length ? state.messages.map(renderMessage).join("") : `<div class="empty-state">Ask a governed data question.</div>`}
@@ -45,6 +55,7 @@ function render(options = {}) {
       </form>
     </main>`;
   document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
+  document.querySelector("[data-logout]")?.addEventListener("click", logout);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
     input2.addEventListener("change", handleModeChange);
   });
@@ -69,6 +80,22 @@ function render(options = {}) {
   if (options.scrollToLatest) {
     scrollToLatest();
   }
+}
+function renderLogin() {
+  app.innerHTML = `
+    <main class="login-shell">
+      <section class="login-panel">
+        <h1>GAARD Client</h1>
+        <p>Sign in with your GAARD account.</p>
+        <form id="login-form" class="form-grid">
+          <label>Username<input name="username" autocomplete="username" /></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" /></label>
+          ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
+          <div class="form-actions"><button class="primary" type="submit">Sign in</button></div>
+        </form>
+      </section>
+    </main>`;
+  document.querySelector("#login-form")?.addEventListener("submit", login);
 }
 function renderMessage(message) {
   const rows = getRows(message.response);
@@ -273,7 +300,8 @@ async function saveWidgetFromMessage(event) {
     const response = await fetch("/api/widgets/from-query", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        ...authHeaders()
       },
       body: JSON.stringify({
         label: buildWidgetLabel(message.question),
@@ -296,6 +324,48 @@ async function saveWidgetFromMessage(event) {
   } finally {
     render();
   }
+}
+function authHeaders() {
+  return state.token ? { Authorization: `Bearer ${state.token}` } : {};
+}
+async function login(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  state.error = "";
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username: String(data.get("username") || ""),
+        password: String(data.get("password") || ""),
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(extractErrorMessage(payload));
+    }
+    state.token = payload.token || "";
+    state.username = payload.username || "";
+    localStorage.setItem("gaard_client_token", state.token);
+    localStorage.setItem("gaard_client_username", state.username);
+    render();
+  } catch (error) {
+    state.error = error.message || "Login failed.";
+    renderLogin();
+  }
+}
+function logout() {
+  state.token = "";
+  state.username = "";
+  state.messages = [];
+  localStorage.removeItem("gaard_client_token");
+  localStorage.removeItem("gaard_client_username");
+  render();
 }
 function buildWidgetLabel(question) {
   const compact = question.replace(/\s+/g, " ").trim();
@@ -347,7 +417,8 @@ async function submitQuestion(event) {
       const response = await fetch("/api/query", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...authHeaders()
         },
         body: JSON.stringify({
           question,
@@ -374,7 +445,8 @@ async function submitAnalysisQuestion(message, question) {
   const response = await fetch("/api/analysis/stream", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...authHeaders()
     },
     body: JSON.stringify({
       question,
@@ -414,7 +486,8 @@ async function continueAnalysis(message, reply) {
   const response = await fetch(`/api/analysis/${encodeURIComponent(message.analysisSessionId)}/messages/stream`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...authHeaders()
     },
     body: JSON.stringify({
       message: reply,

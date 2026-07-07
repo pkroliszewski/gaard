@@ -2,7 +2,7 @@ import json
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from gaard_core.errors import (
@@ -50,6 +50,7 @@ from gaard_api.admin.services import (
     record_data_query_pipeline_error_audit,
     record_data_query_sql_error_audit,
 )
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 from gaard_api.extensions import get_query_hook_registry
 from gaard_api.license import license_service
 from gaard_api.query_hooks import (
@@ -708,7 +709,10 @@ def ndjson_line(payload: dict[str, Any]) -> str:
 
 
 @router.post("/query", response_model=QueryResponse)
-def query(request: QueryRequest) -> QueryResponse:
+def query(
+    request: QueryRequest,
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> QueryResponse:
     effective_request, datasource_context = effective_query_request(request)
     active_datasource_ids = [
         connector.connector_key for connector, _cache in datasource_context
@@ -724,7 +728,10 @@ def query(request: QueryRequest) -> QueryResponse:
 
 
 @router.post("/query/stream")
-def query_stream(request: QueryRequest) -> StreamingResponse:
+def query_stream(
+    request: QueryRequest,
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> StreamingResponse:
     effective_request, datasource_context = effective_query_request(request)
     active_datasource_ids = [
         connector.connector_key for connector, _cache in datasource_context

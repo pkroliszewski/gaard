@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from gaard_core.schema.context import SchemaContextService
 from gaard_core.schema.models import DatabaseSchema
@@ -7,6 +7,7 @@ from gaard_api.admin.services import (
     get_datasource_schema_context_safe,
     selected_schema_from_cache,
 )
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
 from gaard_api.extensions import get_connector_registry
@@ -22,7 +23,9 @@ def get_schema_cache_key(database_url: str | None = None, sql_dialect: str | Non
 
 
 @router.get("/schema", response_model=DatabaseSchema)
-def get_schema() -> DatabaseSchema:
+def get_schema(
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> DatabaseSchema:
     datasource_context = get_datasource_schema_context_safe()
 
     if datasource_context is not None:
@@ -44,7 +47,9 @@ def get_schema() -> DatabaseSchema:
 
 
 @router.delete("/schema/cache")
-def invalidate_schema_cache() -> dict[str, str]:
+def invalidate_schema_cache(
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> dict[str, str]:
     datasource_context = get_datasource_schema_context_safe()
 
     if datasource_context is not None:
