@@ -942,11 +942,13 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
             role="admin",
         )
 
-    identity = get_auth_provider_registry().authenticate(
-        session,
-        request.username,
-        request.password,
-    )
+    identity = None
+    if license_service.identity_management_allowed():
+        identity = get_auth_provider_registry().authenticate(
+            session,
+            request.username,
+            request.password,
+        )
 
     if identity is None:
         raise HTTPException(

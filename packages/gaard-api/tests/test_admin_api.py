@@ -97,6 +97,36 @@ def change_password(client: TestClient, token: str) -> None:
     assert response.json()["must_change_password"] is False
 
 
+def test_login_does_not_query_extension_auth_without_identity_license(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    class ExplodingAuthRegistry:
+        def authenticate(self, *args, **kwargs):
+            raise AssertionError("extension auth provider should not be queried")
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "identity_management_allowed",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        admin_api,
+        "get_auth_provider_registry",
+        lambda: ExplodingAuthRegistry(),
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "external-user", "password": "external-password"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid username or password."
+
+
 def auth_headers(client: TestClient) -> dict[str, str]:
     token = login(client)["token"]
     change_password(client, token)

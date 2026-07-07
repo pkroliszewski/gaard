@@ -12,6 +12,7 @@ import pytest
 from gaard_api.admin.database import reset_metadata_store_for_tests
 from gaard_api.core.settings import settings
 from gaard_api.license import (
+    LicenseAccessError,
     LicenseService,
     license_service,
 )
@@ -139,6 +140,32 @@ def test_active_enterprise_license_enables_enterprise_entitlements(
     assert state.plan == "enterprise"
     assert all(state.features.values())
     assert all(value is None for value in state.limits.values())
+
+
+def test_identity_management_requires_enterprise_entitlement(
+    isolated_license_service: LicenseService,
+) -> None:
+    state = isolated_license_service.refresh(force=True)
+
+    assert state.plan == "community"
+    assert isolated_license_service.identity_management_allowed() is False
+    with pytest.raises(LicenseAccessError, match="Enterprise plan"):
+        isolated_license_service.ensure_identity_management_allowed()
+
+
+def test_identity_management_allows_active_enterprise_license(
+    isolated_license_service: LicenseService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
+    isolated_license_service.set_http_post_for_tests(
+        lambda url, json, timeout: response(valid_payload("enterprise"))
+    )
+    state = isolated_license_service.refresh(force=True)
+
+    assert state.plan == "enterprise"
+    assert isolated_license_service.identity_management_allowed() is True
+    isolated_license_service.ensure_identity_management_allowed()
 
 
 def test_env_license_key_takes_precedence_over_admin_ui_key(
