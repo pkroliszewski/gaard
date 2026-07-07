@@ -42,6 +42,38 @@ def parse_ndjson(text: str) -> list[dict]:
     return [json.loads(line) for line in text.strip().splitlines() if line.strip()]
 
 
+def login(client: TestClient) -> dict:
+    response = client.post(
+        "/api/v1/admin/auth/login",
+        json={
+            "username": "admin",
+            "password": "admin",
+        },
+    )
+
+    assert response.status_code == 200
+    return response.json()
+
+
+def change_password(client: TestClient, token: str) -> None:
+    response = client.post(
+        "/api/v1/admin/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "admin",
+            "new_password": "new-admin-password",
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def auth_headers(client: TestClient) -> dict[str, str]:
+    token = login(client)["token"]
+    change_password(client, token)
+    return {"Authorization": f"Bearer {token}"}
+
+
 def create_active_default_datasource() -> DatasourceConnector:
     with create_session() as session:
         connector = session.scalar(
@@ -67,8 +99,11 @@ def create_active_default_datasource() -> DatasourceConnector:
 def test_analysis_stream_runs_final_query_and_persists_session(
     analysis_client: TestClient,
 ) -> None:
+    headers = auth_headers(analysis_client)
+
     response = analysis_client.post(
         "/api/v1/analysis/stream",
+        headers=headers,
         json={
             "question": "Ilu jest pacjentów?",
             "user_id": "alice",
@@ -93,7 +128,7 @@ def test_analysis_stream_runs_final_query_and_persists_session(
     assert final["metadata"]["analysis_mode"] == "analysis"
     assert final["metadata"]["analysis_session_id"] == session_id
 
-    dump_response = analysis_client.get(f"/api/v1/analysis/{session_id}")
+    dump_response = analysis_client.get(f"/api/v1/analysis/{session_id}", headers=headers)
 
     assert dump_response.status_code == 200
     item = dump_response.json()["item"]
@@ -114,8 +149,11 @@ def test_analysis_stream_runs_final_query_and_persists_session(
 def test_analysis_stream_can_pause_for_user_and_resume(
     analysis_client: TestClient,
 ) -> None:
+    headers = auth_headers(analysis_client)
+
     response = analysis_client.post(
         "/api/v1/analysis/stream",
+        headers=headers,
         json={
             "question": "dopytaj o zakres",
             "user_id": "alice",
@@ -128,12 +166,13 @@ def test_analysis_stream_can_pause_for_user_and_resume(
     assert events[-1]["event"] == "user_question"
     assert "Doprecyzuj" in events[-1]["user_question"]["question"]
 
-    waiting_response = analysis_client.get(f"/api/v1/analysis/{session_id}")
+    waiting_response = analysis_client.get(f"/api/v1/analysis/{session_id}", headers=headers)
     assert waiting_response.status_code == 200
     assert waiting_response.json()["item"]["status"] == "waiting_for_user"
 
     resume_response = analysis_client.post(
         f"/api/v1/analysis/{session_id}/messages/stream",
+        headers=headers,
         json={"message": "ostatni miesiąc"},
     )
 
@@ -143,7 +182,10 @@ def test_analysis_stream_can_pause_for_user_and_resume(
     assert resumed_events[-1]["event"] == "final"
     assert resumed_events[-1]["final"]["metadata"]["analysis_status"] == "completed"
 
-    completed_response = analysis_client.get(f"/api/v1/analysis/{session_id}")
+    completed_response = analysis_client.get(
+        f"/api/v1/analysis/{session_id}",
+        headers=headers,
+    )
     assert completed_response.status_code == 200
     context = completed_response.json()["item"]["context"]
     assert context["messages"][-1]["content"] == "ostatni miesiąc"
@@ -152,6 +194,7 @@ def test_analysis_stream_can_pause_for_user_and_resume(
 def test_analysis_database_step_can_record_business_logic_suggestion(
     analysis_client: TestClient,
 ) -> None:
+    headers = auth_headers(analysis_client)
     connector = create_active_default_datasource()
     with create_session() as session:
         set_setting(session, "gaard_analysis_auto_enable_business_logic", "true", "test")
@@ -159,6 +202,7 @@ def test_analysis_database_step_can_record_business_logic_suggestion(
 
     response = analysis_client.post(
         "/api/v1/analysis/stream",
+        headers=headers,
         json={
             "question": "sprawdź słownik wartości",
             "user_id": "alice",
@@ -199,6 +243,7 @@ def test_analysis_routes_database_evidence_questions_to_database(
     analysis_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    headers = auth_headers(analysis_client)
     connector = create_active_default_datasource()
 
     class EvidencePlanner:
@@ -245,6 +290,7 @@ def test_analysis_routes_database_evidence_questions_to_database(
 
     response = analysis_client.post(
         "/api/v1/analysis/stream",
+        headers=headers,
         json={
             "question": "List doctor specializations",
             "user_id": "alice",
@@ -285,6 +331,8 @@ def test_analysis_out_of_scope_has_friendly_final_answer(
     analysis_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    headers = auth_headers(analysis_client)
+
     class OutOfScopePlanner:
         def decide(self, request, datasource_context, context):
             return analysis_module.AnalysisPlannerDecision(
@@ -302,6 +350,7 @@ def test_analysis_out_of_scope_has_friendly_final_answer(
 
     response = analysis_client.post(
         "/api/v1/analysis/stream",
+        headers=headers,
         json={
             "question": "Jaka jest najlepsza Toyota?",
             "user_id": "alice",
@@ -320,6 +369,8 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
     analysis_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    headers = auth_headers(analysis_client)
+
     class HospitalCostPlanner:
         def __init__(self) -> None:
             self.calls = 0
@@ -379,6 +430,7 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
 
     response = analysis_client.post(
         "/api/v1/analysis/stream",
+        headers=headers,
         json={
             "question": (
                 "a jaki jest koszt wykonania Cardiology consultation dla szpitala?"
