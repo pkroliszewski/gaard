@@ -469,7 +469,7 @@ function renderShell() {
       </main>
     </div>
     ${renderOverviewWidgetModal()}
-    ${renderConfirmDialog()}`;
+    <div id="confirm-dialog-host">${renderConfirmDialog()}</div>`;
   attachShellHandlers();
   resizeExtensionFrames();
 }
@@ -598,9 +598,31 @@ window.addEventListener("message", (event) => {
   }
   if (data.type === "gaard:admin-api-request") {
     void handleExtensionAdminApiRequest(frame, data);
+    return;
+  }
+  if (data.type === "gaard:delete-confirmation-request") {
+    void handleExtensionDeleteConfirmationRequest(frame, data);
   }
 });
 window.addEventListener("resize", resizeExtensionFrames);
+async function handleExtensionDeleteConfirmationRequest(frame, data) {
+  const requestId = String(data.requestId || "");
+  const dialog = data.dialog || {};
+  if (!requestId) return;
+  const accepted = await requestConfirmation({
+    title: String(dialog.title || "Delete item"),
+    message: String(dialog.message || "Delete this item?"),
+    confirmLabel: String(dialog.confirmLabel || "Delete")
+  });
+  frame.contentWindow?.postMessage(
+    {
+      type: "gaard:delete-confirmation-result",
+      requestId,
+      accepted
+    },
+    window.location.origin
+  );
+}
 async function handleExtensionAdminApiRequest(frame, data) {
   const requestId = String(data.requestId || "");
   const request = data.request || {};
@@ -1001,7 +1023,7 @@ function renderConfirmDialog() {
   if (!dialog) return "";
   return `
     <div class="modal-backdrop" data-confirm-backdrop>
-      <section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+      <section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" tabindex="-1" data-confirm-dialog>
         <div class="modal-header">
           <div>
             <h2 id="confirm-dialog-title">${escapeHtml(dialog.title || "Confirm action")}</h2>
@@ -1018,7 +1040,7 @@ function renderConfirmDialog() {
 function requestConfirmation({ title, message, confirmLabel = "Delete" }) {
   return new Promise((resolve) => {
     state.confirmDialog = { title, message, confirmLabel, resolve };
-    render();
+    updateConfirmDialog();
   });
 }
 function closeConfirmDialog(accepted) {
@@ -1026,7 +1048,36 @@ function closeConfirmDialog(accepted) {
   if (!dialog) return;
   state.confirmDialog = null;
   dialog.resolve(accepted);
-  render();
+  updateConfirmDialog();
+}
+function updateConfirmDialog() {
+  const host = document.querySelector("#confirm-dialog-host");
+  if (!host) {
+    render();
+    return;
+  }
+  host.innerHTML = renderConfirmDialog();
+  attachConfirmDialogHandlers();
+}
+function attachConfirmDialogHandlers() {
+  const dialog = document.querySelector("[data-confirm-dialog]");
+  document.querySelector("[data-confirm-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      closeConfirmDialog(false);
+    }
+  });
+  dialog?.addEventListener("keydown", (event) => {
+    if (event.target !== dialog || event.key !== "Enter") return;
+    event.preventDefault();
+    closeConfirmDialog(true);
+  });
+  document.querySelector("[data-confirm-cancel]")?.addEventListener("click", () => {
+    closeConfirmDialog(false);
+  });
+  document.querySelector("[data-confirm-accept]")?.addEventListener("click", () => {
+    closeConfirmDialog(true);
+  });
+  dialog?.focus();
 }
 function getOverviewEditorWidget() {
   if (!state.overviewEditorWidgetKey) return null;
@@ -1849,17 +1900,7 @@ function attachSectionHandlers() {
       render();
     }
   });
-  document.querySelector("[data-confirm-backdrop]")?.addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) {
-      closeConfirmDialog(false);
-    }
-  });
-  document.querySelector("[data-confirm-cancel]")?.addEventListener("click", () => {
-    closeConfirmDialog(false);
-  });
-  document.querySelector("[data-confirm-accept]")?.addEventListener("click", () => {
-    closeConfirmDialog(true);
-  });
+  attachConfirmDialogHandlers();
   document.querySelectorAll("[data-overview-widget-form]").forEach((form) => {
     form.addEventListener("submit", saveOverviewWidget);
   });
