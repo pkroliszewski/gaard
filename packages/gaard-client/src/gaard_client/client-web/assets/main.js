@@ -2,60 +2,158 @@
 var app = document.querySelector("#app");
 var params = new URLSearchParams(window.location.search);
 var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || window.GAARD_CLIENT_CONFIG?.backendUrl || "http://localhost:8000").replace(/\/+$/, "");
+var storedToken = localStorage.getItem("gaard_client_token") || "";
+var storedUsername = localStorage.getItem("gaard_client_username") || "";
 var state = {
   backendUrl: configuredBackendUrl,
-  token: localStorage.getItem("gaard_client_token") || "",
-  username: localStorage.getItem("gaard_client_username") || "",
+  token: storedToken,
+  username: storedUsername,
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
   nextMessageId: 1,
   pending: false,
-  error: ""
+  error: "",
+  loginOpen: !storedToken
 };
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
+function renderIcon(name) {
+  const icons = {
+    dashboards: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="3" width="7" height="8" rx="1.5" />
+        <rect x="14" y="3" width="7" height="5" rx="1.5" />
+        <rect x="14" y="12" width="7" height="9" rx="1.5" />
+        <rect x="3" y="15" width="7" height="6" rx="1.5" />
+      </svg>`,
+    history: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
+        <path d="M3 3v5h5" />
+        <path d="M12 7v5l3 2" />
+      </svg>`,
+    sources: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <ellipse cx="12" cy="5" rx="7" ry="3" />
+        <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+        <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+      </svg>`,
+    user: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M20 21a8 8 0 0 0-16 0" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>`,
+    lock: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="4" y="10" width="16" height="10" rx="2" />
+        <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+      </svg>`
+  };
+  return icons[name] || "";
+}
+function renderSidebar() {
+  const items = [
+    ["dashboards", "Dashboards"],
+    ["history", "Historia"],
+    ["sources", "Źródła danych"]
+  ];
+  return `
+    <aside class="sidebar" aria-label="Nawigacja">
+      <div class="brand">
+        <img class="brand-logo" src="/assets/getgaard.svg" alt="" />
+        <div class="brand-copy">
+          <strong>GAARD</strong>
+          <span>Client</span>
+        </div>
+      </div>
+      <nav class="nav-list" aria-label="Główne sekcje">
+        ${items.map(([icon, label], index) => `
+          <button class="nav-item ${index === 1 ? "active" : ""}" type="button" aria-disabled="true" title="${escapeHtml(label)}">
+            ${renderIcon(icon)}
+            <span>${escapeHtml(label)}</span>
+          </button>`).join("")}
+      </nav>
+    </aside>`;
+}
+function renderAuthControls() {
+  if (state.token) {
+    return `
+      <div class="signed-in">
+        <span class="user-chip" title="${escapeHtml(state.username || "Zalogowany użytkownik")}">
+          ${renderIcon("user")}
+          <span>${escapeHtml(state.username || "Użytkownik")}</span>
+        </span>
+        <button class="ghost-button" type="button" data-logout>Wyloguj</button>
+      </div>`;
+  }
+  return `<button class="primary auth-button" type="button" data-open-login>Zaloguj się</button>`;
+}
+function renderEmptyState() {
+  if (!state.token) {
+    return `
+      <div class="empty-state locked">
+        <div class="empty-icon">${renderIcon("lock")}</div>
+        <h2>GAARD</h2>
+        <p>Zaloguj się, aby rozpocząć rozmowę.</p>
+        <button class="primary" type="button" data-open-login>Zaloguj się</button>
+      </div>`;
+  }
+  return `
+    <div class="empty-state">
+      <img class="empty-logo" src="/assets/getgaard.svg" alt="" />
+      <h2>Jak mogę pomóc z danymi?</h2>
+    </div>`;
+}
 function render(options = {}) {
   if (!app) return;
-  if (!state.token) {
-    renderLogin();
-    return;
-  }
+  const inputDisabled = state.pending || !state.token;
   app.innerHTML = `
-    <main class="shell">
-      <header class="header">
-        <h1>GAARD - Governed AI Access to Relational Data</h1>
-        <div class="header-actions">
-          <span>${escapeHtml(state.username || "")}</span>
-          <button type="button" data-logout>Sign Out</button>
-        </div>
-      </header>
-      <section class="history" aria-live="polite">
-        ${state.messages.length ? state.messages.map(renderMessage).join("") : `<div class="empty-state">Ask a governed data question.</div>`}
-      </section>
-      <form id="query-form" class="query-bar">
-        <fieldset class="mode-control" ${state.pending ? "disabled" : ""}>
-          <legend>Mode</legend>
+    <main class="app-shell">
+      ${renderSidebar()}
+      <section class="chat-shell" aria-label="Czat GAARD">
+        <header class="topbar">
+          <div class="conversation-heading">
+            <span>Czat</span>
+            <strong>GAARD</strong>
+          </div>
+          <div class="header-actions">
+            ${renderAuthControls()}
+          </div>
+        </header>
+        <section class="history" aria-live="polite">
+          ${state.messages.length ? state.messages.map(renderMessage).join("") : renderEmptyState()}
+        </section>
+        <form id="query-form" class="query-bar">
+          <fieldset class="mode-control" ${inputDisabled ? "disabled" : ""}>
+            <legend>Tryb pracy</legend>
           <label class="${state.queryMode === "sql" ? "active" : ""}">
             <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
             <span>SQL</span>
           </label>
           <label class="${state.queryMode === "analysis" ? "active" : ""}">
             <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
-            <span>Analysis</span>
+            <span>Analiza</span>
           </label>
-        </fieldset>
-        <textarea id="question-input" name="question" placeholder="Ask a question" rows="1" ${state.pending ? "disabled" : ""}></textarea>
-        <button class="send-button" type="submit" aria-label="Send question" title="Send" ${state.pending ? "disabled" : ""}>
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M22 2 11 13" />
-            <path d="m22 2-7 20-4-9-9-4Z" />
-          </svg>
-        </button>
-      </form>
+          </fieldset>
+          <textarea id="question-input" name="question" placeholder="${state.token ? "Zadaj pytanie" : "Zaloguj się, aby zadać pytanie"}" rows="1" ${inputDisabled ? "disabled" : ""}></textarea>
+          <button class="send-button" type="submit" aria-label="Wyślij pytanie" title="Wyślij" ${inputDisabled ? "disabled" : ""}>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M22 2 11 13" />
+              <path d="m22 2-7 20-4-9-9-4Z" />
+            </svg>
+          </button>
+        </form>
+      </section>
+      ${state.loginOpen ? renderLoginDialog() : ""}
     </main>`;
   document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
   document.querySelector("[data-logout]")?.addEventListener("click", logout);
+  document.querySelectorAll("[data-open-login]").forEach((button) => {
+    button.addEventListener("click", openLogin);
+  });
+  document.querySelector("[data-close-login]")?.addEventListener("click", closeLogin);
+  document.querySelector("#login-form")?.addEventListener("submit", login);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
     input2.addEventListener("change", handleModeChange);
   });
@@ -76,31 +174,53 @@ function render(options = {}) {
   });
   const input = document.querySelector("#question-input");
   input?.addEventListener("keydown", handleQuestionKeydown);
-  input?.focus();
+  if (state.token) {
+    input?.focus();
+  }
   if (options.scrollToLatest) {
     scrollToLatest();
   }
 }
-function renderLogin() {
-  app.innerHTML = `
-    <main class="login-shell">
-      <section class="login-panel">
-        <h1>GAARD Client</h1>
-        <p>Sign in with your GAARD account.</p>
+function renderLoginDialog() {
+  return `
+    <div class="login-overlay" role="presentation">
+      <section class="login-panel" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <button class="icon-button close-login" type="button" data-close-login aria-label="Zamknij logowanie" title="Zamknij">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <img class="login-logo" src="/assets/getgaard.svg" alt="" />
+        <h1 id="login-title">GAARD Client</h1>
+        <p>Zaloguj się kontem GAARD.</p>
         <form id="login-form" class="form-grid">
-          <label>Username<input name="username" autocomplete="username" /></label>
-          <label>Password<input name="password" type="password" autocomplete="current-password" /></label>
+          <label>Login<input name="username" autocomplete="username" /></label>
+          <label>Hasło<input name="password" type="password" autocomplete="current-password" /></label>
           ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
-          <div class="form-actions"><button class="primary" type="submit">Sign in</button></div>
+          <div class="form-actions"><button class="primary" type="submit">Zaloguj się</button></div>
         </form>
       </section>
-    </main>`;
-  document.querySelector("#login-form")?.addEventListener("submit", login);
+    </div>`;
+}
+function renderLogin() {
+  state.loginOpen = true;
+  render();
+}
+function openLogin() {
+  state.error = "";
+  state.loginOpen = true;
+  render();
+}
+function closeLogin() {
+  state.error = "";
+  state.loginOpen = false;
+  render();
 }
 function renderMessage(message) {
   const rows = getRows(message.response);
   const meta = message.status === "ok" ? renderMeta(message, rows) : "";
-  const answer = message.status === "pending" ? "Processing..." : message.status === "waiting" ? "Waiting for your answer." : message.status === "error" ? message.error : message.response?.answer || "";
+  const answer = message.status === "pending" ? "Przetwarzam..." : message.status === "waiting" ? "Czekam na odpowiedź." : message.status === "error" ? message.error : message.response?.answer || "";
   const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
   const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
   const saveNotice = renderSaveNotice(message);
@@ -110,13 +230,13 @@ function renderMessage(message) {
     <article class="exchange ${message.status}">
       <div class="exchange-top">
         <div class="question">
-          <span>Question \xB7 ${escapeHtml(formatMode(message.mode))}</span>
+          <span>Pytanie \xB7 ${escapeHtml(formatMode(message.mode))}</span>
           <p>${escapeHtml(message.question)}</p>
         </div>
         ${renderMessageActions(message)}
       </div>
       <div class="answer">
-        <span>Answer</span>
+        <span>Odpowiedź</span>
         <p>${escapeHtml(answer)}</p>
       </div>
       ${progress}
@@ -241,7 +361,7 @@ function formatDuration(value) {
   return `${numeric} ms`;
 }
 function formatMode(value) {
-  return value === "analysis" ? "Analysis" : "SQL";
+  return value === "analysis" ? "Analiza" : "SQL";
 }
 function normalizeQueryMode(value) {
   return value === "analysis" ? "analysis" : "sql";
@@ -351,6 +471,7 @@ async function login(event) {
     }
     state.token = payload.token || "";
     state.username = payload.username || "";
+    state.loginOpen = false;
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
     render();
@@ -363,6 +484,7 @@ function logout() {
   state.token = "";
   state.username = "";
   state.messages = [];
+  state.loginOpen = true;
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
   render();
@@ -384,6 +506,11 @@ function getSelectedMode(form) {
 async function submitQuestion(event) {
   event.preventDefault();
   if (state.pending) return;
+  if (!state.token) {
+    state.loginOpen = true;
+    render();
+    return;
+  }
   const form = event.currentTarget;
   const input = form.elements.namedItem("question");
   const question = String(input?.value || "").trim();
