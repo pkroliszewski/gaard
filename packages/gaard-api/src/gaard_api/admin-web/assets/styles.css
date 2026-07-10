@@ -677,7 +677,12 @@ label {
   background: var(--ok);
 }
 
-.overview-grid,
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .widget-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -967,44 +972,6 @@ label {
 .widget-card-actions button,
 .panel-actions button {
   white-space: nowrap;
-}
-
-.overview-resize-handle {
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  width: 12px;
-  min-width: 12px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  cursor: ew-resize;
-}
-
-.overview-resize-handle-left {
-  left: -6px;
-}
-
-.overview-resize-handle-right {
-  right: -6px;
-}
-
-.overview-resize-handle::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 4px;
-  height: 48px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.8);
-}
-
-.overview-widget-slot:hover .overview-resize-handle::before,
-.overview-widget-slot.is-resizing .overview-resize-handle::before {
-  background: var(--accent);
 }
 
 .modal-backdrop {
@@ -1398,6 +1365,118 @@ code {
   }
 
   .subgrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Overview / Gridstack integration
+ *
+ * Load gridstack.min.css BEFORE this file. Keep all application overrides
+ * scoped to .overview-grid so Gridstack's positioning rules remain intact.
+ * -------------------------------------------------------------------------- */
+
+.overview-grid.grid-stack {
+  display: block;
+  width: 100%;
+  min-height: 152px;
+  background: transparent;
+}
+
+.overview-grid.grid-stack > .grid-stack-item {
+  min-width: 0;
+  min-height: 0;
+}
+
+.overview-grid.grid-stack > .grid-stack-item > .grid-stack-item-content {
+  inset: 0;
+  overflow: auto;
+}
+
+.overview-grid.grid-stack .overview-widget-slot {
+  position: absolute;
+  min-height: 0;
+  transition: none;
+}
+
+.overview-grid.grid-stack .widget-card {
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+
+.overview-grid.grid-stack .overview-widget-drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.overview-grid.grid-stack .overview-widget-drag-handle:active {
+  cursor: grabbing;
+}
+
+.overview-grid.grid-stack .widget-card-actions,
+.overview-grid.grid-stack .widget-card-actions * {
+  cursor: default;
+  user-select: auto;
+  touch-action: auto;
+}
+
+.overview-grid.grid-stack .grid-stack-item.ui-draggable-dragging > .grid-stack-item-content,
+.overview-grid.grid-stack .grid-stack-item.ui-resizable-resizing > .grid-stack-item-content {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(23, 107, 135, 0.18), var(--shadow);
+}
+
+.overview-grid.grid-stack .grid-stack-placeholder > .placeholder-content {
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: rgba(23, 107, 135, 0.08);
+}
+
+.overview-grid.grid-stack .overview-empty-slot-item > .grid-stack-item-content {
+  overflow: visible;
+}
+
+.overview-grid.grid-stack .overview-empty-slot {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.overview-grid.grid-stack .overview-placement-panel {
+  position: relative;
+  z-index: 3;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.overview-grid.grid-stack.gridstack-unavailable {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable > .grid-stack-item {
+  position: relative;
+  width: auto;
+  height: auto;
+  left: auto;
+  top: auto;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable > .grid-stack-item > .grid-stack-item-content {
+  position: relative;
+  inset: auto;
+  min-height: 150px;
+}
+
+@media (max-width: 920px) {
+  .overview-grid.grid-stack.gridstack-unavailable {
     grid-template-columns: 1fr;
   }
 }

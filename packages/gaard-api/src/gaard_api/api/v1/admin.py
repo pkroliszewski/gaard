@@ -220,21 +220,21 @@ class OverviewWidgetUpdateRequest(BaseModel):
         default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
     )
     position: int | None = Field(default=None, ge=10)
-    grid_width: int | None = Field(default=None, ge=1, le=4)
+    grid_width: int | None = Field(default=None, ge=1, le=12)
     active: bool | None = None
 
 
 class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
     widget_key: str = Field(min_length=1, max_length=255, pattern=r"^[a-zA-Z0-9_-]+$")
     position: int = Field(default=100, ge=10)
-    grid_width: int | None = Field(default=None, ge=1, le=4)
+    grid_width: int | None = Field(default=None, ge=1, le=12)
     active: bool = True
 
 
 class OverviewWidgetStateRequest(BaseModel):
     active: bool
     position: int | None = Field(default=None, ge=10)
-    grid_width: int | None = Field(default=None, ge=1, le=4)
+    grid_width: int | None = Field(default=None, ge=1, le=12)
 
 
 class OverviewWidgetFromQueryRequest(BaseModel):
@@ -460,9 +460,9 @@ def normalize_overview_widget_grid_width(
     grid_width: int | None,
 ) -> int:
     if grid_width is None:
-        return 4 if widget_type in {OVERVIEW_WIDGET_TABLE, OVERVIEW_WIDGET_TIMESERIES} else 1
+        return 12 if widget_type in {OVERVIEW_WIDGET_TABLE, OVERVIEW_WIDGET_TIMESERIES} else 1
 
-    return max(1, min(4, int(grid_width)))
+    return max(1, min(12, int(grid_width)))
 
 
 def normalize_overview_widget_result_mode(value: str | None) -> str:

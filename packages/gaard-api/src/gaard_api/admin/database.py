@@ -341,8 +341,8 @@ def seed_overview_widgets(session: Session) -> None:
             ),
             "sql": runtime_sql,
             "result_mode": "data",
-            "position": 100,
-            "grid_width": 4,
+            "position": 250,
+            "grid_width": 12,
             "active": False,
         },
         {
@@ -360,8 +360,8 @@ def seed_overview_widgets(session: Session) -> None:
                 "ORDER BY prompt_key"
             ),
             "result_mode": "data",
-            "position": 50,
-            "grid_width": 4,
+            "position": 130,
+            "grid_width": 12,
         },
     ]
 

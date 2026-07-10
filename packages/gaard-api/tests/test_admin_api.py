@@ -1010,7 +1010,7 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
         "prompt_templates_table",
     ]
     assert body["info_widgets"][0]["grid_width"] == 1
-    assert body["table_widgets"][0]["grid_width"] == 4
+    assert body["table_widgets"][0]["grid_width"] == 12
     assert body["table_widgets"][0]["result"]["status"] == "ok"
     assert body["table_widgets"][0]["result"]["columns"] == [
         "prompt_key",
@@ -1032,7 +1032,7 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
         item for item in widgets if item["widget_key"] == "runtime_daily_queries"
     )
     assert runtime_widget["active"] is False
-    assert runtime_widget["grid_width"] == 4
+    assert runtime_widget["grid_width"] == 12
 
     second_response = admin_client.get(
         "/api/v1/admin/overview",
