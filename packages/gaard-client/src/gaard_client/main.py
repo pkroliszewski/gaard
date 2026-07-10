@@ -2,7 +2,7 @@ import json
 import os
 
 from collections.abc import AsyncIterator
-from importlib.resources import as_file, files  
+from importlib.resources import as_file, files
 from pathlib import Path
 
 from typing import Any, cast
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 with as_file(files("gaard_client").joinpath("client-web")) as _path:
     CLIENT_WEB_DIR: Path = Path(_path).absolute()
-    
+
 DEFAULT_BACKEND_URL = "http://localhost:8000"
 
 
@@ -280,7 +280,7 @@ async def upload_excel_datasource(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     if not file.filename or Path(file.filename).suffix.lower() != ".xlsx":
-        raise HTTPException(status_code=400, detail="Wybierz plik w formacie .xlsx.")
+        raise HTTPException(status_code=400, detail="Choose an .xlsx file.")
 
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     upload_url = f"{backend_url}/api/v1/admin/datasources/excel-upload"

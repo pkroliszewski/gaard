@@ -165,25 +165,25 @@ function renderSourcesPanel() {
   return `
     <div class="sources-panel">
       <div class="source-actions">
-        <button class="source-add" type="button" data-add-source aria-label="Dodaj plik Excel" title="Dodaj plik Excel" ${state.datasourceUploadPending || !state.token ? "disabled" : ""}>
+        <button class="source-add" type="button" data-add-source aria-label="Add Excel file" title="Add Excel file" ${state.datasourceUploadPending || !state.token ? "disabled" : ""}>
           <span aria-hidden="true">+</span>
         </button>
         <label class="new-source-state">
           <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
-          <span>Dodaj jako aktywne źródło</span>
+          <span>Add as active source</span>
         </label>
         
       </div>
       <div class="sources-list" aria-live="polite">
-        ${state.datasourcesLoading ? `<div class="source-muted">Ładowanie...</div>` : ""}
-        ${!state.datasourcesLoading && !visibleSources.length ? `<div class="source-muted">Brak źródeł</div>` : ""}
+        ${state.datasourcesLoading ? `<div class="source-muted">Loading...</div>` : ""}
+        ${!state.datasourcesLoading && !visibleSources.length ? `<div class="source-muted">No sources</div>` : ""}
         ${visibleSources.map((source) => `
           <div class="source-row" title="${escapeHtml(source.name)}">
             <label class="source-state">
               <input type="checkbox" data-source-active="${source.id}" ${source.active ? "checked" : ""} ${state.datasourceStatePendingId === source.id ? "disabled" : ""} />
               <span>${escapeHtml(source.name)}</span>
             </label>
-            <small>${source.active ? "Aktywne" : "Nieaktywne"}</small>
+            <small>${source.active ? "Active" : "Inactive"}</small>
           </div>`).join("")}
       </div>
       
@@ -519,7 +519,7 @@ async function loadDatasources() {
         state.datasources = payload.items || [];
         state.datasourcesLoaded = true;
     } catch (error) {
-        state.datasourceError = error.message || "Nie udało się pobrać źródeł danych.";
+        state.datasourceError = error.message || "Could not load data sources.";
     } finally {
         state.datasourcesLoading = false;
         render();
@@ -529,7 +529,7 @@ async function uploadSelectedSource(event) {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".xlsx")) {
-        state.datasourceError = "Wybierz plik w formacie .xlsx.";
+        state.datasourceError = "Choose an .xlsx file.";
         render();
         return;
     }
@@ -558,7 +558,7 @@ async function uploadSelectedSource(event) {
         ].filter(Boolean);
         state.datasourcesLoaded = true;
     } catch (error) {
-        state.datasourceError = error.message || "Nie udało się dodać źródła danych.";
+        state.datasourceError = error.message || "Could not add the data source.";
     } finally {
         state.datasourceUploadPending = false;
         render();
@@ -590,7 +590,7 @@ async function updateSourceActive(event) {
         }
         await loadDatasources();
     } catch (error) {
-        state.datasourceError = error.message || "Nie udało się zmienić stanu źródła.";
+        state.datasourceError = error.message || "Could not update the source state.";
     } finally {
         state.datasourceStatePendingId = null;
         render();
@@ -598,10 +598,10 @@ async function updateSourceActive(event) {
 }
 function friendlyDatasourceError(message) {
     if (message.includes("non-SQL source support") || message.includes("LICENSE_ENTITLEMENT_REQUIRED")) {
-        return "Ta licencja nie pozwala na używanie plików Excel jako źródeł danych.";
+        return "This license does not allow Excel files to be used as data sources.";
     }
     if (message.includes("multi-source access")) {
-        return "Korzystanie z wielu aktywnych źródeł danych wymaga licencji z obsługą wielu źródeł.";
+        return "Using multiple active data sources requires a license with multi-source support.";
     }
     return message;
 }
