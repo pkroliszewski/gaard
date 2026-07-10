@@ -15,7 +15,7 @@ var state = {
   conversationId: "",
   pending: false,
   error: "",
-  loginOpen: !storedToken,
+  loginOpen: false,
   sourcesOpen: false,
   datasources: [],
   datasourcesLoaded: false,
@@ -249,11 +249,7 @@ function renderActiveView() {
     });
   }
   if (state.activeView === "datasources") {
-    return renderPlaceholderView({
-      title: "Datasources",
-      description: "Uploaded files and connected data sources, such as Excel or CSV, will appear here. This module is marked as a future client feature.",
-      items: ["Excel workbooks", "CSV uploads", "Connected databases"]
-    });
+    return renderDatasourcesView();
   }
   if (state.activeView === "queries") {
     return renderQueriesView();
@@ -406,6 +402,78 @@ function renderQueriesView() {
       </div>
     </section>`;
 }
+function renderDatasourcesView() {
+  const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
+  const uploadLabel = state.datasourceUploadPending
+    ? "Uploading..."
+    : state.token
+      ? "Upload .xlsx workbook"
+      : "Log in to upload .xlsx workbook";
+  return `
+    <section class="datasources-view placeholder-view">
+      <div class="placeholder-intro">
+        <span>Connected feature</span>
+        <h1>Datasources</h1>
+        <p>Upload Excel workbooks and choose which data sources are active for GAARD queries.</p>
+      </div>
+      <div class="datasource-actions-grid">
+        <button class="placeholder-item datasource-upload-card" type="button" data-add-source ${state.datasourceUploadPending ? "disabled" : ""}>
+          ${renderIcon("plus")}
+          <span><strong>Excel workbooks</strong><small>${escapeHtml(uploadLabel)}</small></span>
+        </button>
+        <label class="datasource-active-toggle">
+          <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
+          <span>
+            <strong>Add uploads as active</strong>
+            <small>New workbooks become available to the chat immediately.</small>
+          </span>
+        </label>
+        <div class="placeholder-item muted">
+          ${renderIcon("plus")}
+          <span><strong>CSV uploads</strong><small>Coming soon</small></span>
+        </div>
+        <div class="placeholder-item muted">
+          ${renderIcon("plus")}
+          <span><strong>Connected databases</strong><small>Coming soon</small></span>
+        </div>
+      </div>
+      <section class="datasource-list-panel" aria-live="polite">
+        <header>
+          <div>
+            <span>Available sources</span>
+            <h2>Excel workbooks</h2>
+          </div>
+          <button class="ghost-button" type="button" data-refresh-sources ${state.datasourcesLoading || !state.token ? "disabled" : ""}>
+            Refresh
+          </button>
+        </header>
+        ${state.datasourceError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.datasourceError)}</div>` : ""}
+        ${state.datasourcesLoading ? `<div class="datasource-empty">Loading data sources...</div>` : ""}
+        ${!state.datasourcesLoading && !state.token ? `<div class="datasource-empty">Log in to manage Excel workbooks.</div>` : ""}
+        ${!state.datasourcesLoading && state.token && !visibleSources.length ? `<div class="datasource-empty">No Excel workbooks have been added yet.</div>` : ""}
+        ${!state.datasourcesLoading && visibleSources.length ? `
+          <div class="datasource-table">
+            ${visibleSources.map(renderDatasourceRow).join("")}
+          </div>` : ""}
+      </section>
+    </section>`;
+}
+function renderDatasourceRow(source) {
+  const sourceId = Number(source.id);
+  const disabled = state.datasourceStatePendingId === sourceId;
+  const typeLabel = source.database_type || source.connector_key || "datasource";
+  return `
+    <article class="datasource-row">
+      <label class="datasource-row-main">
+        <input type="checkbox" data-source-active="${sourceId}" ${source.active ? "checked" : ""} ${disabled ? "disabled" : ""} />
+        <span>
+          <strong>${escapeHtml(source.name || source.connector_key || "Untitled source")}</strong>
+          <small>${escapeHtml(typeLabel)}</small>
+        </span>
+      </label>
+      <span class="datasource-status ${source.active ? "active" : ""}">${source.active ? "Active" : "Inactive"}</span>
+    </article>`;
+}
 function renderPlaceholderView({ title, description, items }) {
   return `
     <section class="placeholder-view">
@@ -452,6 +520,7 @@ function render(options = {}) {
   document.querySelector("[data-close-login]")?.addEventListener("click", closeLogin);
   document.querySelector("[data-toggle-sources]")?.addEventListener("click", toggleSources);
   document.querySelector("[data-add-source]")?.addEventListener("click", openSourcePicker);
+  document.querySelector("[data-refresh-sources]")?.addEventListener("click", loadDatasources);
   document.querySelector("[data-new-source-active]")?.addEventListener("change", toggleNewSourceActive);
   document.querySelectorAll("[data-source-active]").forEach((input2) => {
     input2.addEventListener("change", updateSourceActive);
@@ -482,9 +551,15 @@ function render(options = {}) {
     input?.focus();
   }
   initAnalysisDashboard();
+  maybeLoadDatasourcesForActiveView();
   if (options.scrollToLatest) {
     scrollToLatest();
   }
+}
+function maybeLoadDatasourcesForActiveView() {
+    if (state.activeView === "datasources" && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
+        void loadDatasources();
+    }
 }
 async function toggleSources() {
     state.sourcesOpen = !state.sourcesOpen;
@@ -495,7 +570,11 @@ async function toggleSources() {
     }
 }
 function openSourcePicker() {
-    if (!state.token || state.datasourceUploadPending) return;
+    if (state.datasourceUploadPending) return;
+    if (!state.token) {
+        openLogin();
+        return;
+    }
     const input = document.querySelector("#excel-source-input");
     if (!input) return;
     input.value = "";
@@ -520,6 +599,7 @@ async function loadDatasources() {
         state.datasourcesLoaded = true;
     } catch (error) {
         state.datasourceError = error.message || "Could not load data sources.";
+        state.datasourcesLoaded = true;
     } finally {
         state.datasourcesLoading = false;
         render();
@@ -561,6 +641,7 @@ async function uploadSelectedSource(event) {
         state.datasourceError = error.message || "Could not add the data source.";
     } finally {
         state.datasourceUploadPending = false;
+        event.currentTarget.value = "";
         render();
     }
 }
@@ -1034,6 +1115,9 @@ function logout() {
   state.username = "";
   state.messages = [];
   state.conversationId = "";
+  state.datasources = [];
+  state.datasourcesLoaded = false;
+  state.datasourceError = "";
   state.activeView = "home";
   state.loginOpen = false;
   localStorage.removeItem("gaard_client_token");

@@ -38,6 +38,11 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "data-analysis-progress" in response.text
     assert "data-new-chat" in response.text
     assert "syncConversationFromResponse" in response.text
+    assert "renderDatasourcesView" in response.text
+    assert "Excel workbooks" in response.text
+    assert "data-add-source" in response.text
+    assert "openSourcePicker" in response.text
+    assert "/api/datasources/excel" in response.text
     assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
         response.text
     )
