@@ -272,6 +272,14 @@ function renderViewHeading() {
 }
 function renderAnalysisHeading() {
   const dashboard = getActiveDashboard();
+  if (state.token && state.dashboardsLoaded && !state.dashboardsLoading && !dashboard) {
+    return `
+    <div class="conversation-heading analysis-heading analysis-heading-empty">
+      <div class="dashboard-title-row">
+        ${renderAddDashboardButton("dashboard-picker-button dashboard-add-heading")}
+      </div>
+    </div>`;
+  }
   const title = dashboard?.name || "Analysis";
   const description = dashboard?.description || (dashboard ? "No description yet." : "Create a dashboard to organize saved query widgets.");
   return `
@@ -392,7 +400,10 @@ function renderAnalysisDashboardBody(dashboard) {
     return `
       <div class="dashboard-empty">
         <h2>No dashboards yet.</h2>
-        <p>Create your first dashboard from the picker next to the Analysis title.</p>
+        <div class="dashboard-empty-copy">
+          <span>Create your first dashboard by clicking</span>
+          ${renderAddDashboardButton("dashboard-inline-add")}
+        </div>
       </div>`;
   }
   return `
@@ -416,27 +427,47 @@ function renderDashboardPicker() {
   const label = state.dashboardsLoading ? "Loading dashboards" : "Choose dashboard";
   return `
     <div class="dashboard-picker">
-      <button class="dashboard-picker-button" type="button" data-toggle-dashboard-menu aria-expanded="${state.dashboardMenuOpen ? "true" : "false"}" title="${escapeHtml(label)}">
+      <button class="dashboard-picker-button dashboard-picker-icon-button" type="button" data-toggle-dashboard-menu aria-expanded="${state.dashboardMenuOpen ? "true" : "false"}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
         ${renderIcon("dashboards")}
-        <span>${escapeHtml(label)}</span>
-        ${renderIcon("chevronDown")}
       </button>
       ${state.dashboardMenuOpen ? renderDashboardMenu() : ""}
     </div>`;
 }
+function renderAddDashboardButton(className = "dashboard-add-button") {
+  return `
+      <button class="${className}" type="button" data-toggle-dashboard-create>
+        ${renderIcon("plus")}
+        <span>Add new dashboard</span>
+      </button>`;
+}
 function renderDashboardMenu() {
   return `
     <div class="dashboard-menu" role="menu">
-      <button class="dashboard-add-button" type="button" data-toggle-dashboard-create>
-        ${renderIcon("plus")}
-        <span>Add new dashboard</span>
-      </button>
-      ${state.dashboardCreateOpen ? renderDashboardCreateForm() : ""}
+      ${renderAddDashboardButton()}
       <div class="dashboard-menu-list">
         ${state.dashboardsLoading ? `<div class="dashboard-menu-empty">Loading...</div>` : ""}
         ${!state.dashboardsLoading && !state.dashboards.length ? `<div class="dashboard-menu-empty">No dashboards yet.</div>` : ""}
         ${state.dashboards.map((dashboard) => renderDashboardMenuItem(dashboard)).join("")}
       </div>
+    </div>`;
+}
+function renderDashboardCreateDialog() {
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-create-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-dashboard-create aria-label="Close dialog" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Analysis</span>
+          <h2 id="dashboard-create-title">Add new dashboard</h2>
+          <p>Name the workspace where saved query widgets will be organized.</p>
+        </div>
+        ${renderDashboardCreateForm()}
+      </section>
     </div>`;
 }
 function renderDashboardCreateForm() {
@@ -450,9 +481,13 @@ function renderDashboardCreateForm() {
         <span>Description</span>
         <textarea name="description" maxlength="2000" rows="2" placeholder="Weekly operational snapshot" ${state.dashboardCreatePending ? "disabled" : ""}></textarea>
       </label>
-      <button class="primary" type="submit" ${state.dashboardCreatePending ? "disabled" : ""}>
-        ${state.dashboardCreatePending ? "Creating..." : "Create dashboard"}
-      </button>
+      ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
+      <div class="dashboard-create-actions">
+        <button type="button" data-close-dashboard-create ${state.dashboardCreatePending ? "disabled" : ""}>Cancel</button>
+        <button class="primary" type="submit" ${state.dashboardCreatePending ? "disabled" : ""}>
+          ${state.dashboardCreatePending ? "Creating..." : "Create dashboard"}
+        </button>
+      </div>
     </form>`;
 }
 function renderDashboardMenuItem(dashboard) {
@@ -649,6 +684,7 @@ function render(options = {}) {
       </section>
       <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
       ${state.loginOpen ? renderLoginDialog() : ""}
+      ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
     </main>`;
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", changeView);
@@ -669,8 +705,15 @@ function render(options = {}) {
     input2.addEventListener("change", updateSourceActive);
   });
   document.querySelector("[data-toggle-dashboard-menu]")?.addEventListener("click", toggleDashboardMenu);
-  document.querySelector("[data-toggle-dashboard-create]")?.addEventListener("click", toggleDashboardCreate);
-  document.querySelector("[data-dashboard-create-form]")?.addEventListener("submit", createDashboard);
+  document.querySelectorAll("[data-toggle-dashboard-create]").forEach((button) => {
+    button.addEventListener("click", openDashboardCreate);
+  });
+  document.querySelectorAll("[data-close-dashboard-create]").forEach((button) => {
+    button.addEventListener("click", closeDashboardCreate);
+  });
+  document.querySelectorAll("[data-dashboard-create-form]").forEach((form) => {
+    form.addEventListener("submit", createDashboard);
+  });
   document.querySelectorAll("[data-select-dashboard]").forEach((button) => {
     button.addEventListener("click", selectDashboard);
   });
@@ -804,8 +847,16 @@ function toggleDashboardMenu() {
         void loadDashboards();
     }
 }
-function toggleDashboardCreate() {
-    state.dashboardCreateOpen = !state.dashboardCreateOpen;
+function openDashboardCreate() {
+    state.dashboardCreateOpen = true;
+    state.dashboardMenuOpen = false;
+    state.dashboardsError = "";
+    render();
+}
+function closeDashboardCreate() {
+    if (state.dashboardCreatePending) return;
+    state.dashboardCreateOpen = false;
+    state.dashboardsError = "";
     render();
 }
 async function selectDashboard(event) {

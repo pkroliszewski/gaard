@@ -1492,6 +1492,10 @@ button.primary {
   gap: 5px;
 }
 
+.analysis-heading-empty {
+  gap: 0;
+}
+
 .analysis-heading p {
   min-width: 0;
   max-width: 720px;
@@ -1656,7 +1660,14 @@ button.primary {
   box-shadow: 0 4px 12px rgba(22, 40, 58, 0.04);
 }
 
+.dashboard-picker-icon-button {
+  width: 32px;
+  justify-content: center;
+  padding: 0;
+}
+
 .dashboard-picker-button svg,
+.dashboard-inline-add svg,
 .dashboard-add-button svg,
 .dashboard-delete-button svg {
   width: 15px;
@@ -1695,14 +1706,71 @@ button.primary {
   text-align: left;
 }
 
+.dashboard-add-heading {
+  min-height: 36px;
+  background: #eef5ff;
+  color: var(--accent);
+}
+
+.dashboard-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(17, 26, 36, 0.34);
+  backdrop-filter: blur(3px);
+}
+
+.dashboard-dialog {
+  position: relative;
+  width: min(460px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 26px;
+  border: 1px solid #dfe7ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 28px 80px rgba(17, 26, 36, 0.24);
+}
+
+.dashboard-dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.dashboard-dialog-heading {
+  display: grid;
+  gap: 6px;
+  padding-right: 38px;
+}
+
+.dashboard-dialog-heading span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dashboard-dialog-heading h2 {
+  margin: 0;
+  color: #111a24;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.dashboard-dialog-heading p {
+  margin: 0;
+  color: #6d7a86;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .dashboard-create-form {
   display: grid;
-  gap: 9px;
-  margin-top: 10px;
-  padding: 10px;
-  border: 1px solid #e5ebf1;
-  border-radius: 7px;
-  background: #fbfcfd;
+  gap: 12px;
 }
 
 .dashboard-create-form label {
@@ -1731,6 +1799,18 @@ button.primary {
   min-height: 62px;
   resize: vertical;
   padding: 8px 9px;
+}
+
+.dashboard-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.dashboard-create-actions button {
+  min-height: 36px;
+  padding: 0 12px;
 }
 
 .dashboard-menu-list {
@@ -1861,6 +1941,29 @@ button.primary {
   margin: 0;
   color: #6d7a86;
   font-size: 14px;
+}
+
+.dashboard-empty-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #6d7a86;
+  font-size: 14px;
+}
+
+.dashboard-inline-add {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid rgba(8, 120, 111, 0.18);
+  border-radius: 6px;
+  background: #eef5ff;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .kpi-card,
