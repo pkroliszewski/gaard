@@ -20,6 +20,7 @@ from gaard_core.query_pipeline.models import (
     QueryResult,
 )
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
+from gaard_connectors import ConnectorRegistryError
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -33,6 +34,7 @@ from gaard_api.admin.models import (
     AdminSession,
     AdminUser,
     BusinessLogicSuggestion,
+    Dashboard,
     DatasourceConnector,
     DatasourceSchemaCache,
     OverviewWidget,
@@ -349,6 +351,18 @@ def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
     }
 
 
+def serialize_admin_dashboard(dashboard: Dashboard) -> dict[str, Any]:
+    return {
+        "id": dashboard.dashboard_id,
+        "name": dashboard.name,
+        "description": dashboard.description,
+        "owner_user_id": dashboard.owner_user_id,
+        "owner_username": dashboard.owner_username,
+        "created_at": serialize_datetime(dashboard.created_at),
+        "updated_at": serialize_datetime(dashboard.updated_at),
+    }
+
+
 def serialize_extension_record(record: ExtensionRecord) -> dict[str, Any]:
     manifest = record.manifest
     return {
@@ -517,6 +531,39 @@ def safe_excel_upload_path(directory: Path, filename: str) -> Path:
         suffix += 1
 
     return target
+
+
+def normalize_datasource_configuration_or_400(
+    *,
+    database_type: str,
+    connection_config: dict[str, Any] | None = None,
+    database_path: str | None = None,
+    database_url: str | None = None,
+    sql_dialect: str | None = None,
+):
+    try:
+        return normalize_datasource_configuration(
+            database_type=database_type,
+            connection_config=connection_config,
+            database_path=database_path,
+            database_url=database_url,
+            sql_dialect=sql_dialect,
+        )
+    except (ConnectorRegistryError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def ensure_excel_datasource_type_available() -> None:
+    try:
+        get_connector_registry().get("duckdb-excel")
+    except ConnectorRegistryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Excel workbook uploads require the duckdb-excel datasource connector, "
+                "which is not available in this GAARD API process."
+            ),
+        ) from exc
 
 
 def serialize_overview_widget(
@@ -1126,6 +1173,21 @@ def get_overview(
         "table_widgets": [
             widget for widget in widgets if widget["widget_type"] == OVERVIEW_WIDGET_TABLE
         ],
+    }
+
+
+@router.get("/dashboards")
+def get_admin_dashboards(
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    dashboards = session.scalars(
+        select(Dashboard).order_by(Dashboard.updated_at.desc(), Dashboard.id.desc())
+    )
+
+    return {
+        "items": [serialize_admin_dashboard(dashboard) for dashboard in dashboards],
+        "viewer": user.username,
     }
 
 
@@ -1785,16 +1847,13 @@ def create_datasource(
             detail="The metadata datasource is managed by GAARD.",
         )
 
-    try:
-        normalized_config = normalize_datasource_configuration(
-            database_type=request.database_type,
-            connection_config=request.connection_config,
-            database_path=request.database_path,
-            database_url=request.database_url,
-            sql_dialect=request.sql_dialect,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    normalized_config = normalize_datasource_configuration_or_400(
+        database_type=request.database_type,
+        connection_config=request.connection_config,
+        database_path=request.database_path,
+        database_url=request.database_url,
+        sql_dialect=request.sql_dialect,
+    )
 
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
@@ -1857,6 +1916,7 @@ async def upload_excel_datasource(
             detail="Only .xlsx files can be added as Excel datasources.",
         )
 
+    ensure_excel_datasource_type_available()
     license_service.ensure_datasource_type_allowed("duckdb-excel")
 
     upload_dir = Path(settings.gaard_excel_upload_directory).expanduser().resolve()
@@ -1883,16 +1943,16 @@ async def upload_excel_datasource(
     )
 
     try:
-        normalized_config = normalize_datasource_configuration(
+        normalized_config = normalize_datasource_configuration_or_400(
             database_type=request.database_type,
             connection_config=request.connection_config,
             database_path=request.database_path,
             database_url=request.database_url,
             sql_dialect=request.sql_dialect,
         )
-    except ValueError as exc:
+    except HTTPException:
         target_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise
 
     connector = DatasourceConnector(
         connector_key=request.connector_key,
@@ -1995,16 +2055,13 @@ def update_datasource(
             detail="The metadata datasource is managed by GAARD.",
         )
 
-    try:
-        normalized_config = normalize_datasource_configuration(
-            database_type=request.database_type,
-            connection_config=request.connection_config,
-            database_path=request.database_path,
-            database_url=request.database_url,
-            sql_dialect=request.sql_dialect,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    normalized_config = normalize_datasource_configuration_or_400(
+        database_type=request.database_type,
+        connection_config=request.connection_config,
+        database_path=request.database_path,
+        database_url=request.database_url,
+        sql_dialect=request.sql_dialect,
+    )
 
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
@@ -2163,15 +2220,12 @@ def test_datasource(
 def test_datasource_from_request(
     request: DatasourceConnectionTestRequest,
 ) -> dict[str, Any]:
-    try:
-        normalized_config = normalize_datasource_configuration(
-            database_type=request.database_type,
-            connection_config=request.connection_config,
-            database_path=request.database_path,
-            database_url=request.database_url,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    normalized_config = normalize_datasource_configuration_or_400(
+        database_type=request.database_type,
+        connection_config=request.connection_config,
+        database_path=request.database_path,
+        database_url=request.database_url,
+    )
 
     connector = DatasourceConnector(
         connector_key="__preview__",

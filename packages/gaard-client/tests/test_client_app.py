@@ -31,7 +31,11 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "output_classification_mode" in response.text
     assert "/api/analysis/stream" in response.text
     assert "/api/widgets/from-query" in response.text
+    assert "/api/dashboards" in response.text
     assert "data-save-widget" in response.text
+    assert "data-toggle-dashboard-menu" in response.text
+    assert "Add new dashboard" in response.text
+    assert "data-delete-dashboard" in response.text
     assert "analysis-progress" in response.text
     assert "analysis-log" in response.text
     assert "analysis-reply-question" in response.text
@@ -40,8 +44,14 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "syncConversationFromResponse" in response.text
     assert "renderDatasourcesView" in response.text
     assert "Excel workbooks" in response.text
+    assert "Connected feature" not in response.text
     assert "data-add-source" in response.text
     assert "openSourcePicker" in response.text
+    assert "mergeDatasourcesPreservingOrder" in response.text
+    assert "preserveOrder: true" in response.text
+    assert "api-error-banner" in response.text
+    assert "reportApiError" in response.text
+    assert "formatApiResponseError" in response.text
     assert "/api/datasources/excel" in response.text
     assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
         response.text
@@ -299,6 +309,111 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
         "sql": "SELECT COUNT(*) AS value FROM patients",
         "result_mode": "data",
     }
+
+
+def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def get(self, url, headers=None):
+            captured.append({"method": "GET", "url": url, "headers": headers})
+            request = httpx.Request("GET", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"items": [{"id": "dash-1", "name": "Operations"}]},
+            )
+
+        async def post(self, url, json, headers=None):
+            captured.append(
+                {"method": "POST", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"item": {"id": "dash-2", "name": json["name"]}},
+            )
+
+        async def put(self, url, json, headers=None):
+            captured.append(
+                {"method": "PUT", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("PUT", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "active_dashboard_id": json["dashboard_id"],
+                    "active_dashboard": {"id": json["dashboard_id"]},
+                },
+            )
+
+        async def delete(self, url, headers=None):
+            captured.append({"method": "DELETE", "url": url, "headers": headers})
+            request = httpx.Request("DELETE", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"status": "deleted", "id": "dash-2"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer token"}
+
+    list_response = client.get(
+        "/api/dashboards?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    create_response = client.post(
+        "/api/dashboards",
+        headers=headers,
+        json={
+            "name": "Operations",
+            "description": "Daily view",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    delete_response = client.delete(
+        "/api/dashboards/dash-2?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    active_response = client.put(
+        "/api/dashboards/active",
+        headers=headers,
+        json={
+            "dashboard_id": "dash-1",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert list_response.status_code == 200
+    assert create_response.status_code == 200
+    assert delete_response.status_code == 200
+    assert active_response.status_code == 200
+    assert captured[0]["url"] == "http://backend.example/api/v1/dashboards"
+    assert captured[1]["url"] == "http://backend.example/api/v1/dashboards"
+    assert captured[1]["json"] == {
+        "name": "Operations",
+        "description": "Daily view",
+    }
+    assert captured[2]["url"] == "http://backend.example/api/v1/dashboards/dash-2"
+    assert captured[3]["url"] == "http://backend.example/api/v1/dashboards/active"
+    assert captured[3]["json"] == {"dashboard_id": "dash-1"}
+    assert captured[0]["headers"] == headers
+    assert captured[1]["headers"] == headers
+    assert captured[2]["headers"] == headers
+    assert captured[3]["headers"] == headers
 
 
 def test_client_app_streams_analysis_user_question(monkeypatch) -> None:

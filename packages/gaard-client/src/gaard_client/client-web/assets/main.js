@@ -15,6 +15,8 @@ var state = {
   conversationId: "",
   pending: false,
   error: "",
+  apiError: null,
+  nextApiErrorId: 1,
   loginOpen: false,
   sourcesOpen: false,
   datasources: [],
@@ -23,7 +25,16 @@ var state = {
   datasourceError: "",
   datasourceUploadPending: false,
   datasourceStatePendingId: null,
-  newDatasourceActive: false
+  newDatasourceActive: false,
+  dashboards: [],
+  dashboardsLoaded: false,
+  dashboardsLoading: false,
+  dashboardsError: "",
+  activeDashboardId: "",
+  dashboardMenuOpen: false,
+  dashboardCreateOpen: false,
+  dashboardCreatePending: false,
+  dashboardDeletePendingId: ""
 };
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -109,9 +120,29 @@ function renderIcon(name) {
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="m12 19 0-14" />
         <path d="m5 12 7-7 7 7" />
+      </svg>`,
+    trash: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 6h18" />
+        <path d="M8 6V4h8v2" />
+        <path d="M19 6l-1 15H6L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+      </svg>`,
+    chevronDown: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m6 9 6 6 6-6" />
       </svg>`
   };
   return icons[name] || "";
+}
+function renderErrorIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v6" />
+      <path d="M12 17h.01" />
+    </svg>`;
 }
 function renderSidebar() {
   const items = [
@@ -209,7 +240,7 @@ function renderEmptyState() {
     return `
       <div class="empty-state locked">
         <div class="empty-icon">${renderIcon("lock")}</div>
-        <h2>Ask your data</h2>
+        <h2>/ ask your data</h2>
         <p>Log in to start a conversation.</p>
         <button class="primary" type="button" data-open-login>Log in</button>
       </div>`;
@@ -217,14 +248,16 @@ function renderEmptyState() {
   return `
     <div class="empty-state">
       <img class="empty-logo" src="/assets/getgaard.svg" alt="" />
-      <h2>Ask your data</h2>
+      <h2>/ ask your data</h2>
       <p>Ask about metrics, records, trends, or run step-by-step analysis.</p>
     </div>`;
 }
 function renderViewHeading() {
+  if (state.activeView === "analysis") {
+    return renderAnalysisHeading();
+  }
   const headings = {
     home: ["Home", "Ask your data"],
-    analysis: ["Analysis", "Healthcare Operations overview"],
     metrics: ["Metrics", "Defined dashboard widgets"],
     datasources: ["Datasources", "Files and database sources"],
     queries: ["My Queries", "Conversation history"],
@@ -235,6 +268,20 @@ function renderViewHeading() {
     <div class="conversation-heading">
       <span>${escapeHtml(eyebrow)}</span>
       <strong>${escapeHtml(title)}</strong>
+    </div>`;
+}
+function renderAnalysisHeading() {
+  const dashboard = getActiveDashboard();
+  const title = dashboard?.name || "Analysis";
+  const description = dashboard?.description || (dashboard ? "No description yet." : "Create a dashboard to organize saved query widgets.");
+  return `
+    <div class="conversation-heading analysis-heading">
+      <span>Analysis</span>
+      <div class="dashboard-title-row">
+        <strong>${escapeHtml(title)}</strong>
+        ${renderDashboardPicker()}
+      </div>
+      <p>${escapeHtml(description)}</p>
     </div>`;
 }
 function renderActiveView() {
@@ -262,6 +309,22 @@ function renderActiveView() {
     });
   }
   return renderHomeView();
+}
+function renderApiErrorBanner() {
+  if (!state.apiError) {
+    return "";
+  }
+  return `
+    <div class="api-error-banner" role="alert">
+      <div class="api-error-icon">${renderErrorIcon()}</div>
+      <p>${escapeHtml(state.apiError.message)}</p>
+      <button class="api-error-close" type="button" data-dismiss-api-error aria-label="Dismiss error" title="Dismiss">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
+        </svg>
+      </button>
+    </div>`;
 }
 function renderHomeView() {
   return `
@@ -293,19 +356,46 @@ function renderQueryForm() {
       </button>
     </form>`;
 }
+function getActiveDashboard() {
+  if (!state.activeDashboardId && state.dashboards.length) {
+    state.activeDashboardId = state.dashboards[0].id || "";
+  }
+  return state.dashboards.find((item) => item.id === state.activeDashboardId) || state.dashboards[0] || null;
+}
 function renderAnalysisView() {
+  const dashboard = getActiveDashboard();
   return `
     <section class="dashboard-view" aria-label="Dashboard Analysis">
-      <div class="dashboard-toolbar">
-        <div>
-          <h1>Healthcare Operations overview</h1>
-          <p>Weekly operational snapshot across capacity, flow and active issues.</p>
-        </div>
+      <div class="dashboard-toolbar dashboard-toolbar-compact">
         <button class="date-range" type="button" aria-disabled="true">
           ${renderIcon("calendar")}
           <span>May 12 - May 18, 2025</span>
         </button>
       </div>
+      ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
+      ${renderAnalysisDashboardBody(dashboard)}
+    </section>`;
+}
+function renderAnalysisDashboardBody(dashboard) {
+  if (!state.token) {
+    return `
+      <div class="dashboard-empty">
+        <h2>Log in to manage dashboards.</h2>
+        <p>Your dashboards are scoped to your authenticated GAARD account.</p>
+        <button class="primary" type="button" data-open-login>Log in</button>
+      </div>`;
+  }
+  if (state.dashboardsLoading && !state.dashboards.length) {
+    return `<div class="dashboard-empty"><h2>Loading dashboards...</h2><p>Please wait while GAARD prepares your dashboard list.</p></div>`;
+  }
+  if (!dashboard) {
+    return `
+      <div class="dashboard-empty">
+        <h2>No dashboards yet.</h2>
+        <p>Create your first dashboard from the picker next to the Analysis title.</p>
+      </div>`;
+  }
+  return `
       <div class="kpi-row" aria-label="Key metrics">
         ${renderKpiCard("Total patients", "45,781", "6.3%", "vs May 5 - May 11", "up")}
         ${renderKpiCard("Active encounters", "12,986", "4.8%", "vs May 5 - May 11", "up")}
@@ -320,8 +410,64 @@ function renderAnalysisView() {
       </div>
       <div class="dashboard-fallback" data-dashboard-fallback hidden>
         Dashboard libraries are loading. Charts will appear when GridStack and ECharts are available.
+      </div>`;
+}
+function renderDashboardPicker() {
+  const label = state.dashboardsLoading ? "Loading dashboards" : "Choose dashboard";
+  return `
+    <div class="dashboard-picker">
+      <button class="dashboard-picker-button" type="button" data-toggle-dashboard-menu aria-expanded="${state.dashboardMenuOpen ? "true" : "false"}" title="${escapeHtml(label)}">
+        ${renderIcon("dashboards")}
+        <span>${escapeHtml(label)}</span>
+        ${renderIcon("chevronDown")}
+      </button>
+      ${state.dashboardMenuOpen ? renderDashboardMenu() : ""}
+    </div>`;
+}
+function renderDashboardMenu() {
+  return `
+    <div class="dashboard-menu" role="menu">
+      <button class="dashboard-add-button" type="button" data-toggle-dashboard-create>
+        ${renderIcon("plus")}
+        <span>Add new dashboard</span>
+      </button>
+      ${state.dashboardCreateOpen ? renderDashboardCreateForm() : ""}
+      <div class="dashboard-menu-list">
+        ${state.dashboardsLoading ? `<div class="dashboard-menu-empty">Loading...</div>` : ""}
+        ${!state.dashboardsLoading && !state.dashboards.length ? `<div class="dashboard-menu-empty">No dashboards yet.</div>` : ""}
+        ${state.dashboards.map((dashboard) => renderDashboardMenuItem(dashboard)).join("")}
       </div>
-    </section>`;
+    </div>`;
+}
+function renderDashboardCreateForm() {
+  return `
+    <form class="dashboard-create-form" data-dashboard-create-form>
+      <label>
+        <span>Name</span>
+        <input name="name" maxlength="255" required placeholder="Operations overview" ${state.dashboardCreatePending ? "disabled" : ""} />
+      </label>
+      <label>
+        <span>Description</span>
+        <textarea name="description" maxlength="2000" rows="2" placeholder="Weekly operational snapshot" ${state.dashboardCreatePending ? "disabled" : ""}></textarea>
+      </label>
+      <button class="primary" type="submit" ${state.dashboardCreatePending ? "disabled" : ""}>
+        ${state.dashboardCreatePending ? "Creating..." : "Create dashboard"}
+      </button>
+    </form>`;
+}
+function renderDashboardMenuItem(dashboard) {
+  const selected = dashboard.id === state.activeDashboardId;
+  const deleting = state.dashboardDeletePendingId === dashboard.id;
+  return `
+    <div class="dashboard-menu-item ${selected ? "active" : ""}">
+      <button type="button" data-select-dashboard="${escapeHtml(dashboard.id)}">
+        <strong>${escapeHtml(dashboard.name || "Untitled dashboard")}</strong>
+        <small>${escapeHtml(dashboard.description || "No description")}</small>
+      </button>
+      <button class="dashboard-delete-button" type="button" data-delete-dashboard="${escapeHtml(dashboard.id)}" aria-label="Delete ${escapeHtml(dashboard.name || "dashboard")}" title="Delete dashboard" ${deleting ? "disabled" : ""}>
+        ${renderIcon("trash")}
+      </button>
+    </div>`;
 }
 function renderKpiCard(label, value, delta, helper, direction) {
   return `
@@ -411,11 +557,6 @@ function renderDatasourcesView() {
       : "Log in to upload .xlsx workbook";
   return `
     <section class="datasources-view placeholder-view">
-      <div class="placeholder-intro">
-        <span>Connected feature</span>
-        <h1>Datasources</h1>
-        <p>Upload Excel workbooks and choose which data sources are active for GAARD queries.</p>
-      </div>
       <div class="datasource-actions-grid">
         <button class="placeholder-item datasource-upload-card" type="button" data-add-source ${state.datasourceUploadPending ? "disabled" : ""}>
           ${renderIcon("plus")}
@@ -441,7 +582,7 @@ function renderDatasourcesView() {
         <header>
           <div>
             <span>Available sources</span>
-            <h2>Excel workbooks</h2>
+            <h2>Select sources to ask questions about.</h2>
           </div>
           <button class="ghost-button" type="button" data-refresh-sources ${state.datasourcesLoading || !state.token ? "disabled" : ""}>
             Refresh
@@ -503,6 +644,7 @@ function render(options = {}) {
             ${renderAuthControls()}
           </div>
         </header>
+        <div class="api-error-slot">${renderApiErrorBanner()}</div>
         ${renderActiveView()}
       </section>
       <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
@@ -518,12 +660,22 @@ function render(options = {}) {
     button.addEventListener("click", openLogin);
   });
   document.querySelector("[data-close-login]")?.addEventListener("click", closeLogin);
+  document.querySelector("[data-dismiss-api-error]")?.addEventListener("click", dismissApiError);
   document.querySelector("[data-toggle-sources]")?.addEventListener("click", toggleSources);
   document.querySelector("[data-add-source]")?.addEventListener("click", openSourcePicker);
-  document.querySelector("[data-refresh-sources]")?.addEventListener("click", loadDatasources);
+  document.querySelector("[data-refresh-sources]")?.addEventListener("click", () => loadDatasources());
   document.querySelector("[data-new-source-active]")?.addEventListener("change", toggleNewSourceActive);
   document.querySelectorAll("[data-source-active]").forEach((input2) => {
     input2.addEventListener("change", updateSourceActive);
+  });
+  document.querySelector("[data-toggle-dashboard-menu]")?.addEventListener("click", toggleDashboardMenu);
+  document.querySelector("[data-toggle-dashboard-create]")?.addEventListener("click", toggleDashboardCreate);
+  document.querySelector("[data-dashboard-create-form]")?.addEventListener("submit", createDashboard);
+  document.querySelectorAll("[data-select-dashboard]").forEach((button) => {
+    button.addEventListener("click", selectDashboard);
+  });
+  document.querySelectorAll("[data-delete-dashboard]").forEach((button) => {
+    button.addEventListener("click", deleteDashboard);
   });
   document.querySelector("#excel-source-input")?.addEventListener("change", uploadSelectedSource);
   document.querySelector("#login-form")?.addEventListener("submit", login);
@@ -552,13 +704,58 @@ function render(options = {}) {
   }
   initAnalysisDashboard();
   maybeLoadDatasourcesForActiveView();
+  maybeLoadDashboardsForActiveView();
   if (options.scrollToLatest) {
     scrollToLatest();
   }
 }
+var apiErrorTimer = null;
+function apiErrorMessage(error, fallback = "Request failed.") {
+  const raw = typeof error === "string" ? error : error?.message;
+  return String(raw || fallback).trim() || fallback;
+}
+function reportApiError(error, fallback) {
+  const id = state.nextApiErrorId++;
+  state.apiError = {
+    id,
+    message: apiErrorMessage(error, fallback)
+  };
+  if (apiErrorTimer) {
+    clearTimeout(apiErrorTimer);
+  }
+  apiErrorTimer = setTimeout(() => {
+    if (state.apiError?.id === id) {
+      state.apiError = null;
+      render();
+    }
+  }, 8000);
+}
+function dismissApiError() {
+  if (apiErrorTimer) {
+    clearTimeout(apiErrorTimer);
+    apiErrorTimer = null;
+  }
+  state.apiError = null;
+  render();
+}
+function formatApiResponseError(response, message) {
+  const detail = apiErrorMessage(message);
+  const status = response?.status;
+  if (!status) {
+    return detail;
+  }
+  const statusText = response.statusText ? ` ${response.statusText}` : "";
+  const prefix = `HTTP ${status}${statusText}`;
+  return detail === "Request failed." ? `${prefix}: Request failed.` : `${prefix}: ${detail}`;
+}
 function maybeLoadDatasourcesForActiveView() {
     if (state.activeView === "datasources" && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
         void loadDatasources();
+    }
+}
+function maybeLoadDashboardsForActiveView() {
+    if (state.activeView === "analysis" && state.token && !state.dashboardsLoaded && !state.dashboardsLoading) {
+        void loadDashboards();
     }
 }
 async function toggleSources() {
@@ -567,6 +764,165 @@ async function toggleSources() {
     render();
     if (state.sourcesOpen && state.token && !state.datasourcesLoaded) {
         await loadDatasources();
+    }
+}
+async function loadDashboards() {
+    if (!state.token) {
+        state.dashboards = [];
+        state.dashboardsLoaded = false;
+        state.activeDashboardId = "";
+        return;
+    }
+    state.dashboardsLoading = true;
+    state.dashboardsError = "";
+    render();
+    try {
+        const response = await fetch(`/api/dashboards?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboards = payload.items || [];
+        state.dashboardsLoaded = true;
+        state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || state.dashboards[0]?.id || "";
+    } catch (error) {
+        state.dashboardsError = error.message || "Could not load dashboards.";
+        reportApiError(error, "Could not load dashboards.");
+        state.dashboardsLoaded = true;
+    } finally {
+        state.dashboardsLoading = false;
+        render();
+    }
+}
+function toggleDashboardMenu() {
+    state.dashboardMenuOpen = !state.dashboardMenuOpen;
+    state.dashboardsError = "";
+    render();
+    if (state.dashboardMenuOpen && state.token && !state.dashboardsLoaded) {
+        void loadDashboards();
+    }
+}
+function toggleDashboardCreate() {
+    state.dashboardCreateOpen = !state.dashboardCreateOpen;
+    render();
+}
+async function selectDashboard(event) {
+    const dashboardId = event.currentTarget.dataset.selectDashboard || "";
+    if (!dashboardId || dashboardId === state.activeDashboardId) {
+        state.dashboardMenuOpen = false;
+        state.dashboardCreateOpen = false;
+        render();
+        return;
+    }
+    const previousDashboardId = state.activeDashboardId;
+    state.activeDashboardId = dashboardId;
+    state.dashboardMenuOpen = false;
+    state.dashboardCreateOpen = false;
+    render();
+    try {
+        const response = await fetch("/api/dashboards/active", {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                dashboard_id: dashboardId,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || dashboardId;
+    } catch (error) {
+        state.activeDashboardId = previousDashboardId;
+        state.dashboardsError = error.message || "Could not select dashboard.";
+        reportApiError(error, "Could not select dashboard.");
+    } finally {
+        render();
+    }
+}
+async function createDashboard(event) {
+    event.preventDefault();
+    if (!state.token || state.dashboardCreatePending) return;
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "").trim();
+    const description = String(form.get("description") || "").trim();
+    if (!name) {
+        state.dashboardsError = "Dashboard name is required.";
+        render();
+        return;
+    }
+    state.dashboardCreatePending = true;
+    state.dashboardsError = "";
+    render();
+    try {
+        const response = await fetch("/api/dashboards", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                name,
+                description,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            state.dashboards = [payload.item, ...state.dashboards.filter((dashboard) => dashboard.id !== payload.item.id)];
+            state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || payload.item.id || "";
+        }
+        state.dashboardsLoaded = true;
+        state.dashboardCreateOpen = false;
+        state.dashboardMenuOpen = false;
+    } catch (error) {
+        state.dashboardsError = error.message || "Could not create dashboard.";
+        reportApiError(error, "Could not create dashboard.");
+    } finally {
+        state.dashboardCreatePending = false;
+        render();
+    }
+}
+async function deleteDashboard(event) {
+    event.stopPropagation();
+    const dashboardId = event.currentTarget.dataset.deleteDashboard || "";
+    const dashboard = state.dashboards.find((item) => item.id === dashboardId);
+    if (!dashboardId || state.dashboardDeletePendingId) return;
+    if (!window.confirm(`Delete dashboard "${dashboard?.name || "Untitled dashboard"}"?`)) {
+        return;
+    }
+    state.dashboardDeletePendingId = dashboardId;
+    state.dashboardsError = "";
+    render();
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}?${params.toString()}`, {
+            method: "DELETE",
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboards = state.dashboards.filter((item) => item.id !== dashboardId);
+        if (state.activeDashboardId === dashboardId) {
+            state.activeDashboardId = payload.active_dashboard_id || state.dashboards[0]?.id || "";
+        }
+    } catch (error) {
+        state.dashboardsError = error.message || "Could not delete dashboard.";
+        reportApiError(error, "Could not delete dashboard.");
+    } finally {
+        state.dashboardDeletePendingId = "";
+        render();
     }
 }
 function openSourcePicker() {
@@ -583,7 +939,26 @@ function openSourcePicker() {
 function toggleNewSourceActive(event) {
     state.newDatasourceActive = event.currentTarget.checked;
 }
-async function loadDatasources() {
+function mergeDatasourcesPreservingOrder(currentItems, nextItems) {
+    const nextById = new Map(nextItems.map((item) => [String(item.id), item]));
+    const seen = new Set();
+    const merged = currentItems.reduce((items, item) => {
+        const key = String(item.id);
+        const next = nextById.get(key);
+        if (!next) return items;
+        seen.add(key);
+        items.push(next);
+        return items;
+    }, []);
+    nextItems.forEach((item) => {
+        const key = String(item.id);
+        if (!seen.has(key)) {
+            merged.push(item);
+        }
+    });
+    return merged;
+}
+async function loadDatasources(options = {}) {
     state.datasourcesLoading = true;
     state.datasourceError = "";
     render();
@@ -593,12 +968,14 @@ async function loadDatasources() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error(extractErrorMessage(payload));
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
         }
-        state.datasources = payload.items || [];
+        const items = payload.items || [];
+        state.datasources = options.preserveOrder ? mergeDatasourcesPreservingOrder(state.datasources, items) : items;
         state.datasourcesLoaded = true;
     } catch (error) {
         state.datasourceError = error.message || "Could not load data sources.";
+        reportApiError(error, "Could not load data sources.");
         state.datasourcesLoaded = true;
     } finally {
         state.datasourcesLoading = false;
@@ -606,7 +983,8 @@ async function loadDatasources() {
     }
 }
 async function uploadSelectedSource(event) {
-    const file = event.currentTarget.files?.[0];
+    const input = event.currentTarget;
+    const file = input.files?.[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".xlsx")) {
         state.datasourceError = "Choose an .xlsx file.";
@@ -630,18 +1008,22 @@ async function uploadSelectedSource(event) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+            throw new Error(friendlyDatasourceError(formatApiResponseError(response, extractErrorMessage(payload))));
         }
-        state.datasources = [
-            payload.item,
-            ...state.datasources.filter((item) => item.id !== payload.item?.id)
-        ].filter(Boolean);
-        state.datasourcesLoaded = true;
+        if (payload.item) {
+            state.datasources = mergeDatasourcesPreservingOrder(state.datasources, [
+                ...state.datasources,
+                payload.item
+            ]);
+        }
+        state.datasourcesLoaded = false;
+        await loadDatasources();
     } catch (error) {
         state.datasourceError = error.message || "Could not add the data source.";
+        reportApiError(error, "Could not add the data source.");
     } finally {
         state.datasourceUploadPending = false;
-        event.currentTarget.value = "";
+        input.value = "";
         render();
     }
 }
@@ -667,11 +1049,12 @@ async function updateSourceActive(event) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+            throw new Error(friendlyDatasourceError(formatApiResponseError(response, extractErrorMessage(payload))));
         }
-        await loadDatasources();
+        await loadDatasources({ preserveOrder: true });
     } catch (error) {
         state.datasourceError = error.message || "Could not update the source state.";
+        reportApiError(error, "Could not update the source state.");
     } finally {
         state.datasourceStatePendingId = null;
         render();
@@ -691,6 +1074,8 @@ function changeView(event) {
   if (state.activeView === view) return;
   state.activeView = view;
   state.error = "";
+  state.dashboardMenuOpen = false;
+  state.dashboardCreateOpen = false;
   render();
 }
 function initAnalysisDashboard() {
@@ -1065,12 +1450,13 @@ async function saveWidgetFromMessage(event) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(extractErrorMessage(payload));
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     }
     message.saveStatus = "saved";
   } catch (error) {
     message.saveStatus = "error";
     message.saveError = error.message || "Widget could not be saved.";
+    reportApiError(error, "Widget could not be saved.");
   } finally {
     render();
   }
@@ -1097,16 +1483,20 @@ async function login(event) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(extractErrorMessage(payload));
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     }
     state.token = payload.token || "";
     state.username = payload.username || "";
     state.loginOpen = false;
+    state.dashboards = [];
+    state.dashboardsLoaded = false;
+    state.activeDashboardId = "";
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
     render();
   } catch (error) {
     state.error = error.message || "Login failed.";
+    reportApiError(error, "Login failed.");
     renderLogin();
   }
 }
@@ -1118,6 +1508,12 @@ function logout() {
   state.datasources = [];
   state.datasourcesLoaded = false;
   state.datasourceError = "";
+  state.dashboards = [];
+  state.dashboardsLoaded = false;
+  state.dashboardsError = "";
+  state.activeDashboardId = "";
+  state.dashboardMenuOpen = false;
+  state.dashboardCreateOpen = false;
   state.activeView = "home";
   state.loginOpen = false;
   localStorage.removeItem("gaard_client_token");
@@ -1200,7 +1596,7 @@ async function submitQuestion(event) {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(extractErrorMessage(payload));
+        throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
       }
       syncConversationFromResponse(payload);
       message.status = "ok";
@@ -1209,6 +1605,7 @@ async function submitQuestion(event) {
   } catch (error) {
     message.status = "error";
     message.error = error.message || "Request failed.";
+    reportApiError(error, "Request failed.");
   } finally {
     state.pending = false;
     render({ scrollToLatest: true });
@@ -1229,7 +1626,7 @@ async function submitAnalysisQuestion(message, question) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(extractErrorMessage(payload));
+    throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
   }
   await readAnalysisStream(message, response);
 }
@@ -1251,6 +1648,7 @@ async function submitAnalysisReply(event) {
   } catch (error) {
     message.status = "error";
     message.error = error.message || "Request failed.";
+    reportApiError(error, "Request failed.");
   } finally {
     state.pending = false;
     render({ scrollToLatest: true });
@@ -1270,7 +1668,7 @@ async function continueAnalysis(message, reply) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(extractErrorMessage(payload));
+    throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
   }
   await readAnalysisStream(message, response);
 }
@@ -1442,11 +1840,23 @@ function extractErrorMessage(payload) {
   if (typeof detail === "string") {
     return detail;
   }
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item?.msg || item?.message || String(item)).join("; ");
+  }
+  if (detail?.message) {
+    return detail.message;
+  }
+  if (detail?.detail) {
+    return typeof detail.detail === "string" ? detail.detail : JSON.stringify(detail.detail);
+  }
   if (detail?.error?.message) {
     return detail.error.message;
   }
   if (payload?.error?.message) {
     return payload.error.message;
+  }
+  if (payload?.message) {
+    return payload.message;
   }
   return "Request failed.";
 }

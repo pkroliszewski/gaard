@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+import io
 import json
 from pathlib import Path
 import sqlite3
@@ -25,14 +26,18 @@ from gaard_api.admin.database import (
 )
 from gaard_api.admin.models import (
     AdminSetting,
+    AdminUser,
     BusinessKnowledgeClaim,
     BusinessLogicSuggestion,
+    Dashboard,
+    DashboardUserState,
     DataQueryAuditLog,
     DataQueryAuditType,
     DatasourceConnector,
     DatasourceSchemaCache,
     PromptTemplate,
 )
+from gaard_api.admin.security import hash_password
 from gaard_api.admin.services import (
     get_active_business_logic_prompt_safe,
     get_governance_policy_for_schema,
@@ -46,6 +51,7 @@ from gaard_api.core.settings import settings
 from gaard_api.example_database import install_medical_poc_example_database
 from gaard_api.main import app
 from gaard_api.query_hooks import QueryHookRegistry
+from gaard_connectors import create_builtin_connector_registry
 
 
 @pytest.fixture()
@@ -131,6 +137,31 @@ def auth_headers(client: TestClient) -> dict[str, str]:
     token = login(client)["token"]
     change_password(client, token)
     return {"Authorization": f"Bearer {token}"}
+
+
+def add_local_user(username: str, password: str) -> None:
+    with create_session() as session:
+        session.add(
+            AdminUser(
+                username=username,
+                password_hash=hash_password(password),
+                must_change_password=False,
+            )
+        )
+        session.commit()
+
+
+def login_as(client: TestClient, username: str, password: str) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/admin/auth/login",
+        json={
+            "username": username,
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
 def test_admin_lists_datasource_types_from_connector_registry(admin_client: TestClient) -> None:
@@ -276,6 +307,111 @@ def test_query_endpoint_accepts_authenticated_user(admin_client: TestClient) -> 
 
     assert response.status_code == 200
     assert response.json()["answer"]
+
+
+def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -> None:
+    admin_headers = auth_headers(admin_client)
+    add_local_user("analyst", "analyst-password")
+    analyst_headers = login_as(admin_client, "analyst", "analyst-password")
+
+    admin_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=admin_headers,
+        json={
+            "name": "Operations",
+            "description": "Daily operational dashboard.",
+        },
+    )
+    admin_second_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=admin_headers,
+        json={
+            "name": "Operations detail",
+            "description": "Detailed operational dashboard.",
+        },
+    )
+    analyst_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=analyst_headers,
+        json={
+            "name": "Finance",
+            "description": "Revenue tracking.",
+        },
+    )
+
+    assert admin_response.status_code == 200
+    assert admin_second_response.status_code == 200
+    assert analyst_response.status_code == 200
+    admin_dashboard = admin_response.json()["item"]
+    admin_second_dashboard = admin_second_response.json()["item"]
+    analyst_dashboard = analyst_response.json()["item"]
+    assert admin_dashboard["owner_username"] == "admin"
+    assert analyst_dashboard["owner_username"] == "analyst"
+    assert admin_second_response.json()["active_dashboard_id"] == admin_second_dashboard["id"]
+
+    active_response = admin_client.put(
+        "/api/v1/dashboards/active",
+        headers=admin_headers,
+        json={"dashboard_id": admin_dashboard["id"]},
+    )
+    assert active_response.status_code == 200
+    assert active_response.json()["active_dashboard_id"] == admin_dashboard["id"]
+
+    cross_active_response = admin_client.put(
+        "/api/v1/dashboards/active",
+        headers=admin_headers,
+        json={"dashboard_id": analyst_dashboard["id"]},
+    )
+    assert cross_active_response.status_code == 404
+
+    admin_list = admin_client.get("/api/v1/dashboards", headers=admin_headers)
+    analyst_list = admin_client.get("/api/v1/dashboards", headers=analyst_headers)
+
+    assert [item["id"] for item in admin_list.json()["items"]] == [
+        admin_second_dashboard["id"],
+        admin_dashboard["id"],
+    ]
+    assert admin_list.json()["active_dashboard_id"] == admin_dashboard["id"]
+    assert admin_list.json()["active_dashboard"]["id"] == admin_dashboard["id"]
+    assert [item["id"] for item in analyst_list.json()["items"]] == [
+        analyst_dashboard["id"]
+    ]
+    assert analyst_list.json()["active_dashboard_id"] == analyst_dashboard["id"]
+
+    cross_delete = admin_client.delete(
+        f"/api/v1/dashboards/{analyst_dashboard['id']}",
+        headers=admin_headers,
+    )
+    assert cross_delete.status_code == 404
+
+    admin_dashboards = admin_client.get(
+        "/api/v1/admin/dashboards",
+        headers=admin_headers,
+    )
+    assert admin_dashboards.status_code == 200
+    assert {item["id"] for item in admin_dashboards.json()["items"]} == {
+        admin_dashboard["id"],
+        admin_second_dashboard["id"],
+        analyst_dashboard["id"],
+    }
+
+    delete_response = admin_client.delete(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=admin_headers,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "deleted"
+    assert delete_response.json()["active_dashboard_id"] == admin_second_dashboard["id"]
+
+    with create_session() as session:
+        dashboards = session.scalars(select(Dashboard)).all()
+        assert {dashboard.dashboard_id for dashboard in dashboards} == {
+            admin_second_dashboard["id"],
+            analyst_dashboard["id"]
+        }
+        admin_state = session.get(DashboardUserState, "1")
+        assert admin_state is not None
+        assert admin_state.active_dashboard_id == admin_second_dashboard["id"]
 
 
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
@@ -1476,6 +1612,36 @@ def test_datasource_connector_builds_sqlite_url_from_database_path(
     assert item["database_type"] == "sqlite"
     assert item["database_url"] == f"sqlite:///{db_path}"
     assert item["sql_dialect"] == "sqlite"
+
+
+def test_excel_upload_without_duckdb_excel_connector_returns_400(
+    admin_client: TestClient,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    upload_dir = tmp_path / "excel-uploads"
+    monkeypatch.setattr(settings, "gaard_excel_upload_directory", str(upload_dir))
+    monkeypatch.setattr(admin_api, "get_connector_registry", create_builtin_connector_registry)
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/excel-upload",
+        headers={"Authorization": f"Bearer {token}"},
+        files={
+            "file": (
+                "cases.xlsx",
+                io.BytesIO(b"not a real workbook"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "duckdb-excel datasource connector" in response.json()["detail"]
+    assert not upload_dir.exists()
 
 
 def test_public_datasource_activation_keeps_single_active_datasource(

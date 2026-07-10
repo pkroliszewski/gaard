@@ -1400,6 +1400,10 @@ button.primary {
   background: var(--surface);
 }
 
+.workspace-shell {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .chat-shell {
   grid-template-rows: minmax(0, 1fr) auto;
 }
@@ -1409,6 +1413,64 @@ button.primary {
   padding: 18px 36px;
   border-bottom: 1px solid #edf1f4;
   background: rgba(255, 255, 255, 0.96);
+}
+
+.api-error-slot {
+  min-height: 0;
+  background: #ffffff;
+}
+
+.api-error-banner {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 36px 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(177, 59, 59, 0.2);
+  border-radius: 7px;
+  background: #fff1f1;
+  color: #8f252b;
+  box-shadow: 0 10px 24px rgba(143, 37, 43, 0.08);
+}
+
+.api-error-icon svg,
+.api-error-close svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.api-error-banner p {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-error-close {
+  width: 32px;
+  min-height: 32px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8f252b;
+}
+
+.api-error-close:hover,
+.api-error-close:focus-visible {
+  background: rgba(143, 37, 43, 0.08);
 }
 
 .conversation-heading span {
@@ -1423,6 +1485,32 @@ button.primary {
   color: #111a24;
   font-size: 25px;
   font-weight: 500;
+}
+
+.analysis-heading {
+  max-width: min(760px, 100%);
+  gap: 5px;
+}
+
+.analysis-heading p {
+  min-width: 0;
+  max-width: 720px;
+  margin: 0;
+  overflow: hidden;
+  color: #6d7a86;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-heading .dashboard-title-row {
+  max-width: 100%;
+}
+
+.analysis-heading .dashboard-title-row strong {
+  min-width: 0;
 }
 
 .signed-in {
@@ -1526,6 +1614,11 @@ button.primary {
   margin-bottom: 24px;
 }
 
+.dashboard-toolbar-compact {
+  justify-content: flex-end;
+  margin-bottom: 18px;
+}
+
 .dashboard-toolbar h1,
 .placeholder-intro h1 {
   margin: 0;
@@ -1533,6 +1626,182 @@ button.primary {
   font-size: 25px;
   font-weight: 500;
   line-height: 1.18;
+}
+
+.dashboard-title-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dashboard-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.dashboard-picker-button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid #dbe4ed;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #263442;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(22, 40, 58, 0.04);
+}
+
+.dashboard-picker-button svg,
+.dashboard-add-button svg,
+.dashboard-delete-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.dashboard-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(360px, calc(100vw - 56px));
+  padding: 10px;
+  border: 1px solid #dfe7ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 22px 55px rgba(20, 40, 58, 0.18);
+}
+
+.dashboard-add-button {
+  width: 100%;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #eef5ff;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.dashboard-create-form {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #e5ebf1;
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.dashboard-create-form label {
+  display: grid;
+  gap: 5px;
+  color: #5f6f7c;
+  font-size: 12px;
+}
+
+.dashboard-create-form input,
+.dashboard-create-form textarea {
+  width: 100%;
+  border: 1px solid #dbe4ed;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111a24;
+  font: inherit;
+}
+
+.dashboard-create-form input {
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+.dashboard-create-form textarea {
+  min-height: 62px;
+  resize: vertical;
+  padding: 8px 9px;
+}
+
+.dashboard-menu-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.dashboard-menu-empty {
+  padding: 12px 10px;
+  color: #7a8793;
+  font-size: 13px;
+}
+
+.dashboard-menu-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: stretch;
+  gap: 6px;
+  border-radius: 7px;
+}
+
+.dashboard-menu-item.active {
+  background: #f3f7fc;
+}
+
+.dashboard-menu-item > button:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #111a24;
+  text-align: left;
+}
+
+.dashboard-menu-item strong,
+.dashboard-menu-item small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-menu-item strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dashboard-menu-item small {
+  color: #7a8793;
+  font-size: 12px;
+}
+
+.dashboard-delete-button {
+  width: 34px;
+  min-height: 34px;
+  align-self: center;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8f252b;
+}
+
+.dashboard-delete-button:hover,
+.dashboard-delete-button:focus-visible {
+  background: rgba(143, 37, 43, 0.08);
 }
 
 .dashboard-toolbar p,
@@ -1567,6 +1836,31 @@ button.primary {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 18px;
+}
+
+.dashboard-empty {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  max-width: 620px;
+  padding: 28px;
+  border: 1px solid #e6ebef;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 6px 20px rgba(22, 40, 58, 0.04);
+}
+
+.dashboard-empty h2 {
+  margin: 0;
+  color: #111a24;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.dashboard-empty p {
+  margin: 0;
+  color: #6d7a86;
+  font-size: 14px;
 }
 
 .kpi-card,

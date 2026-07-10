@@ -149,6 +149,37 @@ class ConversationTurn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class Dashboard(Base):
+    __tablename__ = "dashboards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dashboard_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class DashboardUserState(Base):
+    __tablename__ = "dashboard_user_states"
+
+    owner_user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    active_dashboard_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class PromptTemplate(Base):
     __tablename__ = "prompt_templates"
     __table_args__ = (UniqueConstraint("prompt_key", name="uq_prompt_templates_key"),)

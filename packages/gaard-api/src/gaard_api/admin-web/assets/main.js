@@ -5,7 +5,7 @@ var overviewGridSaveTimer = null;
 var overviewGridSaveInFlight = false;
 var overviewGridSaveQueued = false;
 var builtInSectionLabels = {
-  overview: "Overview",
+  overview: "Dashboards",
   widgets: "Widgets",
   "data-audit": "Data audit",
   prompts: "Prompts",
@@ -686,12 +686,8 @@ function allowedRequestsForExtension(extensionId) {
   return allowedRequestsByExtension[extensionId] || new Set();
 }
 function renderOverview() {
-  const overview = state.overview;
-  const widgets = overview?.widgets || [];
+  const dashboards = state.overview?.items || [];
   const isLoading = state.overviewLoading || state.overviewRefreshing;
-  const showInitialLoader = isLoading && !overview;
-  const slotCount = showInitialLoader ? OVERVIEW_MIN_GRID_SLOTS : getOverviewSlotCount(widgets);
-  const canAddSlots = slotCount < OVERVIEW_MAX_GRID_SLOTS;
   return `
     <div class="toolbar overview-toolbar">
       <div class="refresh-status" aria-live="polite">
@@ -699,12 +695,43 @@ function renderOverview() {
       </div>
       <button class="primary" type="button" id="overview-refresh" ${isLoading ? "disabled" : ""}>Refresh</button>
     </div>
-    <div class="overview-grid grid-stack" data-overview-grid>
-      ${showInitialLoader ? renderOverviewLoading() : renderOverviewGrid(widgets, slotCount)}
-    </div>
-    <div class="overview-grid-actions">
-      <button type="button" id="overview-add-slots" ${showInitialLoader || !canAddSlots ? "disabled" : ""}>Add empty slots</button>
-      <span>${escapeHtml(`${slotCount}/${OVERVIEW_MAX_GRID_SLOTS} slots`)}</span>
+    <section class="panel dashboard-admin-panel">
+      <div class="panel-header">
+        <div>
+          <h2>User dashboards</h2>
+          <p>Dashboards created in the GAARD client, grouped by owner.</p>
+        </div>
+      </div>
+      ${isLoading && !state.overview ? renderOverviewLoading() : renderAdminDashboardTable(dashboards)}
+    </section>`;
+}
+function renderAdminDashboardTable(dashboards) {
+  if (!dashboards.length) {
+    return `<div class="empty-state">No dashboards have been created yet.</div>`;
+  }
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Owner</th>
+            <th>Updated</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${dashboards.map((dashboard) => `
+            <tr>
+              <td><strong>${escapeHtml(dashboard.name || "Untitled dashboard")}</strong><br><code>${escapeHtml(dashboard.id)}</code></td>
+              <td>${escapeHtml(dashboard.description || "-")}</td>
+              <td>${escapeHtml(dashboard.owner_username || dashboard.owner_user_id || "-")}</td>
+              <td>${escapeHtml(formatLicenseDate(dashboard.updated_at))}</td>
+              <td>${escapeHtml(formatLicenseDate(dashboard.created_at))}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
     </div>`;
 }
 function renderOverviewLoading() {
@@ -2741,13 +2768,7 @@ async function loadOverview() {
     render();
   }
   try {
-    const [overview, widgetConfig] = await Promise.all([
-      api("/api/v1/admin/overview"),
-      api("/api/v1/admin/overview/widgets")
-    ]);
-    state.overview = overview;
-    state.overviewWidgetConfigs = widgetConfig.items || [];
-    state.overviewWidgetDatasources = widgetConfig.datasources || [];
+    state.overview = await api("/api/v1/admin/dashboards");
   } finally {
     state.overviewLoading = false;
     if (state.section === "overview") {
@@ -2772,7 +2793,7 @@ async function refreshOverview() {
   setMessage("success", "");
   render();
   try {
-    state.overview = await api("/api/v1/admin/overview");
+    state.overview = await api("/api/v1/admin/dashboards");
   } catch (error) {
     setMessage("error", error.message);
   } finally {
