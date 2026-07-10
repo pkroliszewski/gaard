@@ -26,12 +26,34 @@ class QueryIntentClassification(BaseModel):
     model_response: dict[str, Any] = Field(default_factory=dict)
 
 
+class ContextMode(StrEnum):
+    AUTO = "auto"
+    NEW = "new"
+    OFF = "off"
+
+
+class ConversationContextDecision(StrEnum):
+    NEW_TOPIC = "new_topic"
+    FOLLOW_UP = "follow_up"
+    AMBIGUOUS = "ambiguous"
+
+
+class ConversationContextClassification(BaseModel):
+    decision: ConversationContextDecision = ConversationContextDecision.NEW_TOPIC
+    confidence: float = 0.0
+    standalone_question: str = ""
+    reason: str = ""
+    model_response: dict[str, Any] = Field(default_factory=dict)
+
+
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     datasource_id: str = "default"
     datasource_ids: list[str] = Field(default_factory=list)
     user_id: str = "local-admin"
     interpret: bool = True
+    conversation_id: str | None = None
+    context_mode: ContextMode = ContextMode.AUTO
 
 
 class GeneratedSql(BaseModel):

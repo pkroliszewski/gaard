@@ -40,9 +40,7 @@ class SqlGenerationPromptCompiler:
             return request.formatted_schema
 
         if request.database_schema is None:
-            raise ConfigurationError(
-                "Either database_schema or formatted_schema must be provided."
-            )
+            raise ConfigurationError("Either database_schema or formatted_schema must be provided.")
 
         return self.schema_formatter.format(request.database_schema)
 
@@ -85,11 +83,14 @@ Query construction rules:
 11. When the query uses table aliases, use those aliases consistently and do not mix aliased and unaliased table references.
 12. Do not use unqualified column names in joins or multi-table queries.
 13. If the question is ambiguous, choose the most likely interpretation based on the schema, column names, descriptions and data rules.
+14. Do not use bind parameters, placeholders, variables, or prepared-statement markers such as :name, ?, $1, @name, or %(name)s.
+15. When dates or dynamic ranges are needed, express them directly with {dialect} SQL functions or literal values so the SQL is executable without any external parameter binding.
 
 Output contract:
 - Return exactly one SQL SELECT statement.
 - The first non-whitespace token must be SELECT or WITH.
 - The final output must be executable SQL only.
+- The final SQL must be self-contained and executable as-is.
 """
 
     def _build_user_prompt(self, schema: str, question: str) -> str:

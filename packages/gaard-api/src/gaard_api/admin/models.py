@@ -109,6 +109,46 @@ class DataQueryAuditLog(Base):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    status: Mapped[str] = mapped_column(String(50), index=True, default="active")
+    datasource_id: Mapped[str] = mapped_column(String(255), index=True, default="")
+    datasource_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+    mode: Mapped[str] = mapped_column(String(50), index=True, default="sql")
+    status: Mapped[str] = mapped_column(String(50), index=True, default="completed")
+    original_question: Mapped[str] = mapped_column(Text)
+    standalone_question: Mapped[str] = mapped_column(Text, default="")
+    answer: Mapped[str] = mapped_column(Text, default="")
+    sql: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    data_query_audit_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    analysis_session_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    context_decision: Mapped[str] = mapped_column(String(50), index=True, default="new_topic")
+    context_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class PromptTemplate(Base):
     __tablename__ = "prompt_templates"
     __table_args__ = (UniqueConstraint("prompt_key", name="uq_prompt_templates_key"),)

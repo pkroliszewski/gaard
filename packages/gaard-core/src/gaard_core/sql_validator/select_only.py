@@ -35,3 +35,12 @@ class SelectOnlySqlValidator:
         for node in statement.walk():
             if isinstance(node, forbidden_expressions):
                 raise SqlValidationError(f"DDL and DML statements are not allowed. {sql}")
+            if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                raise SqlValidationError(
+                    f"SQL bind parameters are not allowed. SQL: {sql}",
+                    sql=sql,
+                    metadata={
+                        "primary_error_category": "sql.validation.bind_parameter",
+                        "error_categories": ["sql.validation.bind_parameter"],
+                    },
+                )

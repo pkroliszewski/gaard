@@ -39,6 +39,8 @@ class ClientQueryRequest(BaseModel):
     question: str = Field(min_length=1)
     backend_url: str | None = None
     mode: str = "sql"
+    conversation_id: str | None = None
+    context_mode: str = "auto"
 
 
 class ClientLoginRequest(BaseModel):
@@ -99,6 +101,31 @@ def backend_request_kwargs(
     return kwargs
 
 
+def query_payload(request: ClientQueryRequest) -> dict[str, Any]:
+    payload = {
+        "question": request.question,
+        "user_id": "client",
+        "mode": request.mode,
+    }
+    if request.conversation_id:
+        payload["conversation_id"] = request.conversation_id
+    if request.context_mode != "auto":
+        payload["context_mode"] = request.context_mode
+    return payload
+
+
+def analysis_payload(request: ClientQueryRequest) -> dict[str, Any]:
+    payload = {
+        "question": request.question,
+        "user_id": "client",
+    }
+    if request.conversation_id:
+        payload["conversation_id"] = request.conversation_id
+    if request.context_mode != "auto":
+        payload["context_mode"] = request.context_mode
+    return payload
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -126,11 +153,7 @@ async def query_backend(
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 query_url,
-                **backend_request_kwargs(authorization, {
-                    "question": request.question,
-                    "user_id": "client",
-                    "mode": request.mode,
-                }),
+                **backend_request_kwargs(authorization, query_payload(request)),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(
@@ -341,11 +364,7 @@ async def query_backend_stream(
                 async with client.stream(
                     "POST",
                     query_url,
-                    **backend_request_kwargs(authorization, {
-                        "question": request.question,
-                        "user_id": "client",
-                        "mode": request.mode,
-                    }),
+                    **backend_request_kwargs(authorization, query_payload(request)),
                 ) as response:
                     if response.status_code >= 400:
                         body = await response.aread()
@@ -389,10 +408,7 @@ async def analysis_backend_stream(
     async def stream_backend() -> AsyncIterator[str]:
         async for chunk in proxy_stream(
             url=analysis_url,
-            payload={
-                "question": request.question,
-                "user_id": "client",
-            },
+            payload=analysis_payload(request),
             authorization=authorization,
         ):
             yield chunk

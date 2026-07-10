@@ -8,9 +8,11 @@ var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
   username: storedUsername,
+  activeView: normalizeView(params.get("view")),
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
   nextMessageId: 1,
+  conversationId: "",
   pending: false,
   error: "",
   loginOpen: !storedToken,
@@ -28,6 +30,52 @@ function escapeHtml(value) {
 }
 function renderIcon(name) {
   const icons = {
+    home: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m3 10 9-7 9 7" />
+        <path d="M5 9v11h14V9" />
+        <path d="M9 20v-6h6v6" />
+      </svg>`,
+    analysis: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 19V5" />
+        <path d="M9 19V9" />
+        <path d="M14 19V3" />
+        <path d="M19 19v-7" />
+      </svg>`,
+    metrics: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 19 10 8l4 7 6-11" />
+        <path d="M4 5v14h16" />
+      </svg>`,
+    datasources: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <ellipse cx="12" cy="5" rx="7" ry="3" />
+        <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+        <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+      </svg>`,
+    queries: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-3.5-3.5" />
+      </svg>`,
+    alerts: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+        <path d="M10 21h4" />
+      </svg>`,
+    calendar: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4" />
+        <path d="M8 2v4" />
+        <path d="M3 10h18" />
+      </svg>`,
+    plus: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </svg>`,
     dashboards: `
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <rect x="3" y="3" width="7" height="8" rx="1.5" />
@@ -56,32 +104,50 @@ function renderIcon(name) {
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <rect x="4" y="10" width="16" height="10" rx="2" />
         <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+      </svg>`,
+    arrowUp: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m12 19 0-14" />
+        <path d="m5 12 7-7 7 7" />
       </svg>`
   };
   return icons[name] || "";
 }
 function renderSidebar() {
   const items = [
-    ["dashboards", "Dashboards"],
-    ["history", "Historia"],
-    ["sources", "Źródła danych"]
+    ["home", "Home", "Ask your data"],
+    ["analysis", "Analysis", "Dashboards"],
+    ["metrics", "Metrics", "Dashboard widgets"],
+    ["datasources", "Datasources", "Files and sources"],
+    ["queries", "My Queries", "Chat history"],
+    ["alerts", "Alerts", "Alert definitions"]
   ];
   return `
-    <aside class="sidebar" aria-label="Nawigacja">
+    <aside class="sidebar" aria-label="Navigation">
       <div class="brand">
         <img class="brand-logo" src="/assets/getgaard.svg" alt="" />
         <div class="brand-copy">
           <strong>GAARD</strong>
-          <span>Client</span>
+          <span>Data workspace</span>
         </div>
       </div>
-      <nav class="nav-list" aria-label="Główne sekcje">
-        ${items.map(([icon, label], index) => icon === "sources" ? renderSourcesNavItem(icon, label) : `
-          <button class="nav-item ${index === 1 ? "active" : ""}" type="button" aria-disabled="true" title="${escapeHtml(label)}">
-            ${renderIcon(icon)}
-            <span>${escapeHtml(label)}</span>
+      <nav class="nav-list" aria-label="Main sections">
+        ${items.map(([view, label, description]) => `
+          <button class="nav-item ${state.activeView === view ? "active" : ""}" type="button" data-view="${escapeHtml(view)}" title="${escapeHtml(label)}">
+            ${renderIcon(view)}
+            <span>
+              <strong>${escapeHtml(label)}</strong>
+              <small>${escapeHtml(description)}</small>
+            </span>
           </button>`).join("")}
       </nav>
+      <div class="data-status" role="status">
+        <span class="status-dot"></span>
+        <div>
+          <strong>Data status</strong>
+          <small>All systems operational</small>
+        </div>
+      </div>
     </aside>`;
 }
 function renderSourcesNavItem(icon, label) {
@@ -128,76 +194,258 @@ function renderAuthControls() {
   if (state.token) {
     return `
       <div class="signed-in">
-        <span class="user-chip" title="${escapeHtml(state.username || "Zalogowany użytkownik")}">
+        <button class="ghost-button" type="button" data-new-chat ${state.pending ? "disabled" : ""}>New chat</button>
+        <span class="user-chip" title="${escapeHtml(state.username || "Signed-in user")}">
           ${renderIcon("user")}
-          <span>${escapeHtml(state.username || "Użytkownik")}</span>
+          <span>${escapeHtml(state.username || "User")}</span>
         </span>
-        <button class="ghost-button" type="button" data-logout>Wyloguj</button>
+        <button class="ghost-button" type="button" data-logout>Log out</button>
       </div>`;
   }
-  return `<button class="primary auth-button" type="button" data-open-login>Zaloguj się</button>`;
+  return `<button class="primary auth-button" type="button" data-open-login>Log in</button>`;
 }
 function renderEmptyState() {
   if (!state.token) {
     return `
       <div class="empty-state locked">
         <div class="empty-icon">${renderIcon("lock")}</div>
-        <h2>GAARD</h2>
-        <p>Zaloguj się, aby rozpocząć rozmowę.</p>
-        <button class="primary" type="button" data-open-login>Zaloguj się</button>
+        <h2>Ask your data</h2>
+        <p>Log in to start a conversation.</p>
+        <button class="primary" type="button" data-open-login>Log in</button>
       </div>`;
   }
   return `
     <div class="empty-state">
       <img class="empty-logo" src="/assets/getgaard.svg" alt="" />
-      <h2>Jak mogę pomóc z danymi?</h2>
+      <h2>Ask your data</h2>
+      <p>Ask about metrics, records, trends, or run step-by-step analysis.</p>
     </div>`;
+}
+function renderViewHeading() {
+  const headings = {
+    home: ["Home", "Ask your data"],
+    analysis: ["Analysis", "Healthcare Operations overview"],
+    metrics: ["Metrics", "Defined dashboard widgets"],
+    datasources: ["Datasources", "Files and database sources"],
+    queries: ["My Queries", "Conversation history"],
+    alerts: ["Alerts", "Alert definitions"]
+  };
+  const [eyebrow, title] = headings[state.activeView] || headings.home;
+  return `
+    <div class="conversation-heading">
+      <span>${escapeHtml(eyebrow)}</span>
+      <strong>${escapeHtml(title)}</strong>
+    </div>`;
+}
+function renderActiveView() {
+  if (state.activeView === "analysis") {
+    return renderAnalysisView();
+  }
+  if (state.activeView === "metrics") {
+    return renderPlaceholderView({
+      title: "Metrics",
+      description: "Defined dashboard widgets will appear here. For now, you can save a widget from a chat response with the save button.",
+      items: ["Saved query widgets", "KPI cards", "Chart templates"]
+    });
+  }
+  if (state.activeView === "datasources") {
+    return renderPlaceholderView({
+      title: "Datasources",
+      description: "Uploaded files and connected data sources, such as Excel or CSV, will appear here. This module is marked as a future client feature.",
+      items: ["Excel workbooks", "CSV uploads", "Connected databases"]
+    });
+  }
+  if (state.activeView === "queries") {
+    return renderQueriesView();
+  }
+  if (state.activeView === "alerts") {
+    return renderPlaceholderView({
+      title: "Alerts",
+      description: "Alert definitions and data monitoring rules will appear here once alert support is added.",
+      items: ["Threshold alerts", "Scheduled checks", "Notification channels"]
+    });
+  }
+  return renderHomeView();
+}
+function renderHomeView() {
+  return `
+    <section class="chat-shell" aria-label="GAARD chat">
+      <section class="history" aria-live="polite">
+        ${state.messages.length ? state.messages.map(renderMessage).join("") : renderEmptyState()}
+      </section>
+      ${renderQueryForm()}
+    </section>`;
+}
+function renderQueryForm() {
+  const inputDisabled = state.pending || !state.token;
+  return `
+    <form id="query-form" class="query-bar">
+      <fieldset class="mode-control" ${inputDisabled ? "disabled" : ""}>
+        <legend>Work mode</legend>
+        <label class="${state.queryMode === "sql" ? "active" : ""}">
+          <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
+          <span>SQL</span>
+        </label>
+        <label class="${state.queryMode === "analysis" ? "active" : ""}">
+          <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
+          <span>Analysis</span>
+        </label>
+      </fieldset>
+      <textarea id="question-input" name="question" placeholder="${state.token ? "Ask your data" : "Log in to ask a question"}" rows="1" ${inputDisabled ? "disabled" : ""}></textarea>
+      <button class="send-button" type="submit" aria-label="Send question" title="Send" ${inputDisabled ? "disabled" : ""}>
+        ${renderIcon("arrowUp")}
+      </button>
+    </form>`;
+}
+function renderAnalysisView() {
+  return `
+    <section class="dashboard-view" aria-label="Dashboard Analysis">
+      <div class="dashboard-toolbar">
+        <div>
+          <h1>Healthcare Operations overview</h1>
+          <p>Weekly operational snapshot across capacity, flow and active issues.</p>
+        </div>
+        <button class="date-range" type="button" aria-disabled="true">
+          ${renderIcon("calendar")}
+          <span>May 12 - May 18, 2025</span>
+        </button>
+      </div>
+      <div class="kpi-row" aria-label="Key metrics">
+        ${renderKpiCard("Total patients", "45,781", "6.3%", "vs May 5 - May 11", "up")}
+        ${renderKpiCard("Active encounters", "12,986", "4.8%", "vs May 5 - May 11", "up")}
+        ${renderKpiCard("New episodes", "3,274", "7.1%", "vs May 5 - May 11", "up")}
+        ${renderKpiCard("Average LOS", "4.2 days", "0.3", "vs May 5 - May 11", "down")}
+      </div>
+      <div class="grid-stack dashboard-grid">
+        ${renderGridWidget("capacity", "Capacity by data domain", "chart chart-capacity", 0, 0, 6, 4)}
+        ${renderGridWidget("flow", "Patients flow", "chart chart-flow", 6, 0, 6, 4)}
+        ${renderGridWidget("episodes", "New episodes", "chart chart-episodes", 0, 4, 6, 3, renderEpisodeSummary())}
+        ${renderGridWidget("issues", "Recent issues", "issues-table", 6, 4, 6, 3, renderIssuesTable())}
+      </div>
+      <div class="dashboard-fallback" data-dashboard-fallback hidden>
+        Dashboard libraries are loading. Charts will appear when GridStack and ECharts are available.
+      </div>
+    </section>`;
+}
+function renderKpiCard(label, value, delta, helper, direction) {
+  return `
+    <article class="kpi-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <div class="kpi-delta ${direction}">
+        <b>${direction === "up" ? "↗" : "↘"} ${escapeHtml(delta)}</b>
+        <small>${escapeHtml(helper)}</small>
+      </div>
+    </article>`;
+}
+function renderGridWidget(id, title, bodyClass, x, y, w, h, content = "") {
+  return `
+    <div class="grid-stack-item" gs-id="${escapeHtml(id)}" gs-x="${x}" gs-y="${y}" gs-w="${w}" gs-h="${h}">
+      <article class="grid-stack-item-content dashboard-card">
+        <header>
+          <h2>${escapeHtml(title)}</h2>
+          <button type="button" aria-disabled="true" title="Widget settings">⌄</button>
+        </header>
+        <div class="${escapeHtml(bodyClass)}" data-chart="${escapeHtml(id)}">${content}</div>
+      </article>
+    </div>`;
+}
+function renderEpisodeSummary() {
+  return `
+    <div class="episode-summary">
+      <span>New episodes</span>
+      <strong>3,274</strong>
+      <small>↗ 7.1% vs May 5 - May 11</small>
+    </div>
+    <div class="chart-mini" data-chart="episodes-line"></div>`;
+}
+function renderIssuesTable() {
+  const issues = [
+    ["Lab analyzer downtime - Unit 3", "High", "Open", "May 12, 08:15"],
+    ["Radiology report backlog", "Medium", "In progress", "May 12, 07:42"],
+    ["Cardiology devices offline", "Medium", "Open", "May 12, 06:31"],
+    ["OR scheduling conflict", "Low", "Open", "May 11, 16:08"]
+  ];
+  return `
+    <table>
+      <thead><tr><th>Issue</th><th>Severity</th><th>Status</th><th>Opened</th></tr></thead>
+      <tbody>
+        ${issues.map(([issue, severity, status, opened]) => `
+          <tr>
+            <td>${escapeHtml(issue)}</td>
+            <td><span class="severity ${severity.toLowerCase()}">${escapeHtml(severity)}</span></td>
+            <td>${escapeHtml(status)}</td>
+            <td>${escapeHtml(opened)}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    <button class="link-button" type="button" aria-disabled="true">View all issues</button>`;
+}
+function renderQueriesView() {
+  const recent = state.messages.slice(-6).reverse();
+  return `
+    <section class="placeholder-view">
+      <div class="placeholder-intro">
+        <span>Marked feature</span>
+        <h1>My Queries</h1>
+        <p>Full chat history will appear here. For now, this shows recent questions from the current browser session.</p>
+      </div>
+      <div class="placeholder-list query-list">
+        ${recent.length ? recent.map((message) => `
+          <button type="button" data-view="home" class="placeholder-item">
+            ${renderIcon(message.mode === "analysis" ? "analysis" : "queries")}
+            <span>
+              <strong>${escapeHtml(message.question)}</strong>
+              <small>${escapeHtml(formatMode(message.mode))} · ${escapeHtml(message.status)}</small>
+            </span>
+          </button>`).join("") : `
+          <div class="placeholder-item muted">
+            ${renderIcon("queries")}
+            <span><strong>No local queries yet</strong><small>Ask your data on Home to start a session.</small></span>
+          </div>`}
+      </div>
+    </section>`;
+}
+function renderPlaceholderView({ title, description, items }) {
+  return `
+    <section class="placeholder-view">
+      <div class="placeholder-intro">
+        <span>Marked feature</span>
+        <h1>${escapeHtml(title)}</h1>
+        <p>${escapeHtml(description)}</p>
+      </div>
+      <div class="placeholder-list">
+        ${items.map((item) => `
+          <div class="placeholder-item">
+            ${renderIcon("plus")}
+            <span><strong>${escapeHtml(item)}</strong><small>Coming soon</small></span>
+          </div>`).join("")}
+      </div>
+    </section>`;
 }
 function render(options = {}) {
   if (!app) return;
-  const inputDisabled = state.pending || !state.token;
   app.innerHTML = `
     <main class="app-shell">
       ${renderSidebar()}
-      <section class="chat-shell" aria-label="Czat GAARD">
+      <section class="workspace-shell" aria-label="GAARD workspace">
         <header class="topbar">
-          <div class="conversation-heading">
-            <span>Czat</span>
-            <strong>GAARD</strong>
-          </div>
+          ${renderViewHeading()}
           <div class="header-actions">
             ${renderAuthControls()}
           </div>
         </header>
-        <section class="history" aria-live="polite">
-          ${state.messages.length ? state.messages.map(renderMessage).join("") : renderEmptyState()}
-        </section>
-        <form id="query-form" class="query-bar">
-          <fieldset class="mode-control" ${inputDisabled ? "disabled" : ""}>
-            <legend>Tryb pracy</legend>
-          <label class="${state.queryMode === "sql" ? "active" : ""}">
-            <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
-            <span>SQL</span>
-          </label>
-          <label class="${state.queryMode === "analysis" ? "active" : ""}">
-            <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
-            <span>Analiza</span>
-          </label>
-          </fieldset>
-          <textarea id="question-input" name="question" placeholder="${state.token ? "Zadaj pytanie" : "Zaloguj się, aby zadać pytanie"}" rows="1" ${inputDisabled ? "disabled" : ""}></textarea>
-          <button class="send-button" type="submit" aria-label="Wyślij pytanie" title="Wyślij" ${inputDisabled ? "disabled" : ""}>
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M22 2 11 13" />
-              <path d="m22 2-7 20-4-9-9-4Z" />
-            </svg>
-          </button>
-        </form>
+        ${renderActiveView()}
       </section>
       <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
       ${state.loginOpen ? renderLoginDialog() : ""}
     </main>`;
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.addEventListener("click", changeView);
+  });
   document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
   document.querySelector("[data-logout]")?.addEventListener("click", logout);
+  document.querySelector("[data-new-chat]")?.addEventListener("click", newChat);
   document.querySelectorAll("[data-open-login]").forEach((button) => {
     button.addEventListener("click", openLogin);
   });
@@ -230,137 +478,251 @@ function render(options = {}) {
   });
   const input = document.querySelector("#question-input");
   input?.addEventListener("keydown", handleQuestionKeydown);
-  if (state.token) {
+  if (state.token && state.activeView === "home") {
     input?.focus();
   }
+  initAnalysisDashboard();
   if (options.scrollToLatest) {
     scrollToLatest();
   }
 }
 async function toggleSources() {
-  state.sourcesOpen = !state.sourcesOpen;
-  state.datasourceError = "";
-  render();
-  if (state.sourcesOpen && state.token && !state.datasourcesLoaded) {
-    await loadDatasources();
-  }
+    state.sourcesOpen = !state.sourcesOpen;
+    state.datasourceError = "";
+    render();
+    if (state.sourcesOpen && state.token && !state.datasourcesLoaded) {
+        await loadDatasources();
+    }
 }
 function openSourcePicker() {
-  if (!state.token || state.datasourceUploadPending) return;
-  const input = document.querySelector("#excel-source-input");
-  if (!input) return;
-  input.value = "";
-  input.click();
+    if (!state.token || state.datasourceUploadPending) return;
+    const input = document.querySelector("#excel-source-input");
+    if (!input) return;
+    input.value = "";
+    input.click();
 }
 function toggleNewSourceActive(event) {
-  state.newDatasourceActive = event.currentTarget.checked;
+    state.newDatasourceActive = event.currentTarget.checked;
 }
 async function loadDatasources() {
-  state.datasourcesLoading = true;
-  state.datasourceError = "";
-  render();
-  try {
-    const response = await fetch(`/api/datasources?backend_url=${encodeURIComponent(state.backendUrl)}`, {
-      headers: authHeaders()
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(extractErrorMessage(payload));
-    }
-    state.datasources = payload.items || [];
-    state.datasourcesLoaded = true;
-  } catch (error) {
-    state.datasourceError = error.message || "Nie udało się pobrać źródeł danych.";
-  } finally {
-    state.datasourcesLoading = false;
+    state.datasourcesLoading = true;
+    state.datasourceError = "";
     render();
-  }
+    try {
+        const response = await fetch(`/api/datasources?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(extractErrorMessage(payload));
+        }
+        state.datasources = payload.items || [];
+        state.datasourcesLoaded = true;
+    } catch (error) {
+        state.datasourceError = error.message || "Nie udało się pobrać źródeł danych.";
+    } finally {
+        state.datasourcesLoading = false;
+        render();
+    }
 }
 async function uploadSelectedSource(event) {
-  const file = event.currentTarget.files?.[0];
-  if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".xlsx")) {
-    state.datasourceError = "Wybierz plik w formacie .xlsx.";
-    render();
-    return;
-  }
-  const formData = new FormData();
-  formData.append("file", file);
-  state.datasourceUploadPending = true;
-  state.datasourceError = "";
-  render();
-  try {
-    const params = new URLSearchParams({
-      backend_url: state.backendUrl,
-      active: state.newDatasourceActive ? "true" : "false"
-    });
-    const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: formData
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        state.datasourceError = "Wybierz plik w formacie .xlsx.";
+        render();
+        return;
     }
-    state.datasources = [
-      payload.item,
-      ...state.datasources.filter((item) => item.id !== payload.item?.id)
-    ].filter(Boolean);
-    state.datasourcesLoaded = true;
-  } catch (error) {
-    state.datasourceError = error.message || "Nie udało się dodać źródła danych.";
-  } finally {
-    state.datasourceUploadPending = false;
+    const formData = new FormData();
+    formData.append("file", file);
+    state.datasourceUploadPending = true;
+    state.datasourceError = "";
     render();
-  }
+    try {
+        const params = new URLSearchParams({
+            backend_url: state.backendUrl,
+            active: state.newDatasourceActive ? "true" : "false"
+        });
+        const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: formData
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+        }
+        state.datasources = [
+            payload.item,
+            ...state.datasources.filter((item) => item.id !== payload.item?.id)
+        ].filter(Boolean);
+        state.datasourcesLoaded = true;
+    } catch (error) {
+        state.datasourceError = error.message || "Nie udało się dodać źródła danych.";
+    } finally {
+        state.datasourceUploadPending = false;
+        render();
+    }
 }
 async function updateSourceActive(event) {
-  const input = event.currentTarget;
-  const sourceId = Number(input.dataset.sourceActive);
-  const active = input.checked;
-  if (!sourceId || state.datasourceStatePendingId) return;
-  state.datasourceStatePendingId = sourceId;
-  state.datasourceError = "";
-  render();
-  try {
-    const response = await fetch(`/api/datasources/${sourceId}/state`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeaders()
-      },
-      body: JSON.stringify({
-        active,
-        backend_url: state.backendUrl
-      })
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
-    }
-    await loadDatasources();
-  } catch (error) {
-    state.datasourceError = error.message || "Nie udało się zmienić stanu źródła.";
-  } finally {
-    state.datasourceStatePendingId = null;
+    const input = event.currentTarget;
+    const sourceId = Number(input.dataset.sourceActive);
+    const active = input.checked;
+    if (!sourceId || state.datasourceStatePendingId) return;
+    state.datasourceStatePendingId = sourceId;
+    state.datasourceError = "";
     render();
-  }
+    try {
+        const response = await fetch(`/api/datasources/${sourceId}/state`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                active,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+        }
+        await loadDatasources();
+    } catch (error) {
+        state.datasourceError = error.message || "Nie udało się zmienić stanu źródła.";
+    } finally {
+        state.datasourceStatePendingId = null;
+        render();
+    }
 }
 function friendlyDatasourceError(message) {
-  if (message.includes("non-SQL source support") || message.includes("LICENSE_ENTITLEMENT_REQUIRED")) {
-    return "Ta licencja nie pozwala na używanie plików Excel jako źródeł danych.";
+    if (message.includes("non-SQL source support") || message.includes("LICENSE_ENTITLEMENT_REQUIRED")) {
+        return "Ta licencja nie pozwala na używanie plików Excel jako źródeł danych.";
+    }
+    if (message.includes("multi-source access")) {
+        return "Korzystanie z wielu aktywnych źródeł danych wymaga licencji z obsługą wielu źródeł.";
+    }
+    return message;
+}
+function changeView(event) {
+  const view = normalizeView(event.currentTarget.dataset.view);
+  if (state.activeView === view) return;
+  state.activeView = view;
+  state.error = "";
+  render();
+}
+function initAnalysisDashboard() {
+  if (state.activeView !== "analysis") return;
+  const gridElement = document.querySelector(".dashboard-grid");
+  if (!gridElement) return;
+  if (window.GridStack) {
+    window.GridStack.init(
+      {
+        cellHeight: 94,
+        column: 12,
+        float: false,
+        margin: 12,
+        resizable: { handles: "e,se,s,sw,w" }
+      },
+      gridElement
+    );
+  } else {
+    document.querySelector("[data-dashboard-fallback]")?.removeAttribute("hidden");
   }
-  if (message.includes("multi-source access")) {
-    return "Korzystanie z wielu aktywnych źródeł danych wymaga licencji z obsługą wielu źródeł.";
+  if (window.echarts) {
+    renderDashboardCharts();
+  } else {
+    document.querySelector("[data-dashboard-fallback]")?.removeAttribute("hidden");
   }
-  return message;
+}
+function renderDashboardCharts() {
+  const charts = [
+    ["capacity", capacityOptions()],
+    ["flow", flowOptions()],
+    ["episodes-line", episodesOptions()]
+  ];
+  charts.forEach(([id, options]) => {
+    const element = document.querySelector(`[data-chart="${id}"]`);
+    if (!element) return;
+    const chart = window.echarts.init(element, null, { renderer: "canvas" });
+    chart.setOption(options);
+    window.addEventListener("resize", () => chart.resize(), { passive: true });
+    const gridItem = element.closest(".grid-stack-item");
+    if (gridItem && window.ResizeObserver) {
+      new ResizeObserver(() => chart.resize()).observe(gridItem);
+    }
+  });
+}
+function chartTextStyle() {
+  return {
+    color: "#64707d",
+    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+  };
+}
+function capacityOptions() {
+  const days = ["May 6", "May 7", "May 8", "May 9", "May 10", "May 11", "May 12"];
+  return {
+    animationDuration: 700,
+    color: ["#19b2b4", "#2d6cdf", "#5b8ee8", "#7aaeea", "#6cc6d8"],
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    legend: {
+      right: 2,
+      top: 8,
+      orient: "vertical",
+      textStyle: chartTextStyle()
+    },
+    grid: { left: 44, right: 112, top: 26, bottom: 28 },
+    xAxis: { type: "category", data: days, axisLabel: chartTextStyle(), axisTick: { show: false } },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: [
+      { name: "Imaging", type: "bar", stack: "total", data: [430, 510, 470, 520, 500, 480, 430] },
+      { name: "Lab tests", type: "bar", stack: "total", data: [280, 320, 260, 350, 330, 300, 250] },
+      { name: "Surgery", type: "bar", stack: "total", data: [270, 245, 265, 260, 280, 240, 220] },
+      { name: "Cardiology", type: "bar", stack: "total", data: [310, 330, 340, 360, 370, 350, 320] },
+      { name: "Other", type: "bar", stack: "total", data: [120, 130, 110, 130, 140, 125, 105] }
+    ]
+  };
+}
+function flowOptions() {
+  const days = ["May 6", "May 7", "May 8", "May 9", "May 10", "May 11", "May 12"];
+  return {
+    animationDuration: 700,
+    color: ["#2d6cdf", "#6a93d5"],
+    tooltip: { trigger: "axis" },
+    legend: { right: 8, top: 6, textStyle: chartTextStyle() },
+    grid: { left: 42, right: 18, top: 40, bottom: 30 },
+    xAxis: { type: "category", boundaryGap: false, data: days, axisLabel: chartTextStyle(), axisTick: { show: false } },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: [
+      { name: "Arrivals", type: "line", smooth: true, symbolSize: 7, data: [500, 650, 590, 760, 620, 700, 640] },
+      { name: "Discharges", type: "line", smooth: true, symbolSize: 6, lineStyle: { type: "dashed" }, data: [360, 380, 420, 450, 390, 470, 430] }
+    ]
+  };
+}
+function episodesOptions() {
+  return {
+    animationDuration: 700,
+    color: ["#2d6cdf"],
+    grid: { left: 34, right: 18, top: 10, bottom: 24 },
+    xAxis: { type: "category", boundaryGap: false, data: ["May 6", "May 7", "May 8", "May 9", "May 10", "May 11", "May 12"], axisLabel: chartTextStyle(), axisTick: { show: false } },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: [
+      {
+        type: "line",
+        smooth: true,
+        symbolSize: 7,
+        data: [220, 430, 360, 500, 390, 610, 470],
+        areaStyle: { color: "rgba(45, 108, 223, 0.08)" }
+      }
+    ]
+  };
 }
 function renderLoginDialog() {
   return `
     <div class="login-overlay" role="presentation">
       <section class="login-panel" role="dialog" aria-modal="true" aria-labelledby="login-title">
-        <button class="icon-button close-login" type="button" data-close-login aria-label="Zamknij logowanie" title="Zamknij">
+        <button class="icon-button close-login" type="button" data-close-login aria-label="Close login" title="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M18 6 6 18" />
             <path d="m6 6 12 12" />
@@ -368,12 +730,12 @@ function renderLoginDialog() {
         </button>
         <img class="login-logo" src="/assets/getgaard.svg" alt="" />
         <h1 id="login-title">GAARD Client</h1>
-        <p>Zaloguj się kontem GAARD.</p>
+        <p>Log in with your GAARD account.</p>
         <form id="login-form" class="form-grid">
-          <label>Login<input name="username" autocomplete="username" /></label>
-          <label>Hasło<input name="password" type="password" autocomplete="current-password" /></label>
+          <label>Username<input name="username" autocomplete="username" /></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" /></label>
           ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
-          <div class="form-actions"><button class="primary" type="submit">Zaloguj się</button></div>
+          <div class="form-actions"><button class="primary" type="submit">Log in</button></div>
         </form>
       </section>
     </div>`;
@@ -392,10 +754,18 @@ function closeLogin() {
   state.loginOpen = false;
   render();
 }
+function newChat() {
+  if (state.pending) return;
+  state.messages = [];
+  state.conversationId = "";
+  state.error = "";
+  state.activeView = "home";
+  render();
+}
 function renderMessage(message) {
   const rows = getRows(message.response);
   const meta = message.status === "ok" ? renderMeta(message, rows) : "";
-  const answer = message.status === "pending" ? "Przetwarzam..." : message.status === "waiting" ? "Czekam na odpowiedź." : message.status === "error" ? message.error : message.response?.answer || "";
+  const answer = message.status === "pending" ? "Processing..." : message.status === "waiting" ? "Waiting for your answer." : message.status === "error" ? message.error : message.response?.answer || "";
   const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
   const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
   const saveNotice = renderSaveNotice(message);
@@ -405,13 +775,13 @@ function renderMessage(message) {
     <article class="exchange ${message.status}">
       <div class="exchange-top">
         <div class="question">
-          <span>Pytanie \xB7 ${escapeHtml(formatMode(message.mode))}</span>
+          <span>Question \xB7 ${escapeHtml(formatMode(message.mode))}</span>
           <p>${escapeHtml(message.question)}</p>
         </div>
         ${renderMessageActions(message)}
       </div>
       <div class="answer">
-        <span>Odpowiedź</span>
+        <span>Answer</span>
         <p>${escapeHtml(answer)}</p>
       </div>
       ${progress}
@@ -536,10 +906,14 @@ function formatDuration(value) {
   return `${numeric} ms`;
 }
 function formatMode(value) {
-  return value === "analysis" ? "Analiza" : "SQL";
+  return value === "analysis" ? "Analysis" : "SQL";
 }
 function normalizeQueryMode(value) {
   return value === "analysis" ? "analysis" : "sql";
+}
+function normalizeView(value) {
+  const allowed = new Set(["home", "analysis", "metrics", "datasources", "queries", "alerts"]);
+  return allowed.has(value) ? value : "home";
 }
 function handleModeChange(event) {
   state.queryMode = normalizeQueryMode(event.currentTarget.value);
@@ -659,7 +1033,9 @@ function logout() {
   state.token = "";
   state.username = "";
   state.messages = [];
-  state.loginOpen = true;
+  state.conversationId = "";
+  state.activeView = "home";
+  state.loginOpen = false;
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
   render();
@@ -677,6 +1053,15 @@ function inferWidgetType(rows) {
 function getSelectedMode(form) {
   const value = new FormData(form).get("mode");
   return normalizeQueryMode(value);
+}
+function conversationPayload() {
+  return state.conversationId ? { conversation_id: state.conversationId } : {};
+}
+function syncConversationFromResponse(response) {
+  const conversationId = response?.metadata?.conversation?.id || response?.conversation_id || response?.session_started?.conversation_id || response?.session_resumed?.conversation_id || "";
+  if (conversationId) {
+    state.conversationId = String(conversationId);
+  }
 }
 async function submitQuestion(event) {
   event.preventDefault();
@@ -725,6 +1110,7 @@ async function submitQuestion(event) {
         body: JSON.stringify({
           question,
           mode,
+          ...conversationPayload(),
           backend_url: state.backendUrl
         })
       });
@@ -732,6 +1118,7 @@ async function submitQuestion(event) {
       if (!response.ok) {
         throw new Error(extractErrorMessage(payload));
       }
+      syncConversationFromResponse(payload);
       message.status = "ok";
       message.response = payload;
     }
@@ -752,6 +1139,7 @@ async function submitAnalysisQuestion(message, question) {
     },
     body: JSON.stringify({
       question,
+      ...conversationPayload(),
       backend_url: state.backendUrl
     })
   });
@@ -836,6 +1224,7 @@ function handleAnalysisStreamLine(message, line) {
     throw new Error(payload.error.message);
   }
   if (payload?.final) {
+    syncConversationFromResponse(payload.final);
     message.status = "ok";
     message.response = payload.final;
     message.dataOpen = message.mode === "analysis" && getRows(payload.final).length > 0;
@@ -846,6 +1235,7 @@ function handleAnalysisStreamLine(message, line) {
   if (payload?.session_id && !message.analysisSessionId) {
     message.analysisSessionId = String(payload.session_id);
   }
+  syncConversationFromResponse(payload);
   if (payload?.event === "user_question") {
     const question = extractUserQuestion(payload);
     message.status = "waiting";

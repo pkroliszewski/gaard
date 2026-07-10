@@ -36,6 +36,8 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "analysis-log" in response.text
     assert "analysis-reply-question" in response.text
     assert "data-analysis-progress" in response.text
+    assert "data-new-chat" in response.text
+    assert "syncConversationFromResponse" in response.text
     assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
         response.text
     )
@@ -99,6 +101,61 @@ def test_client_app_proxies_query(monkeypatch) -> None:
     }
 
 
+def test_client_app_proxies_query_conversation_id(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["json"] = json
+            request = httpx.Request("POST", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "question": json["question"],
+                    "answer": "ok",
+                    "sql": "SELECT 1",
+                    "rows": [{"value": 1}],
+                    "metadata": {
+                        "conversation": {"id": json["conversation_id"]},
+                        "output_classification": "neutral_data",
+                    },
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/query",
+        json={
+            "question": "and in May?",
+            "conversation_id": "conversation-1",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "http://backend.example/api/v1/query"
+    assert captured["json"] == {
+        "question": "and in May?",
+        "user_id": "client",
+        "mode": "sql",
+        "conversation_id": "conversation-1",
+    }
+
+
 def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     captured = {}
 
@@ -118,8 +175,8 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
                     "session_id": "abc",
                     "analysis_step": {
                         "iteration": 1,
-                        "visible_question": "Czy mam wszystko?",
-                        "visible_reasoning": "Sprawdzam dostępną wiedzę.",
+                        "visible_question": "Do I have everything?",
+                        "visible_reasoning": "Checking available context.",
                     },
                 }
             ) + "\n"
@@ -162,7 +219,7 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     response = client.post(
         "/api/analysis/stream",
         json={
-            "question": "gdzie uciekajo mi pinionżki",
+            "question": "where is my spend going",
             "backend_url": "http://backend.example/",
         },
     )
@@ -174,7 +231,7 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     assert captured["method"] == "POST"
     assert captured["url"] == "http://backend.example/api/v1/analysis/stream"
     assert captured["json"] == {
-        "question": "gdzie uciekajo mi pinionżki",
+        "question": "where is my spend going",
         "user_id": "client",
     }
 
@@ -359,7 +416,7 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
     response = client.post(
         "/api/analysis/session-1/messages/stream",
         json={
-            "message": "ostatni miesiąc",
+            "message": "last month",
             "backend_url": "http://backend.example/",
         },
     )
@@ -371,7 +428,7 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
     assert captured["url"] == (
         "http://backend.example/api/v1/analysis/session-1/messages/stream"
     )
-    assert captured["json"] == {"message": "ostatni miesiąc"}
+    assert captured["json"] == {"message": "last month"}
 
 
 def test_client_app_rejects_invalid_backend_url() -> None:

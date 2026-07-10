@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from gaard_core.query_pipeline.models import QueryResponse
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
-from gaard_api.admin.models import AnalysisSessionRecord, DatasourceConnector
+from gaard_api.admin.models import AnalysisSessionRecord, ConversationTurn, DatasourceConnector
 from gaard_api.admin.services import list_business_logic_suggestions, set_setting
 from gaard_api.api.v1 import analysis as analysis_module
 from gaard_api.core.settings import settings
@@ -138,12 +138,38 @@ def test_analysis_stream_runs_final_query_and_persists_session(
 
     with create_session() as session:
         record = session.scalar(
-            select(AnalysisSessionRecord).where(
-                AnalysisSessionRecord.session_id == session_id
-            )
+            select(AnalysisSessionRecord).where(AnalysisSessionRecord.session_id == session_id)
         )
         assert record is not None
         assert record.status == "completed"
+
+
+def test_analysis_stream_returns_conversation_metadata(
+    analysis_client: TestClient,
+) -> None:
+    headers = auth_headers(analysis_client)
+
+    response = analysis_client.post(
+        "/api/v1/analysis/stream",
+        headers=headers,
+        json={
+            "question": "Ilu jest pacjentów?",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 200
+    events = parse_ndjson(response.text)
+    conversation_id = events[0]["session_started"]["conversation_id"]
+    final = events[-1]["final"]
+    assert final["metadata"]["conversation"]["id"] == conversation_id
+    assert final["metadata"]["conversation"]["context_decision"] == "new_topic"
+
+    with create_session() as session:
+        turns = list(session.scalars(select(ConversationTurn)))
+    assert len(turns) == 1
+    assert turns[0].conversation_id == conversation_id
+    assert turns[0].mode == "analysis"
 
 
 def test_analysis_stream_can_pause_for_user_and_resume(
@@ -189,6 +215,43 @@ def test_analysis_stream_can_pause_for_user_and_resume(
     assert completed_response.status_code == 200
     context = completed_response.json()["item"]["context"]
     assert context["messages"][-1]["content"] == "ostatni miesiąc"
+
+
+def test_analysis_resume_records_final_turn_in_same_conversation(
+    analysis_client: TestClient,
+) -> None:
+    headers = auth_headers(analysis_client)
+
+    response = analysis_client.post(
+        "/api/v1/analysis/stream",
+        headers=headers,
+        json={
+            "question": "dopytaj o zakres",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 200
+    events = parse_ndjson(response.text)
+    session_id = events[0]["session_id"]
+    conversation_id = events[0]["session_started"]["conversation_id"]
+
+    resume_response = analysis_client.post(
+        f"/api/v1/analysis/{session_id}/messages/stream",
+        headers=headers,
+        json={"message": "ostatni miesiąc"},
+    )
+
+    assert resume_response.status_code == 200
+    resumed_events = parse_ndjson(resume_response.text)
+    assert resumed_events[0]["session_resumed"]["conversation_id"] == conversation_id
+    assert resumed_events[-1]["final"]["metadata"]["conversation"]["id"] == conversation_id
+
+    with create_session() as session:
+        turns = list(session.scalars(select(ConversationTurn)))
+    assert len(turns) == 1
+    assert turns[0].conversation_id == conversation_id
+    assert turns[0].mode == "analysis"
 
 
 def test_analysis_database_step_can_record_business_logic_suggestion(
@@ -311,9 +374,7 @@ def test_analysis_routes_database_evidence_questions_to_database(
     ]
     assert final["metadata"]["analysis_supporting_data"] is True
     database_event = next(
-        event["database_question"]
-        for event in events
-        if event["event"] == "database_question"
+        event["database_question"] for event in events if event["event"] == "database_question"
     )
     assert database_event["question"] == (
         "What distinct specializations are stored in the doctors table?"
@@ -325,6 +386,61 @@ def test_analysis_routes_database_evidence_questions_to_database(
         assert suggestions[0].status == "pending"
         assert suggestions[0].error_category == "analysis.dictionary_value"
         assert "cardiology" in suggestions[0].rule_text
+
+
+def test_analysis_keeps_user_clarification_as_user_question(
+    analysis_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = auth_headers(analysis_client)
+    create_active_default_datasource()
+
+    class ClarificationPlanner:
+        def decide(self, request, datasource_context, context):
+            return analysis_module.AnalysisPlannerDecision(
+                action=analysis_module.AnalysisAction.ASK_USER,
+                visible_question=("Co rozumiesz przez „najbardziej wymagającą” sprawę?"),
+                visible_reasoning="Brakuje definicji metryki.",
+                user_question=(
+                    "Co rozumiesz przez „najbardziej wymagającą” sprawę? "
+                    "Czy chodzi o najwyższą wartość, najdłuższy czas od ostatniej "
+                    "aktywności, czy inny wskaźnik?"
+                ),
+            )
+
+    def fail_run_sql_request(*args, **kwargs):
+        raise AssertionError("Clarification questions must not be sent to SQL.")
+
+    monkeypatch.setattr(
+        analysis_module,
+        "create_analysis_planner",
+        lambda: ClarificationPlanner(),
+    )
+    monkeypatch.setattr(analysis_module, "run_sql_request", fail_run_sql_request)
+
+    response = analysis_client.post(
+        "/api/v1/analysis/stream",
+        headers=headers,
+        json={
+            "question": "która sprawa jest najbardziej wymagająca?",
+            "user_id": "alice",
+        },
+    )
+
+    assert response.status_code == 200
+    events = parse_ndjson(response.text)
+    event_names = [event["event"] for event in events]
+    assert "database_question" not in event_names
+    assert events[-1]["event"] == "user_question"
+    assert "najbardziej wymagającą" in events[-1]["user_question"]["question"]
+
+    session_id = events[0]["session_id"]
+    waiting_response = analysis_client.get(
+        f"/api/v1/analysis/{session_id}",
+        headers=headers,
+    )
+    assert waiting_response.status_code == 200
+    assert waiting_response.json()["item"]["status"] == "waiting_for_user"
 
 
 def test_analysis_out_of_scope_has_friendly_final_answer(
@@ -380,9 +496,7 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
             if self.calls == 1:
                 return analysis_module.AnalysisPlannerDecision(
                     action=analysis_module.AnalysisAction.ASK_DATABASE,
-                    visible_question=(
-                        "What is the base price for a Cardiology consultation?"
-                    ),
+                    visible_question=("What is the base price for a Cardiology consultation?"),
                     visible_reasoning=(
                         "We need the hospital cost from the medical_procedures table."
                     ),
@@ -414,8 +528,7 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
             question=request.question,
             answer="The base price for a cardiology consultation is $220.0.",
             sql=(
-                "SELECT base_price FROM medical_procedures "
-                "WHERE name = 'Cardiology consultation';"
+                "SELECT base_price FROM medical_procedures WHERE name = 'Cardiology consultation';"
             ),
             rows=[{"base_price": 220.0}],
             metadata=metadata,
@@ -432,9 +545,7 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
         "/api/v1/analysis/stream",
         headers=headers,
         json={
-            "question": (
-                "a jaki jest koszt wykonania Cardiology consultation dla szpitala?"
-            ),
+            "question": ("a jaki jest koszt wykonania Cardiology consultation dla szpitala?"),
             "user_id": "alice",
         },
     )
