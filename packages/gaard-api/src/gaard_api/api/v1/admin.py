@@ -39,6 +39,7 @@ from gaard_api.admin.models import (
     DatasourceSchemaCache,
     OverviewWidget,
     PromptTemplate,
+    UserSavedMetric,
 )
 from gaard_api.admin.security import (
     create_session_token,
@@ -1331,6 +1332,7 @@ def create_overview_widget(
 @router.post("/overview/widgets/from-query")
 def create_overview_widget_from_query(
     request: OverviewWidgetFromQueryRequest,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     datasource = get_datasource_connector_by_key(session, request.datasource_key)
@@ -1386,9 +1388,16 @@ def create_overview_widget_from_query(
         ) from exc
 
     session.add(widget)
+    session.add(
+        UserSavedMetric(
+            owner_user_id=str(principal.user.id),
+            owner_username=principal.session.username or principal.user.username,
+            widget_key=widget.widget_key,
+        )
+    )
     record_admin_audit(
         session=session,
-        actor="client",
+        actor=principal.session.username or principal.user.username,
         action="overview_widget.create_from_query",
         resource_type="overview_widget",
         resource_id=widget.widget_key,
@@ -1403,7 +1412,7 @@ def create_overview_widget_from_query(
     session.commit()
 
     return {
-        "item": serialize_overview_widget_config(widget),
+        "item": serialize_overview_widget(session, widget),
     }
 
 

@@ -52,6 +52,12 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "api-error-banner" in response.text
     assert "reportApiError" in response.text
     assert "formatApiResponseError" in response.text
+    assert "hasLongSeries" in response.text
+    assert "longSeriesWidgetOptions" in response.text
+    assert 'types.push("stacked_bar", "multi_line")' in response.text
+    assert "dashboard-spinner" in response.text
+    assert "resizestop" in response.text
+    assert "alwaysShowResizeHandle" in response.text
     assert "/api/datasources/excel" in response.text
     assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
         response.text
@@ -338,6 +344,12 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                 {"method": "POST", "url": url, "json": json, "headers": headers}
             )
             request = httpx.Request("POST", url)
+            if url.endswith("/widgets"):
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    json={"item": {"id": "widget-1", "title": json["title"]}},
+                )
             return httpx.Response(
                 status_code=200,
                 request=request,
@@ -356,6 +368,17 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                     "active_dashboard_id": json["dashboard_id"],
                     "active_dashboard": {"id": json["dashboard_id"]},
                 },
+            )
+
+        async def patch(self, url, json, headers=None):
+            captured.append(
+                {"method": "PATCH", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("PATCH", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"items": json["items"]},
             )
 
         async def delete(self, url, headers=None):
@@ -396,11 +419,46 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
             "backend_url": "http://backend.example/",
         },
     )
+    metrics_response = client.get(
+        "/api/dashboard-metrics?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    widget_list_response = client.get(
+        "/api/dashboards/dash-1/widgets?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    widget_create_response = client.post(
+        "/api/dashboards/dash-1/widgets",
+        headers=headers,
+        json={
+            "metric_widget_key": "client_metric",
+            "title": "Metric",
+            "visualization_type": "bar",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    widget_layout_response = client.patch(
+        "/api/dashboards/dash-1/widgets/layout",
+        headers=headers,
+        json={
+            "items": [{"widget_id": "widget-1", "x": 1, "y": 2, "w": 6, "h": 4}],
+            "backend_url": "http://backend.example/",
+        },
+    )
+    widget_delete_response = client.delete(
+        "/api/dashboards/dash-1/widgets/widget-1?backend_url=http://backend.example/",
+        headers=headers,
+    )
 
     assert list_response.status_code == 200
     assert create_response.status_code == 200
     assert delete_response.status_code == 200
     assert active_response.status_code == 200
+    assert metrics_response.status_code == 200
+    assert widget_list_response.status_code == 200
+    assert widget_create_response.status_code == 200
+    assert widget_layout_response.status_code == 200
+    assert widget_delete_response.status_code == 200
     assert captured[0]["url"] == "http://backend.example/api/v1/dashboards"
     assert captured[1]["url"] == "http://backend.example/api/v1/dashboards"
     assert captured[1]["json"] == {
@@ -410,10 +468,24 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
     assert captured[2]["url"] == "http://backend.example/api/v1/dashboards/dash-2"
     assert captured[3]["url"] == "http://backend.example/api/v1/dashboards/active"
     assert captured[3]["json"] == {"dashboard_id": "dash-1"}
-    assert captured[0]["headers"] == headers
-    assert captured[1]["headers"] == headers
-    assert captured[2]["headers"] == headers
-    assert captured[3]["headers"] == headers
+    assert captured[4]["url"] == "http://backend.example/api/v1/dashboards/metrics"
+    assert captured[5]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
+    assert captured[6]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
+    assert captured[6]["json"] == {
+        "metric_widget_key": "client_metric",
+        "title": "Metric",
+        "visualization_type": "bar",
+    }
+    assert captured[7]["url"] == (
+        "http://backend.example/api/v1/dashboards/dash-1/widgets/layout"
+    )
+    assert captured[7]["json"] == {
+        "items": [{"widget_id": "widget-1", "x": 1, "y": 2, "w": 6, "h": 4}]
+    }
+    assert captured[8]["url"] == (
+        "http://backend.example/api/v1/dashboards/dash-1/widgets/widget-1"
+    )
+    assert all(call["headers"] == headers for call in captured)
 
 
 def test_client_app_streams_analysis_user_question(monkeypatch) -> None:

@@ -80,6 +80,26 @@ class ClientActiveDashboardRequest(BaseModel):
     backend_url: str | None = None
 
 
+class ClientDashboardWidgetCreateRequest(BaseModel):
+    metric_widget_key: str = Field(min_length=1, max_length=255)
+    title: str = Field(min_length=1, max_length=255)
+    visualization_type: str = Field(min_length=1, max_length=50)
+    backend_url: str | None = None
+
+
+class ClientDashboardWidgetLayoutItem(BaseModel):
+    widget_id: str = Field(min_length=1, max_length=64)
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(ge=1, le=12)
+    h: int = Field(ge=1, le=30)
+
+
+class ClientDashboardWidgetLayoutRequest(BaseModel):
+    items: list[ClientDashboardWidgetLayoutItem] = Field(default_factory=list)
+    backend_url: str | None = None
+
+
 def get_default_backend_url() -> str:
     return os.getenv("GAARD_CLIENT_BACKEND_URL", DEFAULT_BACKEND_URL).rstrip("/")
 
@@ -447,6 +467,181 @@ async def set_active_dashboard(
                         "dashboard_id": request.dashboard_id,
                     },
                 ),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.get("/api/dashboard-metrics")
+async def list_dashboard_metrics(
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    metrics_url = f"{backend_url}/api/v1/dashboards/metrics"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.get(
+                metrics_url,
+                headers=backend_auth_headers(authorization),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.get("/api/dashboards/{dashboard_id}/widgets")
+async def list_dashboard_widgets(
+    dashboard_id: str,
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    widgets_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.get(
+                widgets_url,
+                headers=backend_auth_headers(authorization),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.post("/api/dashboards/{dashboard_id}/widgets")
+async def add_dashboard_widget(
+    dashboard_id: str,
+    request: ClientDashboardWidgetCreateRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    widgets_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                widgets_url,
+                **backend_request_kwargs(
+                    authorization,
+                    {
+                        "metric_widget_key": request.metric_widget_key,
+                        "title": request.title,
+                        "visualization_type": request.visualization_type,
+                    },
+                ),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.patch("/api/dashboards/{dashboard_id}/widgets/layout")
+async def update_dashboard_widget_layout(
+    dashboard_id: str,
+    request: ClientDashboardWidgetLayoutRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    layout_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets/layout"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(
+                layout_url,
+                **backend_request_kwargs(
+                    authorization,
+                    {
+                        "items": [
+                            item.model_dump()
+                            for item in request.items
+                        ],
+                    },
+                ),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.delete("/api/dashboards/{dashboard_id}/widgets/{widget_id}")
+async def delete_dashboard_widget(
+    dashboard_id: str,
+    widget_id: str,
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    widget_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets/{widget_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(
+                widget_url,
+                headers=backend_auth_headers(authorization),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(

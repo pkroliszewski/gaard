@@ -4,11 +4,12 @@ var params = new URLSearchParams(window.location.search);
 var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || window.GAARD_CLIENT_CONFIG?.backendUrl || "http://localhost:8000").replace(/\/+$/, "");
 var storedToken = localStorage.getItem("gaard_client_token") || "";
 var storedUsername = localStorage.getItem("gaard_client_username") || "";
+var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
 var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
   username: storedUsername,
-  activeView: normalizeView(params.get("view")),
+  activeView: normalizeView(params.get("view") || storedActiveView),
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
   nextMessageId: 1,
@@ -34,8 +35,32 @@ var state = {
   dashboardMenuOpen: false,
   dashboardCreateOpen: false,
   dashboardCreatePending: false,
-  dashboardDeletePendingId: ""
+  dashboardDeletePendingId: "",
+  savedMetrics: [],
+  savedMetricsLoaded: false,
+  savedMetricsLoading: false,
+  savedMetricsError: "",
+  dashboardWidgets: [],
+  dashboardWidgetsDashboardId: "",
+  dashboardWidgetsLoading: false,
+  dashboardWidgetsError: "",
+  dashboardWidgetDialogOpen: false,
+  dashboardWidgetPending: false,
+  dashboardWidgetMetricKey: "",
+  dashboardWidgetType: "",
+  dashboardLayoutSaveTimer: null
 };
+rememberActiveView(state.activeView);
+const WIDGET_TYPES = [
+  { key: "number", label: "Number", icon: "metrics" },
+  { key: "bar", label: "Bar chart", icon: "analysis" },
+  { key: "stacked_bar", label: "Stacked bar", icon: "analysis" },
+  { key: "line", label: "Line chart", icon: "metrics" },
+  { key: "multi_line", label: "Multi-line", icon: "metrics" },
+  { key: "pie", label: "Pie chart", icon: "dashboards" },
+  { key: "area", label: "Area chart", icon: "metrics" },
+  { key: "table", label: "Table", icon: "queries" }
+];
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
@@ -240,7 +265,7 @@ function renderEmptyState() {
     return `
       <div class="empty-state locked">
         <div class="empty-icon">${renderIcon("lock")}</div>
-        <h2>/ ask your data</h2>
+        <h2>ask your data</h2>
         <p>Log in to start a conversation.</p>
         <button class="primary" type="button" data-open-login>Log in</button>
       </div>`;
@@ -248,7 +273,7 @@ function renderEmptyState() {
   return `
     <div class="empty-state">
       <img class="empty-logo" src="/assets/getgaard.svg" alt="" />
-      <h2>/ ask your data</h2>
+      <h2>ask your data</h2>
       <p>Ask about metrics, records, trends, or run step-by-step analysis.</p>
     </div>`;
 }
@@ -297,11 +322,7 @@ function renderActiveView() {
     return renderAnalysisView();
   }
   if (state.activeView === "metrics") {
-    return renderPlaceholderView({
-      title: "Metrics",
-      description: "Defined dashboard widgets will appear here. For now, you can save a widget from a chat response with the save button.",
-      items: ["Saved query widgets", "KPI cards", "Chart templates"]
-    });
+    return renderMetricsView();
   }
   if (state.activeView === "datasources") {
     return renderDatasourcesView();
@@ -375,12 +396,13 @@ function renderAnalysisView() {
   return `
     <section class="dashboard-view" aria-label="Dashboard Analysis">
       <div class="dashboard-toolbar dashboard-toolbar-compact">
-        <button class="date-range" type="button" aria-disabled="true">
-          ${renderIcon("calendar")}
-          <span>May 12 - May 18, 2025</span>
-        </button>
+        ${dashboard && state.token ? `
+        <button class="dashboard-add-widget-button" type="button" data-open-widget-dialog aria-label="Add widget" title="Add widget">
+          ${renderIcon("plus")}
+        </button>` : ""}
       </div>
       ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
+      ${state.dashboardWidgetsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardWidgetsError)}</div>` : ""}
       ${renderAnalysisDashboardBody(dashboard)}
     </section>`;
 }
@@ -394,7 +416,10 @@ function renderAnalysisDashboardBody(dashboard) {
       </div>`;
   }
   if (state.dashboardsLoading && !state.dashboards.length) {
-    return `<div class="dashboard-empty"><h2>Loading dashboards...</h2><p>Please wait while GAARD prepares your dashboard list.</p></div>`;
+    return renderDashboardLoadingState(
+      "Loading dashboards...",
+      "Please wait while GAARD prepares your dashboard list."
+    );
   }
   if (!dashboard) {
     return `
@@ -407,20 +432,42 @@ function renderAnalysisDashboardBody(dashboard) {
       </div>`;
   }
   return `
-      <div class="kpi-row" aria-label="Key metrics">
-        ${renderKpiCard("Total patients", "45,781", "6.3%", "vs May 5 - May 11", "up")}
-        ${renderKpiCard("Active encounters", "12,986", "4.8%", "vs May 5 - May 11", "up")}
-        ${renderKpiCard("New episodes", "3,274", "7.1%", "vs May 5 - May 11", "up")}
-        ${renderKpiCard("Average LOS", "4.2 days", "0.3", "vs May 5 - May 11", "down")}
-      </div>
-      <div class="grid-stack dashboard-grid">
-        ${renderGridWidget("capacity", "Capacity by data domain", "chart chart-capacity", 0, 0, 6, 4)}
-        ${renderGridWidget("flow", "Patients flow", "chart chart-flow", 6, 0, 6, 4)}
-        ${renderGridWidget("episodes", "New episodes", "chart chart-episodes", 0, 4, 6, 3, renderEpisodeSummary())}
-        ${renderGridWidget("issues", "Recent issues", "issues-table", 6, 4, 6, 3, renderIssuesTable())}
-      </div>
+      ${renderDashboardWidgetGrid(dashboard)}
       <div class="dashboard-fallback" data-dashboard-fallback hidden>
         Dashboard libraries are loading. Charts will appear when GridStack and ECharts are available.
+      </div>`;
+}
+function renderDashboardWidgetGrid(dashboard) {
+  if (state.dashboardWidgetsLoading && state.dashboardWidgetsDashboardId !== dashboard.id) {
+    return renderDashboardLoadingState(
+      "Loading widgets...",
+      "Please wait while GAARD prepares this dashboard."
+    );
+  }
+  if (!state.dashboardWidgets.length) {
+    return `
+      <div class="dashboard-empty">
+        <h2>No widgets yet.</h2>
+        <div class="dashboard-empty-copy">
+          <span>Add a saved metric to start building this dashboard.</span>
+          <button class="dashboard-inline-add" type="button" data-open-widget-dialog>
+            ${renderIcon("plus")}
+            <span>Add widget</span>
+          </button>
+        </div>
+      </div>`;
+  }
+  return `
+      <div class="grid-stack dashboard-grid">
+        ${state.dashboardWidgets.map(renderDashboardWidget).join("")}
+      </div>`;
+}
+function renderDashboardLoadingState(title, description) {
+  return `
+      <div class="dashboard-empty dashboard-loading">
+        <span class="dashboard-spinner" aria-hidden="true"></span>
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(description)}</p>
       </div>`;
 }
 function renderDashboardPicker() {
@@ -490,6 +537,96 @@ function renderDashboardCreateForm() {
       </div>
     </form>`;
 }
+function renderDashboardWidgetDialog() {
+  const metrics = state.savedMetrics;
+  const selectedMetric = getSelectedSavedMetric();
+  const availableTypes = getAvailableWidgetTypes(selectedMetric);
+  const selectedType = normalizeDashboardWidgetType(state.dashboardWidgetType, availableTypes);
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog dashboard-widget-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-widget-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-widget-dialog aria-label="Close dialog" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Analysis</span>
+          <h2 id="dashboard-widget-title">Add widget</h2>
+          <p>Choose a saved metric and how it should be displayed on this dashboard.</p>
+        </div>
+        ${state.savedMetricsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.savedMetricsError)}</div>` : ""}
+        ${state.savedMetricsLoading ? renderSavedMetricsLoadingState("dashboard-menu-empty") : ""}
+        ${!state.savedMetricsLoading && !metrics.length ? renderNoSavedMetricsState() : ""}
+        ${!state.savedMetricsLoading && metrics.length ? renderDashboardWidgetForm(metrics, selectedMetric, availableTypes, selectedType) : ""}
+      </section>
+    </div>`;
+}
+function renderNoSavedMetricsState() {
+  return `
+    <div class="dashboard-widget-empty">
+      <strong>No saved metrics yet.</strong>
+      <p>Run a query on Home and use the save button on a successful answer.</p>
+    </div>`;
+}
+function renderSavedMetricsLoadingState(className) {
+  return `
+    <div class="${escapeHtml(className)} saved-metrics-loading" role="status" aria-live="polite">
+      <span class="saved-metrics-spinner" aria-hidden="true"></span>
+      <span>Loading saved metrics...</span>
+    </div>`;
+}
+function renderDashboardWidgetForm(metrics, selectedMetric, availableTypes, selectedType) {
+  const defaultTitle = selectedMetric?.label || "Dashboard widget";
+  return `
+    <form class="dashboard-widget-form" data-dashboard-widget-form>
+      <label>
+        <span>Saved metric</span>
+        <select name="metric_widget_key" data-widget-metric-select ${state.dashboardWidgetPending ? "disabled" : ""}>
+          ${metrics.map((metric) => `
+            <option value="${escapeHtml(metric.widget_key)}" ${metric.widget_key === selectedMetric?.widget_key ? "selected" : ""}>${escapeHtml(metric.label || metric.widget_key)}</option>
+          `).join("")}
+        </select>
+      </label>
+      <label>
+        <span>Widget name</span>
+        <input name="title" maxlength="255" required value="${escapeHtml(defaultTitle)}" ${state.dashboardWidgetPending ? "disabled" : ""} />
+      </label>
+      <fieldset class="widget-type-grid">
+        <legend>Widget type</legend>
+        ${WIDGET_TYPES.map((type) => renderWidgetTypeChoice(type, availableTypes, selectedType)).join("")}
+      </fieldset>
+      ${state.dashboardWidgetsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardWidgetsError)}</div>` : ""}
+      <div class="dashboard-create-actions">
+        <button type="button" data-close-widget-dialog ${state.dashboardWidgetPending ? "disabled" : ""}>Cancel</button>
+        <button class="primary" type="submit" ${state.dashboardWidgetPending ? "disabled" : ""}>
+          ${state.dashboardWidgetPending ? "Adding..." : "Add widget"}
+        </button>
+      </div>
+    </form>`;
+}
+function renderWidgetTypeChoice(type, availableTypes, selectedType) {
+  const disabled = !availableTypes.includes(type.key) || state.dashboardWidgetPending;
+  return `
+    <label class="widget-type-choice ${selectedType === type.key ? "active" : ""} ${disabled ? "disabled" : ""}">
+      <input type="radio" name="visualization_type" value="${escapeHtml(type.key)}" ${selectedType === type.key ? "checked" : ""} ${disabled ? "disabled" : ""} data-widget-type-select />
+      <span class="widget-type-preview ${escapeHtml(type.key)}">${renderWidgetTypePreview(type.key)}</span>
+      <strong>${escapeHtml(type.label)}</strong>
+    </label>`;
+}
+function renderWidgetTypePreview(type) {
+  if (type === "table") {
+    return `<i></i><i></i><i></i><i></i>`;
+  }
+  if (type === "number") {
+    return `<b>42</b>`;
+  }
+  if (type === "pie") {
+    return `<i></i>`;
+  }
+  return `<i></i><i></i><i></i>`;
+}
 function renderDashboardMenuItem(dashboard) {
   const selected = dashboard.id === state.activeDashboardId;
   const deleting = state.dashboardDeletePendingId === dashboard.id;
@@ -502,6 +639,46 @@ function renderDashboardMenuItem(dashboard) {
       <button class="dashboard-delete-button" type="button" data-delete-dashboard="${escapeHtml(dashboard.id)}" aria-label="Delete ${escapeHtml(dashboard.name || "dashboard")}" title="Delete dashboard" ${deleting ? "disabled" : ""}>
         ${renderIcon("trash")}
       </button>
+    </div>`;
+}
+function renderDashboardWidget(widget) {
+  const layout = widget.layout || {};
+  const content = renderDashboardWidgetContent(widget);
+  return `
+    <div class="grid-stack-item" gs-id="${escapeHtml(widget.id)}" gs-x="${Number(layout.x) || 0}" gs-y="${Number(layout.y) || 0}" gs-w="${Number(layout.w) || 6}" gs-h="${Number(layout.h) || 4}">
+      <article class="grid-stack-item-content dashboard-card dashboard-user-widget">
+        <header>
+          <h2>${escapeHtml(widget.title || widget.metric?.label || "Dashboard widget")}</h2>
+          <button type="button" data-delete-dashboard-widget="${escapeHtml(widget.id)}" aria-label="Remove widget" title="Remove widget">
+            ${renderIcon("trash")}
+          </button>
+        </header>
+        ${content}
+      </article>
+    </div>`;
+}
+function renderDashboardWidgetContent(widget) {
+  const result = widget.result || widget.metric?.result || {};
+  if (result.status && result.status !== "ok") {
+    return `<div class="dashboard-widget-error">${escapeHtml(result.message || result.error || "Widget data could not be loaded.")}</div>`;
+  }
+  if (widget.visualization_type === "table") {
+    return `<div class="dashboard-table-widget">${renderDataTable(getRowsFromResult(result))}</div>`;
+  }
+  if (widget.visualization_type === "number") {
+    return renderDashboardNumberWidget(result);
+  }
+  return `<div class="chart dashboard-widget-chart" data-dashboard-widget-chart="${escapeHtml(widget.id)}"></div>`;
+}
+function renderDashboardNumberWidget(result) {
+  const rows = getRowsFromResult(result);
+  const columns = Array.isArray(result?.columns) && result.columns.length ? result.columns : getColumns(rows);
+  const value = result?.value ?? rows[0]?.[columns[0]] ?? "";
+  const label = columns[0] || "Value";
+  return `
+    <div class="dashboard-number-widget">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatCellValue(value))}</strong>
     </div>`;
 }
 function renderKpiCard(label, value, delta, helper, direction) {
@@ -582,6 +759,32 @@ function renderQueriesView() {
           </div>`}
       </div>
     </section>`;
+}
+function renderMetricsView() {
+  return `
+    <section class="placeholder-view metrics-view">
+      ${state.savedMetricsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.savedMetricsError)}</div>` : ""}
+      ${state.savedMetricsLoading ? renderSavedMetricsLoadingState("datasource-empty") : ""}
+      ${!state.savedMetricsLoading && !state.token ? `<div class="datasource-empty">Log in to manage saved metrics.</div>` : ""}
+      ${!state.savedMetricsLoading && state.token && !state.savedMetrics.length ? `<div class="datasource-empty">No saved metrics yet. Save a successful query from Home first.</div>` : ""}
+      ${!state.savedMetricsLoading && state.savedMetrics.length ? `
+      <div class="placeholder-list metrics-list">
+        ${state.savedMetrics.map(renderSavedMetricCard).join("")}
+      </div>` : ""}
+    </section>`;
+}
+function renderSavedMetricCard(metric) {
+  const result = metric.result || {};
+  const rows = getRowsFromResult(result);
+  const typeLabel = metric.widget_type === "scalar" ? "Number-ready" : metric.widget_type === "timeseries" ? "Time series" : "Table";
+  return `
+    <article class="placeholder-item metric-card">
+      ${renderIcon(metric.widget_type === "scalar" ? "metrics" : "dashboards")}
+      <span>
+        <strong>${escapeHtml(metric.label || metric.widget_key || "Saved metric")}</strong>
+        <small>${escapeHtml(typeLabel)} · ${escapeHtml(metric.datasource_key || "default")} · ${rows.length} rows</small>
+      </span>
+    </article>`;
 }
 function renderDatasourcesView() {
   const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
@@ -685,6 +888,7 @@ function render(options = {}) {
       <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
       ${state.loginOpen ? renderLoginDialog() : ""}
       ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
+      ${state.dashboardWidgetDialogOpen ? renderDashboardWidgetDialog() : ""}
     </main>`;
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", changeView);
@@ -720,6 +924,20 @@ function render(options = {}) {
   document.querySelectorAll("[data-delete-dashboard]").forEach((button) => {
     button.addEventListener("click", deleteDashboard);
   });
+  document.querySelectorAll("[data-open-widget-dialog]").forEach((button) => {
+    button.addEventListener("click", openDashboardWidgetDialog);
+  });
+  document.querySelectorAll("[data-close-widget-dialog]").forEach((button) => {
+    button.addEventListener("click", closeDashboardWidgetDialog);
+  });
+  document.querySelector("[data-dashboard-widget-form]")?.addEventListener("submit", addDashboardWidget);
+  document.querySelector("[data-widget-metric-select]")?.addEventListener("change", changeDashboardWidgetMetric);
+  document.querySelectorAll("[data-widget-type-select]").forEach((input2) => {
+    input2.addEventListener("change", changeDashboardWidgetType);
+  });
+  document.querySelectorAll("[data-delete-dashboard-widget]").forEach((button) => {
+    button.addEventListener("click", deleteDashboardWidget);
+  });
   document.querySelector("#excel-source-input")?.addEventListener("change", uploadSelectedSource);
   document.querySelector("#login-form")?.addEventListener("submit", login);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
@@ -748,6 +966,7 @@ function render(options = {}) {
   initAnalysisDashboard();
   maybeLoadDatasourcesForActiveView();
   maybeLoadDashboardsForActiveView();
+  maybeLoadSavedMetricsForActiveView();
   if (options.scrollToLatest) {
     scrollToLatest();
   }
@@ -799,6 +1018,21 @@ function maybeLoadDatasourcesForActiveView() {
 function maybeLoadDashboardsForActiveView() {
     if (state.activeView === "analysis" && state.token && !state.dashboardsLoaded && !state.dashboardsLoading) {
         void loadDashboards();
+        return;
+    }
+    if (
+        state.activeView === "analysis" &&
+        state.token &&
+        state.activeDashboardId &&
+        state.dashboardWidgetsDashboardId !== state.activeDashboardId &&
+        !state.dashboardWidgetsLoading
+    ) {
+        void loadDashboardWidgets(state.activeDashboardId);
+    }
+}
+function maybeLoadSavedMetricsForActiveView() {
+    if (state.activeView === "metrics" && state.token && !state.savedMetricsLoaded && !state.savedMetricsLoading) {
+        void loadSavedMetrics();
     }
 }
 async function toggleSources() {
@@ -830,6 +1064,9 @@ async function loadDashboards() {
         state.dashboards = payload.items || [];
         state.dashboardsLoaded = true;
         state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || state.dashboards[0]?.id || "";
+        if (state.activeDashboardId) {
+            await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+        }
     } catch (error) {
         state.dashboardsError = error.message || "Could not load dashboards.";
         reportApiError(error, "Could not load dashboards.");
@@ -868,7 +1105,12 @@ async function selectDashboard(event) {
         return;
     }
     const previousDashboardId = state.activeDashboardId;
+    const previousWidgets = state.dashboardWidgets;
+    const previousWidgetsDashboardId = state.dashboardWidgetsDashboardId;
     state.activeDashboardId = dashboardId;
+    state.dashboardWidgets = [];
+    state.dashboardWidgetsDashboardId = "";
+    state.dashboardWidgetsLoading = true;
     state.dashboardMenuOpen = false;
     state.dashboardCreateOpen = false;
     render();
@@ -889,11 +1131,15 @@ async function selectDashboard(event) {
             throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
         }
         state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || dashboardId;
+        await loadDashboardWidgets(state.activeDashboardId, { silent: true });
     } catch (error) {
         state.activeDashboardId = previousDashboardId;
+        state.dashboardWidgets = previousWidgets;
+        state.dashboardWidgetsDashboardId = previousWidgetsDashboardId;
         state.dashboardsError = error.message || "Could not select dashboard.";
         reportApiError(error, "Could not select dashboard.");
     } finally {
+        state.dashboardWidgetsLoading = false;
         render();
     }
 }
@@ -931,6 +1177,8 @@ async function createDashboard(event) {
         if (payload.item) {
             state.dashboards = [payload.item, ...state.dashboards.filter((dashboard) => dashboard.id !== payload.item.id)];
             state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || payload.item.id || "";
+            state.dashboardWidgets = [];
+            state.dashboardWidgetsDashboardId = state.activeDashboardId;
         }
         state.dashboardsLoaded = true;
         state.dashboardCreateOpen = false;
@@ -967,6 +1215,11 @@ async function deleteDashboard(event) {
         state.dashboards = state.dashboards.filter((item) => item.id !== dashboardId);
         if (state.activeDashboardId === dashboardId) {
             state.activeDashboardId = payload.active_dashboard_id || state.dashboards[0]?.id || "";
+            state.dashboardWidgets = [];
+            state.dashboardWidgetsDashboardId = "";
+            if (state.activeDashboardId) {
+                await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+            }
         }
     } catch (error) {
         state.dashboardsError = error.message || "Could not delete dashboard.";
@@ -975,6 +1228,255 @@ async function deleteDashboard(event) {
         state.dashboardDeletePendingId = "";
         render();
     }
+}
+async function loadDashboardWidgets(dashboardId, options = {}) {
+    if (!state.token || !dashboardId) {
+        state.dashboardWidgets = [];
+        state.dashboardWidgetsDashboardId = "";
+        return;
+    }
+    state.dashboardWidgetsLoading = true;
+    state.dashboardWidgetsError = "";
+    if (!options.silent) {
+        render();
+    }
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/widgets?${params.toString()}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (dashboardId === state.activeDashboardId) {
+            state.dashboardWidgets = payload.items || [];
+            state.dashboardWidgetsDashboardId = dashboardId;
+        }
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not load dashboard widgets.";
+        reportApiError(error, "Could not load dashboard widgets.");
+        if (dashboardId === state.activeDashboardId) {
+            state.dashboardWidgetsDashboardId = dashboardId;
+        }
+    } finally {
+        state.dashboardWidgetsLoading = false;
+        render();
+    }
+}
+async function loadSavedMetrics(options = {}) {
+    if (!state.token) {
+        state.savedMetrics = [];
+        state.savedMetricsLoaded = false;
+        return;
+    }
+    state.savedMetricsLoading = true;
+    state.savedMetricsError = "";
+    if (!options.silent) {
+        render();
+    }
+    try {
+        const response = await fetch(`/api/dashboard-metrics?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.savedMetrics = payload.items || [];
+        state.savedMetricsLoaded = true;
+        if (!state.dashboardWidgetMetricKey && state.savedMetrics.length) {
+            state.dashboardWidgetMetricKey = state.savedMetrics[0].widget_key || "";
+            state.dashboardWidgetType = recommendWidgetType(state.savedMetrics[0]);
+        }
+    } catch (error) {
+        state.savedMetricsError = error.message || "Could not load saved metrics.";
+        reportApiError(error, "Could not load saved metrics.");
+        state.savedMetricsLoaded = true;
+    } finally {
+        state.savedMetricsLoading = false;
+        render();
+    }
+}
+function openDashboardWidgetDialog() {
+    if (!state.token) {
+        openLogin();
+        return;
+    }
+    if (!state.activeDashboardId) {
+        state.dashboardWidgetsError = "Create a dashboard before adding widgets.";
+        render();
+        return;
+    }
+    state.dashboardWidgetDialogOpen = true;
+    state.dashboardWidgetsError = "";
+    render();
+    if (!state.savedMetricsLoaded && !state.savedMetricsLoading) {
+        void loadSavedMetrics();
+    } else if (state.savedMetrics.length && !state.dashboardWidgetMetricKey) {
+        state.dashboardWidgetMetricKey = state.savedMetrics[0].widget_key || "";
+        state.dashboardWidgetType = recommendWidgetType(state.savedMetrics[0]);
+        render();
+    }
+}
+function closeDashboardWidgetDialog() {
+    if (state.dashboardWidgetPending) return;
+    state.dashboardWidgetDialogOpen = false;
+    state.dashboardWidgetsError = "";
+    render();
+}
+function changeDashboardWidgetMetric(event) {
+    state.dashboardWidgetMetricKey = event.currentTarget.value || "";
+    const metric = getSelectedSavedMetric();
+    state.dashboardWidgetType = recommendWidgetType(metric);
+    render();
+}
+function changeDashboardWidgetType(event) {
+    state.dashboardWidgetType = event.currentTarget.value || "";
+    render();
+}
+async function addDashboardWidget(event) {
+    event.preventDefault();
+    if (!state.token || state.dashboardWidgetPending || !state.activeDashboardId) return;
+    const form = new FormData(event.currentTarget);
+    const metricWidgetKey = String(form.get("metric_widget_key") || "").trim();
+    const title = String(form.get("title") || "").trim();
+    const selectedMetric = state.savedMetrics.find((metric) => metric.widget_key === metricWidgetKey);
+    const availableTypes = getAvailableWidgetTypes(selectedMetric);
+    const visualizationType = normalizeDashboardWidgetType(String(form.get("visualization_type") || ""), availableTypes);
+    if (!metricWidgetKey || !title) {
+        state.dashboardWidgetsError = "Choose a saved metric and name the widget.";
+        render();
+        return;
+    }
+    state.dashboardWidgetPending = true;
+    state.dashboardWidgetsError = "";
+    render();
+    try {
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(state.activeDashboardId)}/widgets`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                metric_widget_key: metricWidgetKey,
+                title,
+                visualization_type: visualizationType,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            state.dashboardWidgets = [...state.dashboardWidgets, payload.item];
+            state.dashboardWidgetsDashboardId = state.activeDashboardId;
+        }
+        await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+        state.dashboardWidgetDialogOpen = false;
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not add widget.";
+        reportApiError(error, "Could not add widget.");
+    } finally {
+        state.dashboardWidgetPending = false;
+        render();
+    }
+}
+async function deleteDashboardWidget(event) {
+    const widgetId = event.currentTarget.dataset.deleteDashboardWidget || "";
+    if (!widgetId || !state.activeDashboardId) return;
+    if (!window.confirm("Remove this widget from the dashboard?")) {
+        return;
+    }
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(state.activeDashboardId)}/widgets/${encodeURIComponent(widgetId)}?${params.toString()}`, {
+            method: "DELETE",
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboardWidgets = state.dashboardWidgets.filter((widget) => widget.id !== widgetId);
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not remove widget.";
+        reportApiError(error, "Could not remove widget.");
+    } finally {
+        render();
+    }
+}
+function scheduleDashboardLayoutSave() {
+    const dashboardId = state.activeDashboardId;
+    if (state.dashboardLayoutSaveTimer) {
+        clearTimeout(state.dashboardLayoutSaveTimer);
+    }
+    state.dashboardLayoutSaveTimer = setTimeout(() => {
+        void saveDashboardLayout(dashboardId);
+    }, 600);
+}
+async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
+    if (!dashboardId || dashboardId !== state.activeDashboardId || !state.token) return;
+    const items = collectDashboardLayout();
+    if (!items.length) return;
+    state.dashboardLayoutSaveTimer = null;
+    try {
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/widgets/layout`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                items,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (dashboardId !== state.activeDashboardId) return;
+        const updatedWidgets = new Map((payload.items || []).map((widget) => [widget.id, widget]));
+        const layoutById = new Map(items.map((item) => [item.widget_id, item]));
+        state.dashboardWidgets = state.dashboardWidgets.map((widget) => {
+            const updated = updatedWidgets.get(widget.id);
+            if (updated) {
+                return updated;
+            }
+            const layout = layoutById.get(widget.id);
+            if (!layout) {
+                return widget;
+            }
+            return {
+                ...widget,
+                layout: {
+                    x: layout.x,
+                    y: layout.y,
+                    w: layout.w,
+                    h: layout.h
+                }
+            };
+        });
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not save widget layout.";
+        reportApiError(error, "Could not save widget layout.");
+        render();
+    }
+}
+function collectDashboardLayout() {
+    return Array.from(document.querySelectorAll(".dashboard-grid .grid-stack-item")).map((element) => {
+        const node = element.gridstackNode || {};
+        return {
+            widget_id: element.getAttribute("gs-id") || node.id || "",
+            x: Number.isFinite(node.x) ? node.x : Number(element.getAttribute("gs-x") || 0),
+            y: Number.isFinite(node.y) ? node.y : Number(element.getAttribute("gs-y") || 0),
+            w: Number.isFinite(node.w) ? node.w : Number(element.getAttribute("gs-w") || 6),
+            h: Number.isFinite(node.h) ? node.h : Number(element.getAttribute("gs-h") || 4)
+        };
+    }).filter((item) => item.widget_id);
 }
 function openSourcePicker() {
     if (state.datasourceUploadPending) return;
@@ -1124,6 +1626,7 @@ function changeView(event) {
   const view = normalizeView(event.currentTarget.dataset.view);
   if (state.activeView === view) return;
   state.activeView = view;
+  rememberActiveView(view);
   state.error = "";
   state.dashboardMenuOpen = false;
   state.dashboardCreateOpen = false;
@@ -1134,16 +1637,22 @@ function initAnalysisDashboard() {
   const gridElement = document.querySelector(".dashboard-grid");
   if (!gridElement) return;
   if (window.GridStack) {
-    window.GridStack.init(
+    const grid = window.GridStack.init(
       {
         cellHeight: 94,
         column: 12,
+        disableResize: false,
         float: false,
         margin: 12,
+        alwaysShowResizeHandle: true,
+        staticGrid: false,
         resizable: { handles: "e,se,s,sw,w" }
       },
       gridElement
     );
+    grid.enableResize?.(true);
+    grid.off?.("change dragstop resizestop");
+    grid.on?.("change dragstop resizestop", () => scheduleDashboardLayoutSave());
   } else {
     document.querySelector("[data-dashboard-fallback]")?.removeAttribute("hidden");
   }
@@ -1154,14 +1663,15 @@ function initAnalysisDashboard() {
   }
 }
 function renderDashboardCharts() {
-  const charts = [
-    ["capacity", capacityOptions()],
-    ["flow", flowOptions()],
-    ["episodes-line", episodesOptions()]
-  ];
-  charts.forEach(([id, options]) => {
-    const element = document.querySelector(`[data-chart="${id}"]`);
+  state.dashboardWidgets.forEach((widget) => {
+    if (["number", "table"].includes(widget.visualization_type)) return;
+    const element = document.querySelector(`[data-dashboard-widget-chart="${selectorAttributeValue(widget.id)}"]`);
     if (!element) return;
+    const options = dashboardWidgetChartOptions(widget);
+    if (!options) {
+      element.innerHTML = `<div class="dashboard-widget-error">This data cannot be displayed as ${escapeHtml(widget.visualization_type)}.</div>`;
+      return;
+    }
     const chart = window.echarts.init(element, null, { renderer: "canvas" });
     chart.setOption(options);
     window.addEventListener("resize", () => chart.resize(), { passive: true });
@@ -1170,6 +1680,147 @@ function renderDashboardCharts() {
       new ResizeObserver(() => chart.resize()).observe(gridItem);
     }
   });
+}
+function selectorAttributeValue(value) {
+  return String(value ?? "").replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+function dashboardWidgetChartOptions(widget) {
+  const result = widget.result || widget.metric?.result || {};
+  const profile = getTabularProfile(result);
+  const { rows, numericColumns, dimensionColumns } = profile;
+  const categoryColumn = dimensionColumns[0] || profile.columns[0];
+  if (!rows.length || !categoryColumn) return null;
+  if (widget.visualization_type === "pie") {
+    const valueColumn = numericColumns[0];
+    if (!valueColumn) return null;
+    return pieWidgetOptions(aggregateRowsByCategory(rows, categoryColumn, valueColumn), "category", "value");
+  }
+  const seriesColumns = numericColumns.length ? numericColumns : profile.columns.filter((column) => column !== categoryColumn);
+  if (!seriesColumns.length) return null;
+  if (widget.visualization_type === "bar") {
+    const axisRows = profile.hasLongSeries
+      ? aggregateRowsByCategory(rows, categoryColumn, numericColumns[0])
+      : rows;
+    return axisWidgetOptions(axisRows, profile.hasLongSeries ? "category" : categoryColumn, profile.hasLongSeries ? ["value"] : seriesColumns, "bar");
+  }
+  if (widget.visualization_type === "stacked_bar") {
+    if (profile.hasLongSeries) {
+      return longSeriesWidgetOptions(rows, dimensionColumns[0], dimensionColumns[1], numericColumns[0], "bar", { stacked: true });
+    }
+    return axisWidgetOptions(rows, categoryColumn, seriesColumns, "bar", { stacked: true });
+  }
+  if (widget.visualization_type === "line") {
+    const axisRows = profile.hasLongSeries
+      ? aggregateRowsByCategory(rows, categoryColumn, numericColumns[0])
+      : rows;
+    return axisWidgetOptions(axisRows, profile.hasLongSeries ? "category" : categoryColumn, profile.hasLongSeries ? ["value"] : seriesColumns.slice(0, 1), "line");
+  }
+  if (widget.visualization_type === "multi_line") {
+    if (profile.hasLongSeries) {
+      return longSeriesWidgetOptions(rows, dimensionColumns[0], dimensionColumns[1], numericColumns[0], "line");
+    }
+    return axisWidgetOptions(rows, categoryColumn, seriesColumns, "line");
+  }
+  if (widget.visualization_type === "area") {
+    const axisRows = profile.hasLongSeries
+      ? aggregateRowsByCategory(rows, categoryColumn, numericColumns[0])
+      : rows;
+    return axisWidgetOptions(axisRows, profile.hasLongSeries ? "category" : categoryColumn, profile.hasLongSeries ? ["value"] : seriesColumns.slice(0, 1), "line", { area: true });
+  }
+  return null;
+}
+function longSeriesWidgetOptions(rows, categoryColumn, seriesColumn, valueColumn, type, options = {}) {
+  const categories = uniqueValues(rows.map((row) => formatCellValue(row?.[categoryColumn])));
+  const seriesNames = uniqueValues(rows.map((row) => formatCellValue(row?.[seriesColumn])));
+  const sums = new Map();
+  rows.forEach((row) => {
+    const category = formatCellValue(row?.[categoryColumn]);
+    const series = formatCellValue(row?.[seriesColumn]);
+    const key = `${category}\u0000${series}`;
+    sums.set(key, (sums.get(key) || 0) + (Number(row?.[valueColumn]) || 0));
+  });
+  return {
+    animationDuration: 650,
+    color: ["#2368d9", "#19a7a8", "#7aaeea", "#5b8ee8", "#6cc6d8"],
+    tooltip: { trigger: "axis", axisPointer: { type: type === "bar" ? "shadow" : "line" } },
+    legend: { right: 8, top: 6, textStyle: chartTextStyle() },
+    grid: { left: 42, right: 20, top: 42, bottom: 32 },
+    xAxis: {
+      type: "category",
+      boundaryGap: type === "bar",
+      data: categories,
+      axisLabel: chartTextStyle(),
+      axisTick: { show: false }
+    },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: seriesNames.map((series) => ({
+      name: series,
+      type,
+      smooth: type === "line",
+      stack: options.stacked ? "total" : void 0,
+      data: categories.map((category) => sums.get(`${category}\u0000${series}`) || 0)
+    }))
+  };
+}
+function axisWidgetOptions(rows, categoryColumn, seriesColumns, type, options = {}) {
+  return {
+    animationDuration: 650,
+    color: ["#2368d9", "#19a7a8", "#7aaeea", "#5b8ee8", "#6cc6d8"],
+    tooltip: { trigger: "axis", axisPointer: { type: type === "bar" ? "shadow" : "line" } },
+    legend: { right: 8, top: 6, textStyle: chartTextStyle() },
+    grid: { left: 42, right: 20, top: 42, bottom: 32 },
+    xAxis: {
+      type: "category",
+      boundaryGap: type === "bar",
+      data: rows.map((row) => formatCellValue(row?.[categoryColumn])),
+      axisLabel: chartTextStyle(),
+      axisTick: { show: false }
+    },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: seriesColumns.map((column) => ({
+      name: column,
+      type,
+      smooth: type === "line",
+      stack: options.stacked ? "total" : void 0,
+      areaStyle: options.area ? { color: "rgba(35, 104, 217, 0.1)" } : void 0,
+      data: rows.map((row) => Number(row?.[column]) || 0)
+    }))
+  };
+}
+function aggregateRowsByCategory(rows, categoryColumn, valueColumn) {
+  const sums = new Map();
+  rows.forEach((row) => {
+    const category = formatCellValue(row?.[categoryColumn]);
+    sums.set(category, (sums.get(category) || 0) + (Number(row?.[valueColumn]) || 0));
+  });
+  return Array.from(sums, ([category, value]) => ({ category, value }));
+}
+function uniqueValues(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+function pieWidgetOptions(rows, labelColumn, valueColumn) {
+  return {
+    animationDuration: 650,
+    color: ["#2368d9", "#19a7a8", "#7aaeea", "#5b8ee8", "#6cc6d8"],
+    tooltip: { trigger: "item" },
+    legend: { bottom: 0, textStyle: chartTextStyle() },
+    series: [
+      {
+        type: "pie",
+        radius: ["42%", "70%"],
+        center: ["50%", "44%"],
+        data: rows.map((row) => ({
+          name: formatCellValue(row?.[labelColumn]),
+          value: Number(row?.[valueColumn]) || 0
+        }))
+      }
+    ]
+  };
 }
 function chartTextStyle() {
   return {
@@ -1277,6 +1928,7 @@ function newChat() {
   state.conversationId = "";
   state.error = "";
   state.activeView = "home";
+  rememberActiveView(state.activeView);
   render();
 }
 function renderMessage(message) {
@@ -1432,6 +2084,9 @@ function normalizeView(value) {
   const allowed = new Set(["home", "analysis", "metrics", "datasources", "queries", "alerts"]);
   return allowed.has(value) ? value : "home";
 }
+function rememberActiveView(value) {
+  localStorage.setItem("gaard_client_active_view", normalizeView(value));
+}
 function handleModeChange(event) {
   state.queryMode = normalizeQueryMode(event.currentTarget.value);
   render();
@@ -1504,6 +2159,12 @@ async function saveWidgetFromMessage(event) {
       throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     }
     message.saveStatus = "saved";
+    if (payload.item) {
+      state.savedMetrics = [payload.item, ...state.savedMetrics.filter((metric) => metric.widget_key !== payload.item.widget_key)];
+      state.savedMetricsLoaded = true;
+    } else {
+      state.savedMetricsLoaded = false;
+    }
   } catch (error) {
     message.saveStatus = "error";
     message.saveError = error.message || "Widget could not be saved.";
@@ -1565,7 +2226,15 @@ function logout() {
   state.activeDashboardId = "";
   state.dashboardMenuOpen = false;
   state.dashboardCreateOpen = false;
+  state.dashboardWidgetDialogOpen = false;
+  state.savedMetrics = [];
+  state.savedMetricsLoaded = false;
+  state.savedMetricsError = "";
+  state.dashboardWidgets = [];
+  state.dashboardWidgetsDashboardId = "";
+  state.dashboardWidgetsError = "";
   state.activeView = "home";
+  rememberActiveView(state.activeView);
   state.loginOpen = false;
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
@@ -1580,6 +2249,64 @@ function inferWidgetType(rows) {
     return "scalar";
   }
   return "table";
+}
+function getSelectedSavedMetric() {
+  return state.savedMetrics.find((metric) => metric.widget_key === state.dashboardWidgetMetricKey) || state.savedMetrics[0] || null;
+}
+function getAvailableWidgetTypes(metric) {
+  if (!metric) return ["table"];
+  const profile = getTabularProfile(metric.result || {});
+  if (metric.widget_type === "scalar" || (profile.rows.length === 1 && profile.columns.length === 1)) {
+    return ["number", "table"];
+  }
+  const types = ["table"];
+  if (profile.rows.length && profile.numericColumns.length) {
+    types.unshift("bar");
+    if (profile.dimensionColumns.length) {
+      types.push("pie");
+    }
+    if (profile.hasWideSeries || profile.hasLongSeries) {
+      types.push("stacked_bar", "multi_line");
+    }
+    types.push("line", "area");
+  }
+  return [...new Set(types)];
+}
+function recommendWidgetType(metric) {
+  const availableTypes = getAvailableWidgetTypes(metric);
+  if (availableTypes.includes("number")) return "number";
+  if (metric?.widget_type === "timeseries" && availableTypes.includes("line")) return "line";
+  if (availableTypes.includes("bar")) return "bar";
+  return availableTypes[0] || "table";
+}
+function normalizeDashboardWidgetType(value, availableTypes) {
+  return availableTypes.includes(value) ? value : availableTypes[0] || "table";
+}
+function getRowsFromResult(result) {
+  return Array.isArray(result?.rows) ? result.rows : [];
+}
+function getTabularProfile(result) {
+  const rows = getRowsFromResult(result);
+  const columns = Array.isArray(result?.columns) && result.columns.length ? result.columns : getColumns(rows);
+  const numericColumns = columns.filter((column) => rows.some((row) => isNumericValue(row?.[column])));
+  const dimensionColumns = columns.filter((column) => !numericColumns.includes(column));
+  return {
+    rows,
+    columns,
+    numericColumns,
+    dimensionColumns,
+    hasWideSeries: numericColumns.length > 1,
+    hasLongSeries: dimensionColumns.length >= 2 && numericColumns.length >= 1
+  };
+}
+function isNumericValue(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  return Number.isFinite(Number(value));
 }
 function getSelectedMode(form) {
   const value = new FormData(form).get("mode");
