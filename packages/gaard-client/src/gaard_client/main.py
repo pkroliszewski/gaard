@@ -9,7 +9,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx2 as httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -59,6 +59,11 @@ class ClientWidgetFromQueryRequest(BaseModel):
     question: str = Field(min_length=1)
     sql: str = Field(min_length=1)
     result_mode: str = "data"
+    backend_url: str | None = None
+
+
+class ClientDatasourceStateRequest(BaseModel):
+    active: bool
     backend_url: str | None = None
 
 
@@ -195,6 +200,115 @@ async def create_widget_from_query(
                     "sql": request.sql,
                     "result_mode": request.result_mode,
                 }),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.get("/api/datasources")
+async def list_datasources(
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    datasources_url = f"{backend_url}/api/v1/admin/datasources"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                datasources_url,
+                headers=backend_auth_headers(authorization),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.post("/api/datasources/excel")
+async def upload_excel_datasource(
+    file: UploadFile = File(...),
+    active: bool = False,
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    if not file.filename or Path(file.filename).suffix.lower() != ".xlsx":
+        raise HTTPException(status_code=400, detail="Wybierz plik w formacie .xlsx.")
+
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    upload_url = f"{backend_url}/api/v1/admin/datasources/excel-upload"
+    content = await file.read()
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                upload_url,
+                headers=backend_auth_headers(authorization),
+                params={"active": active},
+                files={
+                    "file": (
+                        file.filename,
+                        content,
+                        file.content_type
+                        or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.post("/api/datasources/{connector_id}/state")
+async def update_datasource_state(
+    connector_id: int,
+    request: ClientDatasourceStateRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    state_url = f"{backend_url}/api/v1/admin/datasources/{connector_id}/state"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                state_url,
+                **backend_request_kwargs(authorization, {"active": request.active}),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(

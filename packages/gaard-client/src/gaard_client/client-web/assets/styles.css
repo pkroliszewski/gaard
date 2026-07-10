@@ -205,6 +205,121 @@ label {
   white-space: nowrap;
 }
 
+.sources-nav {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sources-panel {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 2px 0 8px 32px;
+}
+
+.sources-list {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.source-row {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.source-state,
+.new-source-state {
+  min-width: 0;
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 7px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.source-state input,
+.new-source-state input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.source-state span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-row > span,
+.source-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-row > span {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.source-row small,
+.source-muted {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.source-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 15px 0 15px;
+}
+
+.source-add {
+  width: 34px;
+  min-height: 34px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
+  color: #ffffff;
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.source-add:hover,
+.source-add:focus-visible {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.source-error {
+  padding: 8px;
+  border: 1px solid rgba(255, 185, 185, 0.28);
+  border-radius: 7px;
+  background: rgba(163, 59, 59, 0.2);
+  color: #ffd4d4;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .chat-shell {
   min-width: 0;
   height: 100vh;
@@ -964,7 +1079,8 @@ label {
   }
 
   .brand-copy,
-  .nav-item span {
+  .nav-item span,
+  .sources-panel {
     position: absolute;
     width: 1px;
     height: 1px;

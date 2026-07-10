@@ -3,9 +3,10 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -275,6 +276,10 @@ class DatasourceConnectionTestRequest(BaseModel):
     database_url: str | None = Field(default=None, min_length=1)
 
 
+class DatasourceStateRequest(BaseModel):
+    active: bool
+
+
 class DatasourceSchemaTableSettingsRequest(BaseModel):
     tables: dict[str, dict[str, Any]]
 
@@ -481,6 +486,37 @@ def build_client_widget_key(session: Session, label: str, question: str) -> str:
         suffix += 1
 
     return widget_key
+
+
+def build_client_excel_datasource_key(session: Session, filename: str) -> str:
+    stem = Path(filename).stem or "excel"
+    normalized = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-") or "excel"
+    base_key = f"client_excel_{normalized[:48].strip('_-') or 'source'}"
+    connector_key = base_key
+    suffix = 2
+
+    while get_datasource_connector_by_key(session, connector_key) is not None:
+        suffix_text = f"_{suffix}"
+        connector_key = f"{base_key[: 255 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+
+    return connector_key
+
+
+def safe_excel_upload_path(directory: Path, filename: str) -> Path:
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", Path(filename).name).strip("._")
+    if not safe_name:
+        safe_name = "source.xlsx"
+    if Path(safe_name).suffix.lower() != ".xlsx":
+        safe_name = f"{Path(safe_name).stem or 'source'}.xlsx"
+
+    target = directory / safe_name
+    suffix = 2
+    while target.exists():
+        target = directory / f"{Path(safe_name).stem}_{suffix}.xlsx"
+        suffix += 1
+
+    return target
 
 
 def serialize_overview_widget(
@@ -1795,6 +1831,137 @@ def create_datasource(
         session=session,
         actor=user.username,
         action="datasource.create",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={
+            "database_type": connector.database_type,
+            "active": connector.active,
+        },
+    )
+    session.commit()
+
+    return {"item": serialize_datasource(connector)}
+
+
+@router.post("/datasources/excel-upload")
+async def upload_excel_datasource(
+    file: UploadFile = File(...),
+    active: bool = False,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    filename = file.filename or ""
+    if Path(filename).suffix.lower() != ".xlsx":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .xlsx files can be added as Excel datasources.",
+        )
+
+    license_service.ensure_datasource_type_allowed("duckdb-excel")
+
+    upload_dir = Path(settings.gaard_excel_upload_directory).expanduser().resolve()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    target_path = safe_excel_upload_path(upload_dir, filename)
+
+    try:
+        with target_path.open("wb") as destination:
+            while chunk := await file.read(1024 * 1024):
+                destination.write(chunk)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Excel file could not be saved: {exc}",
+        ) from exc
+
+    request = DatasourceConnectorRequest(
+        connector_key=build_client_excel_datasource_key(session, filename),
+        name=Path(filename).stem or target_path.stem,
+        database_type="duckdb-excel",
+        database_url=f"duckdb-excel:///{target_path.as_posix()}",
+        sql_dialect="duckdb",
+        active=active,
+    )
+
+    try:
+        normalized_config = normalize_datasource_configuration(
+            database_type=request.database_type,
+            connection_config=request.connection_config,
+            database_path=request.database_path,
+            database_url=request.database_url,
+            sql_dialect=request.sql_dialect,
+        )
+    except ValueError as exc:
+        target_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    connector = DatasourceConnector(
+        connector_key=request.connector_key,
+        name=request.name,
+        database_type=normalized_config.database_type,
+        database_url=normalized_config.database_url,
+        sql_dialect=normalized_config.sql_dialect,
+        active=active,
+        updated_by=user.username,
+    )
+    session.add(connector)
+    session.flush()
+
+    if active:
+        set_active_datasource_connector(session, connector, user.username)
+
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.excel_upload",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={
+            "database_type": connector.database_type,
+            "filename": Path(filename).name,
+            "active": connector.active,
+        },
+    )
+    session.commit()
+
+    return {"item": serialize_datasource(connector)}
+
+
+@router.post("/datasources/{connector_id}/state")
+def update_datasource_state(
+    connector_id: int,
+    request: DatasourceStateRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    if is_system_datasource_connector(connector):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The metadata datasource is managed by GAARD.",
+        )
+
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    if request.active:
+        set_active_datasource_connector(session, connector, user.username)
+    else:
+        connector.active = False
+        connector.updated_by = user.username
+
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.state.update",
         resource_type="datasource_connector",
         resource_id=connector.connector_key,
         details={

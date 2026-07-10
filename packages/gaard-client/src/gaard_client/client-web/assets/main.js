@@ -13,7 +13,15 @@ var state = {
   nextMessageId: 1,
   pending: false,
   error: "",
-  loginOpen: !storedToken
+  loginOpen: !storedToken,
+  sourcesOpen: false,
+  datasources: [],
+  datasourcesLoaded: false,
+  datasourcesLoading: false,
+  datasourceError: "",
+  datasourceUploadPending: false,
+  datasourceStatePendingId: null,
+  newDatasourceActive: false
 };
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -68,13 +76,53 @@ function renderSidebar() {
         </div>
       </div>
       <nav class="nav-list" aria-label="Główne sekcje">
-        ${items.map(([icon, label], index) => `
+        ${items.map(([icon, label], index) => icon === "sources" ? renderSourcesNavItem(icon, label) : `
           <button class="nav-item ${index === 1 ? "active" : ""}" type="button" aria-disabled="true" title="${escapeHtml(label)}">
             ${renderIcon(icon)}
             <span>${escapeHtml(label)}</span>
           </button>`).join("")}
       </nav>
     </aside>`;
+}
+function renderSourcesNavItem(icon, label) {
+  return `
+    <div class="sources-nav">
+      <button class="nav-item ${state.sourcesOpen ? "active" : ""}" type="button" data-toggle-sources aria-expanded="${state.sourcesOpen ? "true" : "false"}" title="${escapeHtml(label)}">
+        ${renderIcon(icon)}
+        <span>${escapeHtml(label)}</span>
+      </button>
+      ${state.sourcesOpen ? renderSourcesPanel() : ""}
+    </div>`;
+}
+function renderSourcesPanel() {
+  const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
+  return `
+    <div class="sources-panel">
+      <div class="source-actions">
+        <button class="source-add" type="button" data-add-source aria-label="Dodaj plik Excel" title="Dodaj plik Excel" ${state.datasourceUploadPending || !state.token ? "disabled" : ""}>
+          <span aria-hidden="true">+</span>
+        </button>
+        <label class="new-source-state">
+          <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
+          <span>Dodaj jako aktywne źródło</span>
+        </label>
+        
+      </div>
+      <div class="sources-list" aria-live="polite">
+        ${state.datasourcesLoading ? `<div class="source-muted">Ładowanie...</div>` : ""}
+        ${!state.datasourcesLoading && !visibleSources.length ? `<div class="source-muted">Brak źródeł</div>` : ""}
+        ${visibleSources.map((source) => `
+          <div class="source-row" title="${escapeHtml(source.name)}">
+            <label class="source-state">
+              <input type="checkbox" data-source-active="${source.id}" ${source.active ? "checked" : ""} ${state.datasourceStatePendingId === source.id ? "disabled" : ""} />
+              <span>${escapeHtml(source.name)}</span>
+            </label>
+            <small>${source.active ? "Aktywne" : "Nieaktywne"}</small>
+          </div>`).join("")}
+      </div>
+      
+      ${state.datasourceError ? `<div class="source-error" role="alert">${escapeHtml(state.datasourceError)}</div>` : ""}
+    </div>`;
 }
 function renderAuthControls() {
   if (state.token) {
@@ -145,6 +193,7 @@ function render(options = {}) {
           </button>
         </form>
       </section>
+      <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
       ${state.loginOpen ? renderLoginDialog() : ""}
     </main>`;
   document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
@@ -153,6 +202,13 @@ function render(options = {}) {
     button.addEventListener("click", openLogin);
   });
   document.querySelector("[data-close-login]")?.addEventListener("click", closeLogin);
+  document.querySelector("[data-toggle-sources]")?.addEventListener("click", toggleSources);
+  document.querySelector("[data-add-source]")?.addEventListener("click", openSourcePicker);
+  document.querySelector("[data-new-source-active]")?.addEventListener("change", toggleNewSourceActive);
+  document.querySelectorAll("[data-source-active]").forEach((input2) => {
+    input2.addEventListener("change", updateSourceActive);
+  });
+  document.querySelector("#excel-source-input")?.addEventListener("change", uploadSelectedSource);
   document.querySelector("#login-form")?.addEventListener("submit", login);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
     input2.addEventListener("change", handleModeChange);
@@ -180,6 +236,125 @@ function render(options = {}) {
   if (options.scrollToLatest) {
     scrollToLatest();
   }
+}
+async function toggleSources() {
+  state.sourcesOpen = !state.sourcesOpen;
+  state.datasourceError = "";
+  render();
+  if (state.sourcesOpen && state.token && !state.datasourcesLoaded) {
+    await loadDatasources();
+  }
+}
+function openSourcePicker() {
+  if (!state.token || state.datasourceUploadPending) return;
+  const input = document.querySelector("#excel-source-input");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+function toggleNewSourceActive(event) {
+  state.newDatasourceActive = event.currentTarget.checked;
+}
+async function loadDatasources() {
+  state.datasourcesLoading = true;
+  state.datasourceError = "";
+  render();
+  try {
+    const response = await fetch(`/api/datasources?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+      headers: authHeaders()
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(extractErrorMessage(payload));
+    }
+    state.datasources = payload.items || [];
+    state.datasourcesLoaded = true;
+  } catch (error) {
+    state.datasourceError = error.message || "Nie udało się pobrać źródeł danych.";
+  } finally {
+    state.datasourcesLoading = false;
+    render();
+  }
+}
+async function uploadSelectedSource(event) {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    state.datasourceError = "Wybierz plik w formacie .xlsx.";
+    render();
+    return;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  state.datasourceUploadPending = true;
+  state.datasourceError = "";
+  render();
+  try {
+    const params = new URLSearchParams({
+      backend_url: state.backendUrl,
+      active: state.newDatasourceActive ? "true" : "false"
+    });
+    const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: formData
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+    }
+    state.datasources = [
+      payload.item,
+      ...state.datasources.filter((item) => item.id !== payload.item?.id)
+    ].filter(Boolean);
+    state.datasourcesLoaded = true;
+  } catch (error) {
+    state.datasourceError = error.message || "Nie udało się dodać źródła danych.";
+  } finally {
+    state.datasourceUploadPending = false;
+    render();
+  }
+}
+async function updateSourceActive(event) {
+  const input = event.currentTarget;
+  const sourceId = Number(input.dataset.sourceActive);
+  const active = input.checked;
+  if (!sourceId || state.datasourceStatePendingId) return;
+  state.datasourceStatePendingId = sourceId;
+  state.datasourceError = "";
+  render();
+  try {
+    const response = await fetch(`/api/datasources/${sourceId}/state`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({
+        active,
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(friendlyDatasourceError(extractErrorMessage(payload)));
+    }
+    await loadDatasources();
+  } catch (error) {
+    state.datasourceError = error.message || "Nie udało się zmienić stanu źródła.";
+  } finally {
+    state.datasourceStatePendingId = null;
+    render();
+  }
+}
+function friendlyDatasourceError(message) {
+  if (message.includes("non-SQL source support") || message.includes("LICENSE_ENTITLEMENT_REQUIRED")) {
+    return "Ta licencja nie pozwala na używanie plików Excel jako źródeł danych.";
+  }
+  if (message.includes("multi-source access")) {
+    return "Korzystanie z wielu aktywnych źródeł danych wymaga licencji z obsługą wielu źródeł.";
+  }
+  return message;
 }
 function renderLoginDialog() {
   return `

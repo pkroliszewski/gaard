@@ -15,6 +15,7 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.7.0",
     "httpx2>=2.5.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
