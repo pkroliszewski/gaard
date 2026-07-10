@@ -1,3 +1,17 @@
+### v.0.2.4 - Client dashboards, saved metrics and conversation-aware queries
+- Added the new client dashboard workflow: users can create dashboards, select the active dashboard, delete dashboards, and manage dashboard widgets from the client UI.
+- Added GridStack-based dashboard widgets with draggable/resizable layouts, persisted widget positions, and support for number, bar, stacked bar, line, multi-line, pie, area, and table visualizations.
+- Added saved metrics support for dashboards: successful query results can be saved as reusable metrics, listed in the Metrics view, and added to dashboards as widgets.
+- Added dashboard API endpoints for listing dashboards, selecting the active dashboard, listing saved metrics, adding/removing widgets, deleting dashboards, and saving widget layouts.
+- Reworked the client web UI with a fuller app shell, dedicated Home, Analysis, Metrics, Datasources, My Queries, and Alerts sections, improved loading/error states, saved active tab restore after refresh, and better dashboard menu layering.
+- Added client-side datasource management improvements, including Excel workbook upload, active datasource toggling, and proxy endpoints for datasource state updates.
+- Added persisted conversation handling and conversation-context classification so follow-up questions can reuse recent query context more safely.
+- Improved query and analysis APIs with conversation metadata, clarification flow support, better error handling, and richer business-logic suggestion handling.
+- Added authenticated-session helpers and expanded backend models for dashboards, dashboard user state, dashboard widgets, saved metrics, and conversations.
+- Improved admin UI and API coverage for dashboard/metric-related data and added tests for dashboard, conversation, client proxy, error, license, and conversation-context flows.
+- Cleaned the public package set so paid extension packages are no longer shipped under `public/packages`; paid packages remain in `private`.
+- Bumped all public packages and local public package references to `0.2.4`.
+
 ### v.0.2.1 - Better handling of datasources
 - Improvements related to adding data sources, 
 - Introducing a datasource parameters form instead of URL, 
