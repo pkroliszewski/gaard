@@ -1,3 +1,8 @@
+### v.0.2.5 - Medical POC example data refresh
+- Added richer Medical POC demo data with specialty-specific volumes, seasonality, and trends.
+- Seeded the bundled Healthcare Operations dashboard and saved metrics with English metric names when installing the Medical POC example database.
+- Bumped `gaard-api` to `0.2.5` for the API-only PyPI release.
+
 ### v.0.2.4 - Client dashboards, saved metrics and conversation-aware queries
 - Added the new client dashboard workflow: users can create dashboards, select the active dashboard, delete dashboards, and manage dashboard widgets from the client UI.
 - Added GridStack-based dashboard widgets with draggable/resizable layouts, persisted widget positions, and support for number, bar, stacked bar, line, multi-line, pie, area, and table visualizations.
