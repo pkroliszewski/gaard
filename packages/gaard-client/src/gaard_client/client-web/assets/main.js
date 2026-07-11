@@ -34,10 +34,12 @@ var state = {
   activeDashboardId: "",
   dashboardMenuOpen: false,
   dashboardCreateOpen: false,
+  dashboardEditId: "",
   dashboardCreatePending: false,
   dashboardDeletePendingId: "",
   savedMetrics: [],
   savedMetricsLoaded: false,
+  savedMetricsResultsLoaded: false,
   savedMetricsLoading: false,
   savedMetricsError: "",
   dashboardWidgets: [],
@@ -48,6 +50,19 @@ var state = {
   dashboardWidgetPending: false,
   dashboardWidgetMetricKey: "",
   dashboardWidgetType: "",
+  saveWidgetDialogOpen: false,
+  saveWidgetMessageId: null,
+  saveWidgetDraftLabel: "",
+  saveWidgetTitleEdited: false,
+  saveWidgetSuggestionLoading: false,
+  saveWidgetSuggestionError: "",
+  saveWidgetPending: false,
+  saveWidgetError: "",
+  metricEditDialogOpen: false,
+  metricEditWidgetKey: "",
+  metricEditDraftLabel: "",
+  metricEditPending: false,
+  metricEditError: "",
   dashboardLayoutSaveTimer: null
 };
 rememberActiveView(state.activeView);
@@ -153,6 +168,11 @@ function renderIcon(name) {
         <path d="M19 6l-1 15H6L5 6" />
         <path d="M10 11v6" />
         <path d="M14 11v6" />
+      </svg>`,
+    edit: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
       </svg>`,
     chevronDown: `
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -311,7 +331,10 @@ function renderAnalysisHeading() {
     <div class="conversation-heading analysis-heading">
       <span>Analysis</span>
       <div class="dashboard-title-row">
-        <strong>${escapeHtml(title)}</strong>
+        ${dashboard ? `
+        <button class="dashboard-title-button" type="button" data-edit-active-dashboard aria-label="Edit dashboard details" title="Edit dashboard details">
+          ${escapeHtml(title)}
+        </button>` : `<strong>${escapeHtml(title)}</strong>`}
         ${renderDashboardPicker()}
       </div>
       <p>${escapeHtml(description)}</p>
@@ -499,6 +522,14 @@ function renderDashboardMenu() {
     </div>`;
 }
 function renderDashboardCreateDialog() {
+  const editing = Boolean(state.dashboardEditId);
+  const editingDashboard = state.dashboardEditId
+    ? state.dashboards.find((dashboard) => dashboard.id === state.dashboardEditId)
+    : null;
+  const title = editing ? "Edit dashboard" : "Add new dashboard";
+  const description = editing
+    ? "Update the dashboard name and description."
+    : "Name the workspace where saved query widgets will be organized.";
   return `
     <div class="dashboard-dialog-overlay" role="presentation">
       <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-create-title">
@@ -510,29 +541,29 @@ function renderDashboardCreateDialog() {
         </button>
         <div class="dashboard-dialog-heading">
           <span>Analysis</span>
-          <h2 id="dashboard-create-title">Add new dashboard</h2>
-          <p>Name the workspace where saved query widgets will be organized.</p>
+          <h2 id="dashboard-create-title">${escapeHtml(title)}</h2>
+          <p>${escapeHtml(description)}</p>
         </div>
-        ${renderDashboardCreateForm()}
+        ${renderDashboardCreateForm(editingDashboard, editing)}
       </section>
     </div>`;
 }
-function renderDashboardCreateForm() {
+function renderDashboardCreateForm(editingDashboard = null, editing = false) {
   return `
     <form class="dashboard-create-form" data-dashboard-create-form>
       <label>
         <span>Name</span>
-        <input name="name" maxlength="255" required placeholder="Operations overview" ${state.dashboardCreatePending ? "disabled" : ""} />
+        <input name="name" maxlength="255" required placeholder="Operations overview" value="${escapeHtml(editingDashboard?.name || "")}" ${state.dashboardCreatePending ? "disabled" : ""} />
       </label>
       <label>
         <span>Description</span>
-        <textarea name="description" maxlength="2000" rows="2" placeholder="Weekly operational snapshot" ${state.dashboardCreatePending ? "disabled" : ""}></textarea>
+        <textarea name="description" maxlength="2000" rows="2" placeholder="Weekly operational snapshot" ${state.dashboardCreatePending ? "disabled" : ""}>${escapeHtml(editingDashboard?.description || "")}</textarea>
       </label>
       ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
       <div class="dashboard-create-actions">
         <button type="button" data-close-dashboard-create ${state.dashboardCreatePending ? "disabled" : ""}>Cancel</button>
         <button class="primary" type="submit" ${state.dashboardCreatePending ? "disabled" : ""}>
-          ${state.dashboardCreatePending ? "Creating..." : "Create dashboard"}
+          ${state.dashboardCreatePending ? "Saving..." : editing ? "Save changes" : "Create dashboard"}
         </button>
       </div>
     </form>`;
@@ -614,6 +645,80 @@ function renderWidgetTypeChoice(type, availableTypes, selectedType) {
       <span class="widget-type-preview ${escapeHtml(type.key)}">${renderWidgetTypePreview(type.key)}</span>
       <strong>${escapeHtml(type.label)}</strong>
     </label>`;
+}
+function renderSaveWidgetDialog() {
+  const message = state.messages.find((item) => item.id === state.saveWidgetMessageId);
+  const pending = state.saveWidgetPending;
+  const suggestionStatus = state.saveWidgetSuggestionLoading ? `
+    <div class="save-title-status" role="status" aria-live="polite">
+      <span class="saved-metrics-spinner" aria-hidden="true"></span>
+      <span>LLM is suggesting a name...</span>
+    </div>` : state.saveWidgetSuggestionError ? `
+    <div class="save-title-status warning" role="status">${escapeHtml(state.saveWidgetSuggestionError)}</div>` : "";
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog save-metric-dialog" role="dialog" aria-modal="true" aria-labelledby="save-metric-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-save-widget-dialog aria-label="Close dialog" title="Close" ${pending ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Metric</span>
+          <h2 id="save-metric-title">Save metric</h2>
+          <p>LLM suggests a short name from the query. You can edit it before saving.</p>
+        </div>
+        <form class="dashboard-create-form" data-save-widget-form>
+          <label>
+            <span>Metric name</span>
+            <input name="label" maxlength="255" required value="${escapeHtml(state.saveWidgetDraftLabel)}" ${pending ? "disabled" : ""} data-save-widget-label />
+          </label>
+          ${message ? `<div class="save-metric-question">${escapeHtml(message.question)}</div>` : ""}
+          ${suggestionStatus}
+          ${state.saveWidgetError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.saveWidgetError)}</div>` : ""}
+          <div class="dashboard-create-actions">
+            <button type="button" data-close-save-widget-dialog ${pending ? "disabled" : ""}>Cancel</button>
+            <button class="primary" type="submit" ${pending ? "disabled" : ""}>
+              ${pending ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>`;
+}
+function renderMetricEditDialog() {
+  const metric = state.savedMetrics.find((item) => item.widget_key === state.metricEditWidgetKey);
+  const pending = state.metricEditPending;
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog metric-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="metric-edit-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-metric-edit aria-label="Close dialog" title="Close" ${pending ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Metric</span>
+          <h2 id="metric-edit-title">Edit metric name</h2>
+          <p>Change the name shown in the saved metrics list.</p>
+        </div>
+        <form class="dashboard-create-form" data-metric-edit-form>
+          <label>
+            <span>Metric name</span>
+            <input name="label" maxlength="255" required value="${escapeHtml(state.metricEditDraftLabel || metric?.label || "")}" ${pending ? "disabled" : ""} data-metric-edit-label />
+          </label>
+          ${state.metricEditError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.metricEditError)}</div>` : ""}
+          <div class="dashboard-create-actions">
+            <button type="button" data-close-metric-edit ${pending ? "disabled" : ""}>Cancel</button>
+            <button class="primary" type="submit" ${pending ? "disabled" : ""}>
+              ${pending ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>`;
 }
 function renderWidgetTypePreview(type) {
   if (type === "table") {
@@ -764,7 +869,7 @@ function renderMetricsView() {
   return `
     <section class="placeholder-view metrics-view">
       ${state.savedMetricsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.savedMetricsError)}</div>` : ""}
-      ${state.savedMetricsLoading ? renderSavedMetricsLoadingState("datasource-empty") : ""}
+      ${state.savedMetricsLoading ? renderDashboardLoadingState("Loading saved metrics...", "Please wait while GAARD prepares your saved metrics.") : ""}
       ${!state.savedMetricsLoading && !state.token ? `<div class="datasource-empty">Log in to manage saved metrics.</div>` : ""}
       ${!state.savedMetricsLoading && state.token && !state.savedMetrics.length ? `<div class="datasource-empty">No saved metrics yet. Save a successful query from Home first.</div>` : ""}
       ${!state.savedMetricsLoading && state.savedMetrics.length ? `
@@ -777,13 +882,21 @@ function renderSavedMetricCard(metric) {
   const result = metric.result || {};
   const rows = getRowsFromResult(result);
   const typeLabel = metric.widget_type === "scalar" ? "Number-ready" : metric.widget_type === "timeseries" ? "Time series" : "Table";
+  const widgetKey = metric.widget_key || "";
+  const details = [typeLabel, metric.datasource_key || "default"];
+  if (metric.result) {
+    details.push(`${rows.length} rows`);
+  }
   return `
     <article class="placeholder-item metric-card">
       ${renderIcon(metric.widget_type === "scalar" ? "metrics" : "dashboards")}
       <span>
         <strong>${escapeHtml(metric.label || metric.widget_key || "Saved metric")}</strong>
-        <small>${escapeHtml(typeLabel)} · ${escapeHtml(metric.datasource_key || "default")} · ${rows.length} rows</small>
+        <small>${escapeHtml(details.join(" · "))}</small>
       </span>
+      <button class="metric-edit-button" type="button" data-edit-metric="${escapeHtml(widgetKey)}" aria-label="Edit metric name" title="Edit metric name" ${!widgetKey ? "disabled" : ""}>
+        ${renderIcon("edit")}
+      </button>
     </article>`;
 }
 function renderDatasourcesView() {
@@ -889,6 +1002,8 @@ function render(options = {}) {
       ${state.loginOpen ? renderLoginDialog() : ""}
       ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
       ${state.dashboardWidgetDialogOpen ? renderDashboardWidgetDialog() : ""}
+      ${state.saveWidgetDialogOpen ? renderSaveWidgetDialog() : ""}
+      ${state.metricEditDialogOpen ? renderMetricEditDialog() : ""}
     </main>`;
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", changeView);
@@ -912,6 +1027,7 @@ function render(options = {}) {
   document.querySelectorAll("[data-toggle-dashboard-create]").forEach((button) => {
     button.addEventListener("click", openDashboardCreate);
   });
+  document.querySelector("[data-edit-active-dashboard]")?.addEventListener("click", openActiveDashboardEdit);
   document.querySelectorAll("[data-close-dashboard-create]").forEach((button) => {
     button.addEventListener("click", closeDashboardCreate);
   });
@@ -952,6 +1068,19 @@ function render(options = {}) {
   document.querySelectorAll("[data-save-widget]").forEach((button) => {
     button.addEventListener("click", saveWidgetFromMessage);
   });
+  document.querySelectorAll("[data-close-save-widget-dialog]").forEach((button) => {
+    button.addEventListener("click", closeSaveWidgetDialog);
+  });
+  document.querySelector("[data-save-widget-form]")?.addEventListener("submit", confirmSaveWidgetFromDialog);
+  document.querySelector("[data-save-widget-label]")?.addEventListener("input", changeSaveWidgetLabel);
+  document.querySelectorAll("[data-edit-metric]").forEach((button) => {
+    button.addEventListener("click", openMetricEditDialog);
+  });
+  document.querySelectorAll("[data-close-metric-edit]").forEach((button) => {
+    button.addEventListener("click", closeMetricEditDialog);
+  });
+  document.querySelector("[data-metric-edit-form]")?.addEventListener("submit", saveMetricLabel);
+  document.querySelector("[data-metric-edit-label]")?.addEventListener("input", changeMetricEditLabel);
   document.querySelectorAll("[data-analysis-reply-form]").forEach((form) => {
     form.addEventListener("submit", submitAnalysisReply);
   });
@@ -1032,7 +1161,7 @@ function maybeLoadDashboardsForActiveView() {
 }
 function maybeLoadSavedMetricsForActiveView() {
     if (state.activeView === "metrics" && state.token && !state.savedMetricsLoaded && !state.savedMetricsLoading) {
-        void loadSavedMetrics();
+        void loadSavedMetrics({ includeResult: false });
     }
 }
 async function toggleSources() {
@@ -1086,6 +1215,16 @@ function toggleDashboardMenu() {
 }
 function openDashboardCreate() {
     state.dashboardCreateOpen = true;
+    state.dashboardEditId = "";
+    state.dashboardMenuOpen = false;
+    state.dashboardsError = "";
+    render();
+}
+function openActiveDashboardEdit() {
+    const dashboard = getActiveDashboard();
+    if (!dashboard?.id || !state.token) return;
+    state.dashboardCreateOpen = true;
+    state.dashboardEditId = dashboard.id;
     state.dashboardMenuOpen = false;
     state.dashboardsError = "";
     render();
@@ -1093,6 +1232,7 @@ function openDashboardCreate() {
 function closeDashboardCreate() {
     if (state.dashboardCreatePending) return;
     state.dashboardCreateOpen = false;
+    state.dashboardEditId = "";
     state.dashboardsError = "";
     render();
 }
@@ -1101,6 +1241,7 @@ async function selectDashboard(event) {
     if (!dashboardId || dashboardId === state.activeDashboardId) {
         state.dashboardMenuOpen = false;
         state.dashboardCreateOpen = false;
+        state.dashboardEditId = "";
         render();
         return;
     }
@@ -1113,6 +1254,7 @@ async function selectDashboard(event) {
     state.dashboardWidgetsLoading = true;
     state.dashboardMenuOpen = false;
     state.dashboardCreateOpen = false;
+    state.dashboardEditId = "";
     render();
     try {
         const response = await fetch("/api/dashboards/active", {
@@ -1146,6 +1288,7 @@ async function selectDashboard(event) {
 async function createDashboard(event) {
     event.preventDefault();
     if (!state.token || state.dashboardCreatePending) return;
+    const editingDashboardId = state.dashboardEditId;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "").trim();
     const description = String(form.get("description") || "").trim();
@@ -1158,34 +1301,49 @@ async function createDashboard(event) {
     state.dashboardsError = "";
     render();
     try {
-        const response = await fetch("/api/dashboards", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...authHeaders()
-            },
-            body: JSON.stringify({
-                name,
-                description,
-                backend_url: state.backendUrl
-            })
-        });
+        const response = await fetch(
+            editingDashboardId
+                ? `/api/dashboards/${encodeURIComponent(editingDashboardId)}`
+                : "/api/dashboards",
+            {
+                method: editingDashboardId ? "PUT" : "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...authHeaders()
+                },
+                body: JSON.stringify({
+                    name,
+                    description,
+                    backend_url: state.backendUrl
+                })
+            }
+        );
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
             throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
         }
         if (payload.item) {
-            state.dashboards = [payload.item, ...state.dashboards.filter((dashboard) => dashboard.id !== payload.item.id)];
-            state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || payload.item.id || "";
-            state.dashboardWidgets = [];
-            state.dashboardWidgetsDashboardId = state.activeDashboardId;
+            if (editingDashboardId) {
+                state.dashboards = state.dashboards.map((dashboard) => (
+                    dashboard.id === payload.item.id ? payload.item : dashboard
+                ));
+            } else {
+                state.dashboards = [
+                    payload.item,
+                    ...state.dashboards.filter((dashboard) => dashboard.id !== payload.item.id)
+                ];
+                state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || payload.item.id || "";
+                state.dashboardWidgets = [];
+                state.dashboardWidgetsDashboardId = state.activeDashboardId;
+            }
         }
         state.dashboardsLoaded = true;
         state.dashboardCreateOpen = false;
+        state.dashboardEditId = "";
         state.dashboardMenuOpen = false;
     } catch (error) {
-        state.dashboardsError = error.message || "Could not create dashboard.";
-        reportApiError(error, "Could not create dashboard.");
+        state.dashboardsError = error.message || (editingDashboardId ? "Could not update dashboard." : "Could not create dashboard.");
+        reportApiError(error, editingDashboardId ? "Could not update dashboard." : "Could not create dashboard.");
     } finally {
         state.dashboardCreatePending = false;
         render();
@@ -1265,9 +1423,11 @@ async function loadDashboardWidgets(dashboardId, options = {}) {
     }
 }
 async function loadSavedMetrics(options = {}) {
+    const includeResult = options.includeResult !== false;
     if (!state.token) {
         state.savedMetrics = [];
         state.savedMetricsLoaded = false;
+        state.savedMetricsResultsLoaded = false;
         return;
     }
     state.savedMetricsLoading = true;
@@ -1276,15 +1436,21 @@ async function loadSavedMetrics(options = {}) {
         render();
     }
     try {
-        const response = await fetch(`/api/dashboard-metrics?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+        const params = new URLSearchParams({
+            backend_url: state.backendUrl,
+            include_result: includeResult ? "true" : "false"
+        });
+        const response = await fetch(`/api/dashboard-metrics?${params.toString()}`, {
             headers: authHeaders()
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
             throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
         }
-        state.savedMetrics = payload.items || [];
+        const items = payload.items || [];
+        state.savedMetrics = includeResult ? items : mergeSavedMetricsPreservingResults(items);
         state.savedMetricsLoaded = true;
+        state.savedMetricsResultsLoaded = includeResult || state.savedMetrics.every((metric) => Boolean(metric.result));
         if (!state.dashboardWidgetMetricKey && state.savedMetrics.length) {
             state.dashboardWidgetMetricKey = state.savedMetrics[0].widget_key || "";
             state.dashboardWidgetType = recommendWidgetType(state.savedMetrics[0]);
@@ -1295,6 +1461,112 @@ async function loadSavedMetrics(options = {}) {
         state.savedMetricsLoaded = true;
     } finally {
         state.savedMetricsLoading = false;
+        render();
+        if (state.dashboardWidgetDialogOpen && !includeResult && !state.savedMetricsResultsLoaded && state.token) {
+            void loadSavedMetrics({ includeResult: true });
+        }
+    }
+}
+function mergeSavedMetricsPreservingResults(items) {
+    const existingByKey = new Map(state.savedMetrics.map((metric) => [metric.widget_key, metric]));
+    return items.map((item) => {
+        const existing = existingByKey.get(item.widget_key);
+        if (!existing?.result) return item;
+        return {
+            ...existing,
+            ...item,
+            result: existing.result
+        };
+    });
+}
+function openMetricEditDialog(event) {
+    const widgetKey = event.currentTarget.dataset.editMetric || "";
+    const metric = state.savedMetrics.find((item) => item.widget_key === widgetKey);
+    if (!metric || !widgetKey) return;
+    state.metricEditDialogOpen = true;
+    state.metricEditWidgetKey = widgetKey;
+    state.metricEditDraftLabel = metric.label || metric.widget_key || "";
+    state.metricEditPending = false;
+    state.metricEditError = "";
+    render();
+}
+function closeMetricEditDialog() {
+    if (state.metricEditPending) return;
+    state.metricEditDialogOpen = false;
+    state.metricEditWidgetKey = "";
+    state.metricEditDraftLabel = "";
+    state.metricEditError = "";
+    render();
+}
+function changeMetricEditLabel(event) {
+    state.metricEditDraftLabel = event.currentTarget.value || "";
+}
+function applySavedMetricUpdate(metric) {
+    if (!metric?.widget_key) return;
+    state.savedMetrics = state.savedMetrics.map((item) => (
+        item.widget_key === metric.widget_key
+            ? { ...item, ...metric, result: metric.result || item.result }
+            : item
+    ));
+    state.dashboardWidgets = state.dashboardWidgets.map((widget) => {
+        if (widget.metric_widget_key !== metric.widget_key || !widget.metric) {
+            return widget;
+        }
+        const nextMetric = {
+            ...widget.metric,
+            ...metric,
+            result: metric.result || widget.metric.result
+        };
+        return {
+            ...widget,
+            metric: nextMetric,
+            result: nextMetric.result || widget.result
+        };
+    });
+}
+async function saveMetricLabel(event) {
+    event.preventDefault();
+    if (!state.token || state.metricEditPending) return;
+    const form = new FormData(event.currentTarget);
+    const label = String(form.get("label") || "").trim();
+    const widgetKey = state.metricEditWidgetKey;
+    if (!widgetKey || !label) {
+        state.metricEditError = "Enter a metric name.";
+        render();
+        return;
+    }
+    state.metricEditPending = true;
+    state.metricEditError = "";
+    state.metricEditDraftLabel = label;
+    render();
+    try {
+        const response = await fetch(`/api/dashboard-metrics/${encodeURIComponent(widgetKey)}`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                label,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            applySavedMetricUpdate(payload.item);
+        }
+        state.metricEditDialogOpen = false;
+        state.metricEditWidgetKey = "";
+        state.metricEditDraftLabel = "";
+        state.metricEditError = "";
+    } catch (error) {
+        state.metricEditError = error.message || "Metric name could not be saved.";
+        reportApiError(error, "Metric name could not be saved.");
+    } finally {
+        state.metricEditPending = false;
         render();
     }
 }
@@ -1311,8 +1583,8 @@ function openDashboardWidgetDialog() {
     state.dashboardWidgetDialogOpen = true;
     state.dashboardWidgetsError = "";
     render();
-    if (!state.savedMetricsLoaded && !state.savedMetricsLoading) {
-        void loadSavedMetrics();
+    if ((!state.savedMetricsLoaded || !state.savedMetricsResultsLoaded) && !state.savedMetricsLoading) {
+        void loadSavedMetrics({ includeResult: true });
     } else if (state.savedMetrics.length && !state.dashboardWidgetMetricKey) {
         state.dashboardWidgetMetricKey = state.savedMetrics[0].widget_key || "";
         state.dashboardWidgetType = recommendWidgetType(state.savedMetrics[0]);
@@ -1630,6 +1902,7 @@ function changeView(event) {
   state.error = "";
   state.dashboardMenuOpen = false;
   state.dashboardCreateOpen = false;
+  state.dashboardEditId = "";
   render();
 }
 function initAnalysisDashboard() {
@@ -1962,8 +2235,9 @@ function renderMessage(message) {
     </article>`;
 }
 function renderMessageActions(message) {
-  const saveDisabled = state.pending || message.saveStatus === "saving" || message.saveStatus === "saved";
-  const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
+  const saveDialogOpen = state.saveWidgetDialogOpen && state.saveWidgetMessageId === message.id;
+  const saveDisabled = state.pending || saveDialogOpen || message.saveStatus === "saving" || message.saveStatus === "saved";
+  const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : saveDialogOpen || message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
   return `
     <div class="message-actions">
       <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
@@ -2134,6 +2408,84 @@ async function saveWidgetFromMessage(event) {
   if (!message || !sql || message.saveStatus === "saving" || message.saveStatus === "saved") {
     return;
   }
+  state.saveWidgetDialogOpen = true;
+  state.saveWidgetMessageId = message.id;
+  state.saveWidgetDraftLabel = buildWidgetLabel(message.question);
+  state.saveWidgetTitleEdited = false;
+  state.saveWidgetSuggestionLoading = true;
+  state.saveWidgetSuggestionError = "";
+  state.saveWidgetPending = false;
+  state.saveWidgetError = "";
+  render();
+  void requestMetricTitleSuggestion(message);
+}
+function closeSaveWidgetDialog() {
+  if (state.saveWidgetPending) return;
+  state.saveWidgetDialogOpen = false;
+  state.saveWidgetMessageId = null;
+  state.saveWidgetDraftLabel = "";
+  state.saveWidgetTitleEdited = false;
+  state.saveWidgetSuggestionLoading = false;
+  state.saveWidgetSuggestionError = "";
+  state.saveWidgetError = "";
+  render();
+}
+function changeSaveWidgetLabel(event) {
+  state.saveWidgetDraftLabel = event.currentTarget.value || "";
+  state.saveWidgetTitleEdited = true;
+}
+async function requestMetricTitleSuggestion(message) {
+  const dialogMessageId = message.id;
+  const sql = message.response?.sql?.trim() || "";
+  try {
+    const response = await fetch("/api/widgets/title-suggestion", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({
+        question: message.question,
+        sql,
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+    }
+    const title = String(payload.title || "").trim();
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId && title && !state.saveWidgetTitleEdited) {
+      state.saveWidgetDraftLabel = title;
+    }
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId) {
+      state.saveWidgetSuggestionError = "";
+    }
+  } catch (_error) {
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId) {
+      state.saveWidgetSuggestionError = "Could not fetch the LLM suggestion. You can enter a name manually.";
+    }
+  } finally {
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId) {
+      state.saveWidgetSuggestionLoading = false;
+      render();
+    }
+  }
+}
+async function confirmSaveWidgetFromDialog(event) {
+  event.preventDefault();
+  const message = state.messages.find((item) => item.id === state.saveWidgetMessageId);
+  const sql = message?.response?.sql?.trim() || "";
+  const form = new FormData(event.currentTarget);
+  const label = String(form.get("label") || "").trim();
+  if (!message || !sql || !label || state.saveWidgetPending) {
+    state.saveWidgetError = "Enter a metric name.";
+    render();
+    return;
+  }
+  state.saveWidgetPending = true;
+  state.saveWidgetError = "";
+  state.saveWidgetDraftLabel = label;
   message.saveStatus = "saving";
   message.saveError = "";
   render();
@@ -2145,7 +2497,7 @@ async function saveWidgetFromMessage(event) {
         ...authHeaders()
       },
       body: JSON.stringify({
-        label: buildWidgetLabel(message.question),
+        label,
         widget_type: inferWidgetType(getRows(message.response)),
         datasource_key: message.response?.metadata?.datasource_id || "default",
         question: message.question,
@@ -2159,17 +2511,28 @@ async function saveWidgetFromMessage(event) {
       throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     }
     message.saveStatus = "saved";
+    state.saveWidgetDialogOpen = false;
+    state.saveWidgetMessageId = null;
+    state.saveWidgetDraftLabel = "";
+    state.saveWidgetTitleEdited = false;
+    state.saveWidgetSuggestionLoading = false;
+    state.saveWidgetSuggestionError = "";
+    state.saveWidgetError = "";
     if (payload.item) {
       state.savedMetrics = [payload.item, ...state.savedMetrics.filter((metric) => metric.widget_key !== payload.item.widget_key)];
       state.savedMetricsLoaded = true;
+      state.savedMetricsResultsLoaded = state.savedMetrics.every((metric) => Boolean(metric.result));
     } else {
       state.savedMetricsLoaded = false;
+      state.savedMetricsResultsLoaded = false;
     }
   } catch (error) {
     message.saveStatus = "error";
     message.saveError = error.message || "Widget could not be saved.";
+    state.saveWidgetError = message.saveError;
     reportApiError(error, "Widget could not be saved.");
   } finally {
+    state.saveWidgetPending = false;
     render();
   }
 }
@@ -2226,13 +2589,20 @@ function logout() {
   state.activeDashboardId = "";
   state.dashboardMenuOpen = false;
   state.dashboardCreateOpen = false;
+  state.dashboardEditId = "";
   state.dashboardWidgetDialogOpen = false;
   state.savedMetrics = [];
   state.savedMetricsLoaded = false;
+  state.savedMetricsResultsLoaded = false;
   state.savedMetricsError = "";
   state.dashboardWidgets = [];
   state.dashboardWidgetsDashboardId = "";
   state.dashboardWidgetsError = "";
+  state.metricEditDialogOpen = false;
+  state.metricEditWidgetKey = "";
+  state.metricEditDraftLabel = "";
+  state.metricEditPending = false;
+  state.metricEditError = "";
   state.activeView = "home";
   rememberActiveView(state.activeView);
   state.loginOpen = false;

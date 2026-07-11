@@ -16,7 +16,13 @@ After installation, start it with:
 gaard-client start
 ```
 
-The command accepts `--host`, `--port`, and `--reload`. By default the client is
-available at `http://localhost:8001?backendUrl=http://localhost:8000`.
+The command accepts `--host`, `--port`, `--reload`, and `--api-url`. By default the client is
+available at `http://localhost:8001`.
+
+Use `--api-url` to point the client server to a specific GAARD API instance:
+
+```bash
+gaard-client start --api-url http://localhost:8000
+```
 
 The older `gaard client` command remains available for compatibility.

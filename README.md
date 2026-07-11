@@ -43,10 +43,15 @@ The admin panel will be available at http://localhost:8000/admin
 ```bash
 gaard client
 ```
-The client will be available at http://localhost:8001/?backendUrl=http://localhost:8000
+The client will be available at http://localhost:8001
 
-The `backendUrl` frontend parameter is the only client-side configuration
-value. It points the client to the GAARD API backend.
+If your API is running elsewhere, pass its URL when starting the client:
+
+```bash
+gaard client --api-url http://localhost:8000
+```
+
+The `backendUrl` frontend parameter remains available for per-browser overrides.
 
 ## Upgrading Gaard
 
@@ -125,4 +130,3 @@ Details coming soon.
 - [Extensions](Extensions.md)
 - [Project Structure](ProjectStructure.md)
 - [Requirements](Requirements.md)
-

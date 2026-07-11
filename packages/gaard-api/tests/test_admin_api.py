@@ -400,6 +400,30 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
     assert metrics_response.json()["items"][0]["widget_key"] == "admin_saved_metric"
     assert metrics_response.json()["items"][0]["result"]["status"] == "ok"
 
+    lightweight_metrics_response = admin_client.get(
+        "/api/v1/dashboards/metrics?include_result=false",
+        headers=admin_headers,
+    )
+    assert lightweight_metrics_response.status_code == 200
+    assert lightweight_metrics_response.json()["items"][0]["widget_key"] == "admin_saved_metric"
+    assert "result" not in lightweight_metrics_response.json()["items"][0]
+
+    rename_metric_response = admin_client.patch(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=admin_headers,
+        json={"label": "Updated prompt count"},
+    )
+    assert rename_metric_response.status_code == 200
+    assert rename_metric_response.json()["item"]["label"] == "Updated prompt count"
+    assert "result" not in rename_metric_response.json()["item"]
+
+    cross_rename_metric_response = admin_client.patch(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=analyst_headers,
+        json={"label": "Cross user rename"},
+    )
+    assert cross_rename_metric_response.status_code == 404
+
     dashboard_widget_response = admin_client.post(
         f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
         headers=admin_headers,
@@ -482,6 +506,30 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
         headers=admin_headers,
     )
     assert cross_delete.status_code == 404
+
+    update_dashboard_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=admin_headers,
+        json={
+            "name": "Operations renamed",
+            "description": "Updated daily operational dashboard.",
+        },
+    )
+    assert update_dashboard_response.status_code == 200
+    assert update_dashboard_response.json()["item"]["name"] == "Operations renamed"
+    assert update_dashboard_response.json()["item"]["description"] == (
+        "Updated daily operational dashboard."
+    )
+
+    cross_update_dashboard_response = admin_client.put(
+        f"/api/v1/dashboards/{analyst_dashboard['id']}",
+        headers=admin_headers,
+        json={
+            "name": "Cross user rename",
+            "description": "Should not be allowed.",
+        },
+    )
+    assert cross_update_dashboard_response.status_code == 404
 
     admin_dashboards = admin_client.get(
         "/api/v1/admin/dashboards",
@@ -1430,6 +1478,57 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
         item["widget_key"] != widget_key
         for item in widgets_after_delete.json()["items"]
     )
+
+
+def test_overview_widget_title_suggestion_uses_llm(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = auth_headers(admin_client)
+
+    with create_session() as session:
+        set_setting(session, "gaard_llm_api_key", "test-key", "test")
+        set_setting(session, "gaard_llm_model", "title-model", "test")
+        session.commit()
+
+    class FakeOpenAICompatibleClient:
+        init_kwargs: dict | None = None
+        requests = []
+
+        def __init__(self, **kwargs) -> None:
+            self.__class__.init_kwargs = kwargs
+
+        def create_chat_completion(self, request):
+            self.__class__.requests.append(request)
+            return ChatCompletionResponse(
+                content="```text\nDoctors by Specialty.\n```",
+                model=request.model,
+            )
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.admin.OpenAICompatibleClient",
+        FakeOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/overview/widgets/title-suggestion",
+        headers=headers,
+        json={
+            "question": "How many doctors are there by specialty?",
+            "sql": "SELECT specialization, COUNT(*) FROM doctors GROUP BY specialization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"title": "Doctors by Specialty"}
+    assert FakeOpenAICompatibleClient.init_kwargs is not None
+    assert FakeOpenAICompatibleClient.init_kwargs["api_key"] == "test-key"
+    request = FakeOpenAICompatibleClient.requests[0]
+    assert request.model == "title-model"
+    assert request.temperature == 0.0
+    assert request.messages[0].role == "system"
+    assert "same language as the user question" in request.messages[0].content
+    assert "How many doctors" in request.messages[1].content
 
 
 def test_overview_widget_from_query_strips_datasource_qualifier(

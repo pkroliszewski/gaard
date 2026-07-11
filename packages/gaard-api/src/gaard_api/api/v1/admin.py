@@ -13,6 +13,7 @@ from gaard_core.errors import (
     QueryExecutionError,
     SqlValidationError,
 )
+from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import (
     OutputClassification,
     QueryRequest,
@@ -21,6 +22,8 @@ from gaard_core.query_pipeline.models import (
 )
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_connectors import ConnectorRegistryError
+from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -249,6 +252,11 @@ class OverviewWidgetFromQueryRequest(BaseModel):
     result_mode: str = Field(
         default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
     )
+
+
+class OverviewWidgetTitleSuggestionRequest(BaseModel):
+    question: str = Field(min_length=1)
+    sql: str | None = None
 
 
 class DatasourceConnectorRequest(BaseModel):
@@ -501,6 +509,79 @@ def build_client_widget_key(session: Session, label: str, question: str) -> str:
         suffix += 1
 
     return widget_key
+
+
+def normalize_metric_title(value: str, fallback: str) -> str:
+    cleaned = remove_thinking_blocks(value).strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```").strip()
+        if cleaned.startswith("text"):
+            cleaned = cleaned.removeprefix("text").strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned.removesuffix("```").strip()
+
+    cleaned = cleaned.strip().strip('"').strip("'")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.rstrip(".:;-")
+    if not cleaned:
+        cleaned = fallback.strip()
+
+    return cleaned[:80].strip() or "Saved Metric"
+
+
+def fallback_metric_title(question: str) -> str:
+    normalized = re.sub(r"\s+", " ", question.strip())
+    normalized = normalized.rstrip("?!.:;-")
+    if not normalized:
+        return "Saved Metric"
+
+    return normalized[0].upper() + normalized[1:80]
+
+
+def suggest_metric_title_with_llm(session: Session, request: OverviewWidgetTitleSuggestionRequest) -> str:
+    llm_config = get_llm_runtime_config(session)
+    if llm_config.provider != "openai-compatible":
+        raise ConfigurationError(f"Unsupported GAARD_LLM_PROVIDER: {llm_config.provider}")
+    if not llm_config.api_key or llm_config.api_key == "change-me":
+        raise ConfigurationError("GAARD_LLM_API_KEY must be configured to suggest metric titles.")
+
+    client = OpenAICompatibleClient(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        timeout_seconds=llm_config.timeout_seconds,
+    )
+    fallback = fallback_metric_title(request.question)
+    response = client.create_chat_completion(
+        ChatCompletionRequest(
+            model=llm_config.model,
+            temperature=0.0,
+            extra_body=llm_config.extra_body,
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=(
+                        "You write short human-friendly metric names for dashboard widgets. "
+                        "Return only the metric name, without quotes, markdown, explanations, "
+                        "or trailing punctuation. Use the same language as the user question. "
+                        "Prefer 3 to 8 words and keep it under 80 characters."
+                    ),
+                ),
+                ChatMessage(
+                    role="user",
+                    content=(
+                        "User question:\n"
+                        f"{request.question.strip()}\n\n"
+                        "Generated SQL, if useful:\n"
+                        f"{(request.sql or '').strip()}\n\n"
+                        "Return the metric name only."
+                    ),
+                ),
+            ],
+        )
+    )
+
+    return normalize_metric_title(response.content, fallback)
 
 
 def build_client_excel_datasource_key(session: Session, filename: str) -> str:
@@ -1414,6 +1495,23 @@ def create_overview_widget_from_query(
     return {
         "item": serialize_overview_widget(session, widget),
     }
+
+
+@router.post("/overview/widgets/title-suggestion")
+def suggest_overview_widget_title(
+    request: OverviewWidgetTitleSuggestionRequest,
+    _principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        title = suggest_metric_title_with_llm(session, request)
+    except (ConfigurationError, LlmProviderError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {"title": title}
 
 
 @router.put("/overview/widgets/{widget_key}")

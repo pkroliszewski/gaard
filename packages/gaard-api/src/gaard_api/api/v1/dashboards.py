@@ -48,6 +48,11 @@ class DashboardCreateRequest(BaseModel):
     description: str = Field(default="", max_length=2_000)
 
 
+class DashboardUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=2_000)
+
+
 class ActiveDashboardRequest(BaseModel):
     dashboard_id: str = Field(min_length=1, max_length=64)
 
@@ -56,6 +61,10 @@ class DashboardWidgetCreateRequest(BaseModel):
     metric_widget_key: str = Field(min_length=1, max_length=255)
     title: str = Field(min_length=1, max_length=255)
     visualization_type: str = Field(pattern=r"^(number|bar|stacked_bar|line|multi_line|pie|area|table)$")
+
+
+class SavedMetricUpdateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=255)
 
 
 class DashboardWidgetLayoutItem(BaseModel):
@@ -308,14 +317,47 @@ def list_dashboards(
 
 @router.get("/dashboards/metrics")
 def list_saved_dashboard_metrics(
+    include_result: bool = True,
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     metrics = list_saved_metrics_for_owner(session, dashboard_owner_user_id(principal))
     return {
-        "items": [serialize_saved_metric(session, metric) for metric in metrics],
+        "items": [
+            serialize_saved_metric(session, metric, include_result=include_result)
+            for metric in metrics
+        ],
         "viewer": dashboard_owner_username(principal),
     }
+
+
+@router.patch("/dashboards/metrics/{widget_key}")
+def update_saved_dashboard_metric(
+    widget_key: str,
+    request: SavedMetricUpdateRequest,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    owner_user_id = dashboard_owner_user_id(principal)
+    metric = get_saved_metric_for_owner(session, widget_key, owner_user_id)
+    if metric is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Saved metric not found.",
+        )
+
+    label = request.label.strip()
+    if not label:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Metric name is required.",
+        )
+
+    metric.label = label
+    metric.updated_by = dashboard_owner_username(principal)
+    session.commit()
+
+    return {"item": serialize_saved_metric(session, metric, include_result=False)}
 
 
 @router.post("/dashboards")
@@ -376,6 +418,40 @@ def set_active_dashboard(
         "active_dashboard_id": dashboard.dashboard_id,
         "active_dashboard": serialize_dashboard(dashboard),
     }
+
+
+@router.put("/dashboards/{dashboard_id}")
+def update_dashboard(
+    dashboard_id: str,
+    request: DashboardUpdateRequest,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    dashboard = get_dashboard_for_owner(
+        session,
+        dashboard_id,
+        dashboard_owner_user_id(principal),
+    )
+
+    if dashboard is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dashboard not found.",
+        )
+
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dashboard name is required.",
+        )
+
+    dashboard.name = name
+    dashboard.description = request.description.strip()
+    dashboard.owner_username = dashboard_owner_username(principal)
+    session.commit()
+
+    return {"item": serialize_dashboard(dashboard)}
 
 
 @router.get("/dashboards/{dashboard_id}/widgets")

@@ -1483,7 +1483,8 @@ button.primary {
   text-transform: none;
 }
 
-.conversation-heading strong {
+.conversation-heading strong,
+.dashboard-title-button {
   color: #111a24;
   font-size: 25px;
   font-weight: 500;
@@ -1663,6 +1664,29 @@ button.primary {
   min-width: 0;
 }
 
+.dashboard-title-button {
+  min-width: 0;
+  max-width: min(520px, 68vw);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #111a24;
+  font-size: 25px;
+  font-weight: 500;
+  line-height: 1.18;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-title-button:hover,
+.dashboard-title-button:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .dashboard-picker {
   position: relative;
   z-index: 1000;
@@ -1765,6 +1789,14 @@ button.primary {
   overflow: auto;
 }
 
+.save-metric-dialog {
+  width: min(520px, 100%);
+}
+
+.metric-edit-dialog {
+  width: min(430px, 100%);
+}
+
 .dashboard-dialog-close {
   position: absolute;
   top: 12px;
@@ -1786,7 +1818,7 @@ button.primary {
 .dashboard-dialog-heading h2 {
   margin: 0;
   color: #111a24;
-  font-size: 22px;
+  font-size: 25px;
   font-weight: 500;
   line-height: 1.2;
 }
@@ -1841,6 +1873,29 @@ button.primary {
 .dashboard-create-actions button {
   min-height: 36px;
   padding: 0 12px;
+}
+
+.save-metric-question {
+  padding: 10px 11px;
+  border: 1px solid #e4ebf2;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #5f6f7c;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.save-title-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: #5f6f7c;
+  font-size: 12px;
+}
+
+.save-title-status.warning {
+  color: #8a5c13;
 }
 
 .dashboard-widget-form {
@@ -2146,6 +2201,12 @@ button.primary {
 }
 
 .dashboard-loading {
+  width: min(360px, 100%);
+  margin: min(16vh, 110px) auto 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   justify-items: center;
   text-align: center;
 }
@@ -2499,6 +2560,35 @@ button.primary {
 
 .metric-card {
   min-height: 88px;
+  grid-template-columns: 32px minmax(0, 1fr) 30px;
+  align-items: start;
+}
+
+.metric-edit-button {
+  width: 30px;
+  min-height: 30px;
+  display: inline-grid;
+  place-items: center;
+  align-self: start;
+  justify-self: end;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6d7a86;
+}
+
+.metric-edit-button:hover,
+.metric-edit-button:focus-visible {
+  background: #eef5ff;
+  color: var(--accent);
+}
+
+.metric-card .metric-edit-button svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.8;
 }
 
 .placeholder-item {
@@ -2805,7 +2895,8 @@ button.placeholder-item {
     min-height: 64px;
   }
 
-  .conversation-heading strong {
+  .conversation-heading strong,
+  .dashboard-title-button {
     font-size: 18px;
   }
 

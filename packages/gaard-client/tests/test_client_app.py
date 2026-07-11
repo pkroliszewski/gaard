@@ -52,10 +52,20 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "api-error-banner" in response.text
     assert "reportApiError" in response.text
     assert "formatApiResponseError" in response.text
+    assert "/api/widgets/title-suggestion" in response.text
+    assert "data-save-widget-form" in response.text
+    assert "Save metric" in response.text
+    assert "data-edit-metric" in response.text
+    assert "Edit metric name" in response.text
     assert "hasLongSeries" in response.text
     assert "longSeriesWidgetOptions" in response.text
     assert 'types.push("stacked_bar", "multi_line")' in response.text
     assert "dashboard-spinner" in response.text
+    assert "data-edit-active-dashboard" in response.text
+    assert "Edit dashboard" in response.text
+    assert "Save changes" in response.text
+    assert "include_result" in response.text
+    assert "includeResult: false" in response.text
     assert "resizestop" in response.text
     assert "alwaysShowResizeHandle" in response.text
     assert "/api/datasources/excel" in response.text
@@ -317,6 +327,102 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
     }
 
 
+def test_client_app_proxies_widget_title_suggestion(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            request = httpx.Request("POST", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"title": "Doctors by Specialty"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/widgets/title-suggestion",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "question": "How many doctors are there by specialty?",
+            "sql": "SELECT specialization, COUNT(*) FROM doctors GROUP BY specialization",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Doctors by Specialty"
+    assert captured["url"] == (
+        "http://backend.example/api/v1/admin/overview/widgets/title-suggestion"
+    )
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["json"] == {
+        "question": "How many doctors are there by specialty?",
+        "sql": "SELECT specialization, COUNT(*) FROM doctors GROUP BY specialization",
+    }
+
+
+def test_client_app_proxies_saved_metric_update(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def patch(self, url, json, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            request = httpx.Request("PATCH", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"item": {"widget_key": "client_metric", "label": json["label"]}},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.patch(
+        "/api/dashboard-metrics/client_metric",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "label": "New metric name",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["label"] == "New metric name"
+    assert captured["url"] == (
+        "http://backend.example/api/v1/dashboards/metrics/client_metric"
+    )
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["json"] == {"label": "New metric name"}
+
+
 def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
     captured: list[dict[str, object]] = []
 
@@ -361,6 +467,12 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                 {"method": "PUT", "url": url, "json": json, "headers": headers}
             )
             request = httpx.Request("PUT", url)
+            if not url.endswith("/active"):
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    json={"item": {"id": url.rsplit("/", 1)[-1], "name": json["name"]}},
+                )
             return httpx.Response(
                 status_code=200,
                 request=request,
@@ -407,6 +519,15 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
             "backend_url": "http://backend.example/",
         },
     )
+    update_response = client.put(
+        "/api/dashboards/dash-1",
+        headers=headers,
+        json={
+            "name": "Operations updated",
+            "description": "Updated daily view",
+            "backend_url": "http://backend.example/",
+        },
+    )
     delete_response = client.delete(
         "/api/dashboards/dash-2?backend_url=http://backend.example/",
         headers=headers,
@@ -420,7 +541,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
         },
     )
     metrics_response = client.get(
-        "/api/dashboard-metrics?backend_url=http://backend.example/",
+        "/api/dashboard-metrics?backend_url=http://backend.example/&include_result=false",
         headers=headers,
     )
     widget_list_response = client.get(
@@ -452,6 +573,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
 
     assert list_response.status_code == 200
     assert create_response.status_code == 200
+    assert update_response.status_code == 200
     assert delete_response.status_code == 200
     assert active_response.status_code == 200
     assert metrics_response.status_code == 200
@@ -465,24 +587,31 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
         "name": "Operations",
         "description": "Daily view",
     }
-    assert captured[2]["url"] == "http://backend.example/api/v1/dashboards/dash-2"
-    assert captured[3]["url"] == "http://backend.example/api/v1/dashboards/active"
-    assert captured[3]["json"] == {"dashboard_id": "dash-1"}
-    assert captured[4]["url"] == "http://backend.example/api/v1/dashboards/metrics"
-    assert captured[5]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
+    assert captured[2]["url"] == "http://backend.example/api/v1/dashboards/dash-1"
+    assert captured[2]["json"] == {
+        "name": "Operations updated",
+        "description": "Updated daily view",
+    }
+    assert captured[3]["url"] == "http://backend.example/api/v1/dashboards/dash-2"
+    assert captured[4]["url"] == "http://backend.example/api/v1/dashboards/active"
+    assert captured[4]["json"] == {"dashboard_id": "dash-1"}
+    assert captured[5]["url"] == (
+        "http://backend.example/api/v1/dashboards/metrics?include_result=false"
+    )
     assert captured[6]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
-    assert captured[6]["json"] == {
+    assert captured[7]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
+    assert captured[7]["json"] == {
         "metric_widget_key": "client_metric",
         "title": "Metric",
         "visualization_type": "bar",
     }
-    assert captured[7]["url"] == (
+    assert captured[8]["url"] == (
         "http://backend.example/api/v1/dashboards/dash-1/widgets/layout"
     )
-    assert captured[7]["json"] == {
+    assert captured[8]["json"] == {
         "items": [{"widget_id": "widget-1", "x": 1, "y": 2, "w": 6, "h": 4}]
     }
-    assert captured[8]["url"] == (
+    assert captured[9]["url"] == (
         "http://backend.example/api/v1/dashboards/dash-1/widgets/widget-1"
     )
     assert all(call["headers"] == headers for call in captured)
