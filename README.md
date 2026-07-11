@@ -88,6 +88,10 @@ curl -X POST http://localhost:8000/api/v1/query \
 The response includes the natural-language answer, generated SQL, returned rows,
 and request metadata.
 
+The response (and the question) can be reused as a metric in the dashboard:
+
+![example_ask_a_question](docs/images/gaard-dashboard.png)
+
 ## Datasource Connectors
 
 Datasource connectors are configured in the admin UI and persisted in the
