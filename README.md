@@ -73,7 +73,7 @@ Put your LLM settings here:
 
 ## Ask a question to your data
 
-Use the shipped simple client UI:
+Use the shipped advanced client to ask your data, save results as a metrics and build your own dashboards:
 
 ![example_ask_a_question](docs/images/gaard-client-v2.png)
 
