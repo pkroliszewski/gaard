@@ -75,7 +75,7 @@ Put your LLM settings here:
 
 Use the shipped simple client UI:
 
-![example_ask_a_question](docs/images/example_ask_a_question.png)
+![example_ask_a_question](docs/images/gaard-client-v2.png)
 
 or use the API:
 
