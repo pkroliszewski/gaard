@@ -51,7 +51,10 @@ from gaard_api.admin.services import (
     set_setting,
 )
 from gaard_api.core.settings import settings
-from gaard_api.example_database import install_medical_poc_example_database
+from gaard_api.example_database import (
+    MEDICAL_POC_DASHBOARD_ID,
+    install_medical_poc_example_database,
+)
 from gaard_api.main import app
 from gaard_api.query_hooks import QueryHookRegistry
 from gaard_connectors import create_builtin_connector_registry
@@ -465,6 +468,7 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
     assert [item["id"] for item in admin_list.json()["items"]] == [
         admin_second_dashboard["id"],
         admin_dashboard["id"],
+        MEDICAL_POC_DASHBOARD_ID,
     ]
     assert admin_list.json()["active_dashboard_id"] == admin_dashboard["id"]
     assert admin_list.json()["active_dashboard"]["id"] == admin_dashboard["id"]
@@ -488,6 +492,7 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
         admin_dashboard["id"],
         admin_second_dashboard["id"],
         analyst_dashboard["id"],
+        MEDICAL_POC_DASHBOARD_ID,
     }
 
     delete_response = admin_client.delete(
@@ -502,9 +507,11 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
         dashboards = session.scalars(select(Dashboard)).all()
         assert {dashboard.dashboard_id for dashboard in dashboards} == {
             admin_second_dashboard["id"],
-            analyst_dashboard["id"]
+            analyst_dashboard["id"],
+            MEDICAL_POC_DASHBOARD_ID,
         }
-        assert session.scalars(select(DashboardWidget)).all() == []
+        widgets = session.scalars(select(DashboardWidget)).all()
+        assert {widget.dashboard_id for widget in widgets} == {MEDICAL_POC_DASHBOARD_ID}
         admin_state = session.get(DashboardUserState, "1")
         assert admin_state is not None
         assert admin_state.active_dashboard_id == admin_second_dashboard["id"]

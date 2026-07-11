@@ -208,35 +208,131 @@ WITH RECURSIVE
     seq(n) AS (
         VALUES (1)
         UNION ALL
-        SELECT n + 1 FROM seq WHERE n < 420
+        SELECT n + 1 FROM seq WHERE n < 560
     ),
-    current_bounds(year_start, today, elapsed_days) AS (
+    current_bounds(year_start, today, elapsed_days, year_days) AS (
         SELECT
             date('now', 'localtime', 'start of year'),
             date('now', 'localtime'),
-            CAST(julianday(date('now', 'localtime')) - julianday(date('now', 'localtime', 'start of year')) AS INTEGER)
+            CAST(julianday(date('now', 'localtime')) - julianday(date('now', 'localtime', 'start of year')) AS INTEGER),
+            CAST(
+                julianday(date('now', 'localtime', 'start of year', '+1 year', '-1 day'))
+                - julianday(date('now', 'localtime', 'start of year'))
+                AS INTEGER
+            )
     ),
-    appointment_offsets(n, patient_id, doctor_id, day_offset) AS (
+    specialty_mix(n, specialization, doctor_start, doctor_count) AS (
         SELECT
             seq.n,
             CASE
-                WHEN seq.n <= 140 THEN seq.n
-                WHEN seq.n % 18 = 0 THEN 7
-                WHEN seq.n % 22 = 0 THEN 31
-                WHEN seq.n % 27 = 0 THEN 86
-                ELSE 1 + ((seq.n * 29) % 140)
+                WHEN seq.n % 100 < 34 THEN 'cardiology'
+                WHEN seq.n % 100 < 61 THEN 'orthopedics'
+                WHEN seq.n % 100 < 80 THEN 'dermatology'
+                ELSE 'neurology'
             END,
             CASE
-                WHEN seq.n <= 24 THEN seq.n
-                ELSE 1 + ((seq.n * 7) % 24)
+                WHEN seq.n % 100 < 34 THEN 1
+                WHEN seq.n % 100 < 61 THEN 13
+                WHEN seq.n % 100 < 80 THEN 19
+                ELSE 7
             END,
-            CASE
-                WHEN seq.n = 420 THEN current_bounds.elapsed_days
-                WHEN seq.n <= 112 THEN CAST((seq.n - 1) / 8 AS INTEGER) % (current_bounds.elapsed_days + 1)
-                ELSE ((seq.n * 37 + CAST(seq.n / 9 AS INTEGER)) % (current_bounds.elapsed_days + 1))
-            END
+            6
         FROM seq
+    ),
+    specialty_ranked AS (
+        SELECT
+            specialty_mix.n,
+            specialty_mix.specialization,
+            specialty_mix.doctor_start,
+            specialty_mix.doctor_count,
+            ROW_NUMBER() OVER (
+                PARTITION BY specialty_mix.specialization
+                ORDER BY specialty_mix.n
+            ) AS specialty_visit_number,
+            COUNT(*) OVER (
+                PARTITION BY specialty_mix.specialization
+            ) AS specialty_visit_total
+        FROM specialty_mix
+    ),
+    seasonal_offsets AS (
+        SELECT
+            specialty_ranked.n,
+            specialty_ranked.specialization,
+            specialty_ranked.doctor_start
+                + ((specialty_ranked.specialty_visit_number * 5 + specialty_ranked.n) % specialty_ranked.doctor_count)
+                AS doctor_id,
+            CASE specialty_ranked.specialization
+                WHEN 'cardiology' THEN
+                    current_bounds.year_days - CAST(
+                        (
+                            current_bounds.year_days
+                            * (specialty_ranked.specialty_visit_total - specialty_ranked.specialty_visit_number + 1)
+                            * (specialty_ranked.specialty_visit_total - specialty_ranked.specialty_visit_number + 1)
+                        ) / (
+                            (specialty_ranked.specialty_visit_total + 1)
+                            * (specialty_ranked.specialty_visit_total + 1)
+                        )
+                        AS INTEGER
+                    ) + ((specialty_ranked.n * 7) % 10)
+                WHEN 'orthopedics' THEN
+                    CASE
+                        WHEN specialty_ranked.specialty_visit_number % 6 IN (0, 1, 2) THEN
+                            150 + ((specialty_ranked.specialty_visit_number * 11 + specialty_ranked.n) % 90)
+                        WHEN specialty_ranked.specialty_visit_number % 6 IN (3, 4) THEN
+                            240 + ((specialty_ranked.specialty_visit_number * 7 + specialty_ranked.n) % 60)
+                        ELSE
+                            5 + ((specialty_ranked.specialty_visit_number * 13 + specialty_ranked.n) % 55)
+                    END
+                WHEN 'dermatology' THEN
+                    CASE
+                        WHEN specialty_ranked.specialty_visit_number % 5 IN (0, 1, 2, 3) THEN
+                            95 + ((specialty_ranked.specialty_visit_number * 13 + specialty_ranked.n) % 120)
+                        ELSE
+                            220 + ((specialty_ranked.specialty_visit_number * 17 + specialty_ranked.n) % 70)
+                    END
+                ELSE
+                    CASE
+                        WHEN specialty_ranked.specialty_visit_number % 4 IN (0, 1) THEN
+                            55 + ((specialty_ranked.specialty_visit_number * 13 + specialty_ranked.n) % 70)
+                        WHEN specialty_ranked.specialty_visit_number % 4 = 2 THEN
+                            245 + ((specialty_ranked.specialty_visit_number * 11 + specialty_ranked.n) % 75)
+                        ELSE
+                            130 + ((specialty_ranked.specialty_visit_number * 17 + specialty_ranked.n) % 80)
+                    END
+            END AS raw_day_offset
+        FROM specialty_ranked
         CROSS JOIN current_bounds
+    ),
+    bounded_offsets AS (
+        SELECT
+            seasonal_offsets.n,
+            seasonal_offsets.specialization,
+            seasonal_offsets.doctor_id,
+            CASE
+                WHEN seasonal_offsets.raw_day_offset < 0 THEN 0
+                WHEN seasonal_offsets.raw_day_offset > current_bounds.year_days THEN current_bounds.year_days
+                ELSE seasonal_offsets.raw_day_offset
+            END AS day_offset
+        FROM seasonal_offsets
+        CROSS JOIN current_bounds
+    ),
+    appointment_offsets(n, patient_id, doctor_id, day_offset, specialization) AS (
+        SELECT
+            bounded_offsets.n,
+            CASE
+                WHEN bounded_offsets.specialization = 'cardiology' AND bounded_offsets.n % 6 = 0 THEN 7
+                WHEN bounded_offsets.specialization = 'cardiology' AND bounded_offsets.n % 10 = 0 THEN 31
+                WHEN bounded_offsets.specialization = 'cardiology' THEN 1 + ((bounded_offsets.n * 17 + bounded_offsets.day_offset) % 90)
+                WHEN bounded_offsets.specialization = 'neurology' AND bounded_offsets.n % 8 = 0 THEN 86
+                WHEN bounded_offsets.specialization = 'neurology' THEN 25 + ((bounded_offsets.n * 11 + bounded_offsets.day_offset) % 90)
+                WHEN bounded_offsets.specialization = 'orthopedics' THEN 1 + ((bounded_offsets.n * 29 + bounded_offsets.day_offset) % 140)
+                ELSE 1 + ((bounded_offsets.n * 13 + bounded_offsets.day_offset * 2) % 140)
+            END
+                AS patient_id,
+            bounded_offsets.doctor_id,
+            bounded_offsets.day_offset,
+            bounded_offsets.specialization
+        FROM bounded_offsets
     ),
     appointment_data AS (
         SELECT
@@ -245,46 +341,103 @@ WITH RECURSIVE
             appointment_offsets.doctor_id,
             date(current_bounds.year_start, '+' || appointment_offsets.day_offset || ' days') AS appointment_date,
             printf('%02d:%02d', 8 + ((appointment_offsets.n * 7) % 10), (appointment_offsets.n * 15) % 60) AS appointment_time,
-            CASE
-                WHEN appointment_offsets.n % 10 = 0 THEN 60
-                WHEN appointment_offsets.n % 4 = 0 THEN 45
-                WHEN appointment_offsets.n % 3 = 0 THEN 15
-                ELSE 30
+            CASE appointment_offsets.specialization
+                WHEN 'cardiology' THEN
+                    CASE
+                        WHEN appointment_offsets.n % 6 = 0 THEN 60
+                        WHEN appointment_offsets.n % 2 = 0 THEN 45
+                        ELSE 30
+                    END
+                WHEN 'neurology' THEN
+                    CASE
+                        WHEN appointment_offsets.n % 5 = 0 THEN 60
+                        WHEN appointment_offsets.n % 3 = 0 THEN 30
+                        ELSE 45
+                    END
+                WHEN 'orthopedics' THEN
+                    CASE
+                        WHEN appointment_offsets.n % 7 = 0 THEN 60
+                        WHEN appointment_offsets.n % 2 = 0 THEN 30
+                        ELSE 45
+                    END
+                ELSE
+                    CASE
+                        WHEN appointment_offsets.n % 5 = 0 THEN 45
+                        WHEN appointment_offsets.n % 2 = 0 THEN 15
+                        ELSE 30
+                    END
             END AS duration_minutes,
             CASE
+                WHEN appointment_offsets.day_offset > current_bounds.elapsed_days THEN
+                    CASE
+                        WHEN appointment_offsets.n % 31 = 0 THEN 'cancelled'
+                        ELSE 'scheduled'
+                    END
                 WHEN appointment_offsets.day_offset = current_bounds.elapsed_days THEN
                     CASE
                         WHEN appointment_offsets.n % 5 = 0 THEN 'cancelled'
                         WHEN appointment_offsets.n % 3 = 0 THEN 'checked_in'
                         ELSE 'scheduled'
                     END
-                WHEN appointment_offsets.n % 23 = 0 THEN 'no_show'
-                WHEN appointment_offsets.n % 17 = 0 THEN 'cancelled'
+                WHEN appointment_offsets.specialization = 'dermatology' AND appointment_offsets.n % 22 = 0 THEN 'no_show'
+                WHEN appointment_offsets.specialization = 'orthopedics' AND appointment_offsets.n % 18 = 0 THEN 'cancelled'
+                WHEN appointment_offsets.specialization = 'cardiology' AND appointment_offsets.n % 27 = 0 THEN 'cancelled'
+                WHEN appointment_offsets.n % 29 = 0 THEN 'no_show'
+                WHEN appointment_offsets.n % 21 = 0 THEN 'cancelled'
                 ELSE 'completed'
             END AS status,
-            CASE appointment_offsets.n % 6
-                WHEN 0 THEN 'telemedicine'
-                WHEN 1 THEN 'first_visit'
-                WHEN 2 THEN 'follow_up'
-                WHEN 3 THEN 'control'
-                WHEN 4 THEN 'urgent'
-                ELSE 'preventive'
+            CASE appointment_offsets.specialization
+                WHEN 'cardiology' THEN
+                    CASE appointment_offsets.n % 5
+                        WHEN 0 THEN 'telemedicine'
+                        WHEN 1 THEN 'follow_up'
+                        WHEN 2 THEN 'control'
+                        WHEN 3 THEN 'first_visit'
+                        ELSE 'preventive'
+                    END
+                WHEN 'neurology' THEN
+                    CASE appointment_offsets.n % 5
+                        WHEN 0 THEN 'first_visit'
+                        WHEN 1 THEN 'follow_up'
+                        WHEN 2 THEN 'control'
+                        WHEN 3 THEN 'telemedicine'
+                        ELSE 'urgent'
+                    END
+                WHEN 'orthopedics' THEN
+                    CASE appointment_offsets.n % 5
+                        WHEN 0 THEN 'urgent'
+                        WHEN 1 THEN 'first_visit'
+                        WHEN 2 THEN 'follow_up'
+                        WHEN 3 THEN 'control'
+                        ELSE 'urgent'
+                    END
+                ELSE
+                    CASE appointment_offsets.n % 5
+                        WHEN 0 THEN 'first_visit'
+                        WHEN 1 THEN 'control'
+                        WHEN 2 THEN 'preventive'
+                        WHEN 3 THEN 'follow_up'
+                        ELSE 'telemedicine'
+                    END
             END AS visit_type,
             CASE
-                WHEN appointment_offsets.n % 29 = 0 THEN 'high'
+                WHEN appointment_offsets.specialization = 'orthopedics' AND appointment_offsets.n % 7 = 0 THEN 'high'
+                WHEN appointment_offsets.specialization = 'cardiology' AND appointment_offsets.n % 9 = 0 THEN 'high'
+                WHEN appointment_offsets.specialization = 'neurology' AND appointment_offsets.n % 13 = 0 THEN 'high'
                 WHEN appointment_offsets.n % 11 = 0 THEN 'elevated'
                 ELSE 'routine'
             END AS priority,
-            CASE
-                WHEN appointment_offsets.doctor_id BETWEEN 1 AND 6 THEN
-                    CASE appointment_offsets.n % 5
-                        WHEN 0 THEN 'blood pressure follow-up'
-                        WHEN 1 THEN 'chest pain evaluation'
-                        WHEN 2 THEN 'palpitations'
-                        WHEN 3 THEN 'shortness of breath'
+            CASE appointment_offsets.specialization
+                WHEN 'cardiology' THEN
+                    CASE
+                        WHEN appointment_offsets.day_offset > 260 THEN 'winter cardiovascular risk review'
+                        WHEN appointment_offsets.n % 5 = 0 THEN 'blood pressure follow-up'
+                        WHEN appointment_offsets.n % 5 = 1 THEN 'chest pain evaluation'
+                        WHEN appointment_offsets.n % 5 = 2 THEN 'palpitations'
+                        WHEN appointment_offsets.n % 5 = 3 THEN 'shortness of breath'
                         ELSE 'post-treatment control'
                     END
-                WHEN appointment_offsets.doctor_id BETWEEN 7 AND 12 THEN
+                WHEN 'neurology' THEN
                     CASE appointment_offsets.n % 5
                         WHEN 0 THEN 'migraine follow-up'
                         WHEN 1 THEN 'dizziness'
@@ -292,20 +445,23 @@ WITH RECURSIVE
                         WHEN 3 THEN 'limb numbness'
                         ELSE 'seizure control'
                     END
-                WHEN appointment_offsets.doctor_id BETWEEN 13 AND 18 THEN
-                    CASE appointment_offsets.n % 5
-                        WHEN 0 THEN 'knee pain'
-                        WHEN 1 THEN 'back pain'
-                        WHEN 2 THEN 'ankle injury'
-                        WHEN 3 THEN 'shoulder mobility issue'
+                WHEN 'orthopedics' THEN
+                    CASE
+                        WHEN appointment_offsets.day_offset BETWEEN 150 AND 240 THEN 'sports injury'
+                        WHEN appointment_offsets.day_offset < 70 THEN 'winter fall injury'
+                        WHEN appointment_offsets.n % 5 = 0 THEN 'knee pain'
+                        WHEN appointment_offsets.n % 5 = 1 THEN 'back pain'
+                        WHEN appointment_offsets.n % 5 = 2 THEN 'ankle injury'
+                        WHEN appointment_offsets.n % 5 = 3 THEN 'shoulder mobility issue'
                         ELSE 'post-injury control'
                     END
                 ELSE
-                    CASE appointment_offsets.n % 5
-                        WHEN 0 THEN 'rash assessment'
-                        WHEN 1 THEN 'mole check'
-                        WHEN 2 THEN 'acne treatment'
-                        WHEN 3 THEN 'psoriasis follow-up'
+                    CASE
+                        WHEN appointment_offsets.day_offset BETWEEN 95 AND 220 THEN 'sun exposure skin check'
+                        WHEN appointment_offsets.n % 5 = 0 THEN 'rash assessment'
+                        WHEN appointment_offsets.n % 5 = 1 THEN 'mole check'
+                        WHEN appointment_offsets.n % 5 = 2 THEN 'acne treatment'
+                        WHEN appointment_offsets.n % 5 = 3 THEN 'psoriasis follow-up'
                         ELSE 'allergy symptoms'
                     END
             END AS reason
