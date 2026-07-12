@@ -73,6 +73,7 @@ class MockConversationContextClassifier:
                 confidence=1.0,
                 standalone_question=request.question,
                 reason="No previous turns are available.",
+                source="mock",
             )
 
         question = request.question.strip()
@@ -85,6 +86,7 @@ class MockConversationContextClassifier:
                 confidence=0.8,
                 standalone_question=standalone,
                 reason="The question appears to continue the previous data question.",
+                source="mock",
             )
 
         if normalized in AMBIGUOUS_TERMS or re.fullmatch(
@@ -95,6 +97,7 @@ class MockConversationContextClassifier:
                 confidence=0.45,
                 standalone_question="",
                 reason="The question is too short to safely resolve from context.",
+                source="mock",
             )
 
         return ConversationContextClassification(
@@ -102,6 +105,7 @@ class MockConversationContextClassifier:
             confidence=0.9,
             standalone_question=question,
             reason="The question is self-contained.",
+            source="mock",
         )
 
 

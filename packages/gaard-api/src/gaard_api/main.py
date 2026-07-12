@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GAARD API",
-    version="0.2.6",
+    version="0.2.7",
     description="Self-hosted AI SQL Gateway for governed natural-language access to relational data.",
     lifespan=lifespan,
 )

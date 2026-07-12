@@ -1,8 +1,10 @@
 from gaard_core.conversation_context.llm_classifier import (
+    LlmConversationContextClassifier,
     parse_conversation_context_classification,
 )
 from gaard_core.conversation_context.mock_classifier import MockConversationContextClassifier
 from gaard_core.query_pipeline.models import ConversationContextDecision, QueryRequest
+from gaard_llm.providers.models import ChatCompletionResponse
 
 
 def test_parse_conversation_context_classification_handles_aliases_and_invalid_values() -> None:
@@ -17,6 +19,59 @@ def test_parse_conversation_context_classification_handles_aliases_and_invalid_v
         parse_conversation_context_classification('{"decision":"surprising"}').decision
         == ConversationContextDecision.AMBIGUOUS
     )
+    assert (
+        parse_conversation_context_classification('{"is_continuation":false}').decision
+        == ConversationContextDecision.NEW_TOPIC
+    )
+    assert (
+        parse_conversation_context_classification('{"is_continuation":true}').decision
+        == ConversationContextDecision.FOLLOW_UP
+    )
+
+
+def test_llm_conversation_context_classifier_exposes_prompt_and_standalone_follow_up() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.request = None
+
+        def create_chat_completion(self, request):
+            self.request = request
+            return ChatCompletionResponse(
+                content=(
+                    '{"is_continuation":true,"decision":"follow_up",'
+                    '"current_question_is_standalone":true,"confidence":0.91,'
+                    '"standalone_question":"","reason":"Same metric, new period."}'
+                )
+            )
+
+    client = FakeClient()
+    classifier = LlmConversationContextClassifier(
+        client=client,
+        model="test-model",
+    )
+
+    classification = classifier.classify(
+        QueryRequest(question="ilu pacjentów przyjęto w tym tygodniu"),
+        {
+            "turns": [
+                {
+                    "question": "ilu pacjentów było przyjętych tydzień temu",
+                    "answer": "12",
+                },
+                {
+                    "question": "a dwa tygodnie temu?",
+                    "standalone_question": "ilu pacjentów było przyjętych dwa tygodnie temu",
+                    "answer": "9",
+                },
+            ]
+        },
+    )
+
+    assert classification.decision == ConversationContextDecision.FOLLOW_UP
+    assert classification.standalone_question == "ilu pacjentów przyjęto w tym tygodniu"
+    assert classification.source == "llm"
+    assert "turn_t_minus_1" in classification.prompt["user_prompt"]
+    assert "logical continuation" in classification.prompt["system_prompt"]
 
 
 def test_mock_conversation_context_classifier_rewrites_simple_follow_up() -> None:

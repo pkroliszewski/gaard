@@ -210,6 +210,9 @@ def build_conversation_metadata(
         "standalone_question": classification.standalone_question,
         "confidence": classification.confidence,
         "context_reason": classification.reason,
+        "context_source": classification.source,
+        "context_model_response": classification.model_response,
+        "context_prompt": classification.prompt,
     }
 
 
@@ -221,6 +224,7 @@ def new_topic_classification(
         confidence=confidence,
         standalone_question=question,
         reason="Started a new conversation context.",
+        source="system",
     )
 
 
@@ -327,6 +331,10 @@ def conversation_turn_metadata(
     compact = compact_response_metadata(metadata)
     compact["context_reason"] = context_classification.reason
     compact["context_model_response"] = context_classification.model_response
+    if context_classification.prompt:
+        compact["context_prompt"] = context_classification.prompt
+    if context_classification.source:
+        compact["context_source"] = context_classification.source
     compact["working_context"] = build_working_context(
         original_question=original_question,
         standalone_question=standalone_question,

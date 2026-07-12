@@ -441,6 +441,83 @@ def test_query_follow_up_guard_rejects_unrewritten_classifier_output(
     assert payload["metadata"]["conversation"]["context_decision"] == "ambiguous"
 
 
+def test_query_accepts_llm_follow_up_when_current_question_is_standalone(
+    conversation_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = auth_headers(conversation_client)
+    first = conversation_client.post(
+        "/api/v1/query",
+        headers=headers,
+        json={
+            "question": "ilu pacjentów było przyjętych tydzień temu",
+            "user_id": "alice",
+        },
+    )
+    assert first.status_code == 200
+    conversation_id = first.json()["metadata"]["conversation"]["id"]
+
+    second = conversation_client.post(
+        "/api/v1/query",
+        headers=headers,
+        json={
+            "question": "a dwa tygodnie temu?",
+            "user_id": "alice",
+            "conversation_id": conversation_id,
+        },
+    )
+    assert second.status_code == 200
+
+    class StandaloneContinuationClassifier:
+        def classify(self, request, context):
+            return ConversationContextClassification(
+                decision=ConversationContextDecision.FOLLOW_UP,
+                confidence=0.92,
+                standalone_question=request.question,
+                reason="LLM classified this as a logical continuation with a standalone question.",
+                model_response={
+                    "is_continuation": True,
+                    "current_question_is_standalone": True,
+                },
+                prompt={
+                    "system_prompt": "Decide whether turn t is a logical continuation.",
+                    "user_prompt": "turn_t_minus_1 + turn_t",
+                    "metadata": {"decision_task": "logical_continuation_yes_no"},
+                },
+                source="llm",
+            )
+
+    monkeypatch.setattr(
+        query_module,
+        "create_conversation_context_classifier",
+        lambda _llm_config=None: StandaloneContinuationClassifier(),
+    )
+
+    third = conversation_client.post(
+        "/api/v1/query",
+        headers=headers,
+        json={
+            "question": "ilu pacjentów przyjęto w tym tygodniu",
+            "user_id": "alice",
+            "conversation_id": conversation_id,
+        },
+    )
+
+    assert third.status_code == 200
+    payload = third.json()
+    conversation = payload["metadata"]["conversation"]
+    assert payload["sql"]
+    assert payload["metadata"].get("blocked") is not True
+    assert "Potrzebuję doprecyzowania" not in payload["answer"]
+    assert conversation["context_decision"] == "follow_up"
+    assert conversation["standalone_question"] == "ilu pacjentów przyjęto w tym tygodniu"
+    assert conversation["context_source"] == "llm"
+    assert conversation["context_model_response"]["is_continuation"] is True
+    assert conversation["context_prompt"]["metadata"]["decision_task"] == (
+        "logical_continuation_yes_no"
+    )
+
+
 def test_query_turn_metadata_keeps_context_reason_and_working_context(
     conversation_client: TestClient,
 ) -> None:

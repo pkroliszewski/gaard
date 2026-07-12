@@ -486,6 +486,68 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
         "h": 3,
     }
 
+    cross_delete_metric_response = admin_client.delete(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=analyst_headers,
+    )
+    assert cross_delete_metric_response.status_code == 404
+
+    delete_metric_response = admin_client.delete(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=admin_headers,
+    )
+    assert delete_metric_response.status_code == 200
+    assert delete_metric_response.json() == {
+        "status": "deleted",
+        "widget_key": "admin_saved_metric",
+        "removed_dashboard_widgets": 1,
+    }
+
+    deleted_metric_list = admin_client.get(
+        "/api/v1/dashboards/metrics",
+        headers=admin_headers,
+    )
+    assert deleted_metric_list.status_code == 200
+    assert all(
+        item["widget_key"] != "admin_saved_metric"
+        for item in deleted_metric_list.json()["items"]
+    )
+
+    widgets_after_metric_delete = admin_client.get(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=admin_headers,
+    )
+    assert widgets_after_metric_delete.status_code == 200
+    assert widgets_after_metric_delete.json()["items"] == []
+
+    with create_session() as session:
+        assert (
+            session.scalar(
+                select(UserSavedMetric).where(
+                    UserSavedMetric.owner_user_id == "1",
+                    UserSavedMetric.widget_key == "admin_saved_metric",
+                )
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(DashboardWidget).where(
+                    DashboardWidget.owner_user_id == "1",
+                    DashboardWidget.metric_widget_key == "admin_saved_metric",
+                )
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(OverviewWidget).where(
+                    OverviewWidget.widget_key == "admin_saved_metric",
+                )
+            )
+            is None
+        )
+
     admin_list = admin_client.get("/api/v1/dashboards", headers=admin_headers)
     analyst_list = admin_client.get("/api/v1/dashboards", headers=analyst_headers)
 
@@ -754,7 +816,9 @@ def test_admin_first_login_requires_password_change(admin_client: TestClient) ->
     )
 
     assert prompts_response.status_code == 200
-    assert len(prompts_response.json()["items"]) >= 2
+    prompt_keys = {item["prompt_key"] for item in prompts_response.json()["items"]}
+    assert len(prompt_keys) >= 2
+    assert "conversation_context_classification" in prompt_keys
 
 
 def test_prompt_update_creates_admin_audit_event(admin_client: TestClient) -> None:
