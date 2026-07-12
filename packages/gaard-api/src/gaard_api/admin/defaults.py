@@ -86,6 +86,75 @@ Return one JSON object with:
 - reason: short explanation
 """
 
+DEFAULT_CONVERSATION_CONTEXT_CLASSIFICATION_SYSTEM_PROMPT = """You are GAARD Conversation Context Classification.
+
+Your task is to decide whether the current user data question (turn t) is a
+logical continuation of the recent conversation turns (t-2 and t-1).
+
+Use the previous question-answer pairs as conversation evidence. Do not classify
+by rigid prefix or keyword rules. Decide semantically whether turn t depends on,
+compares with, narrows, broadens, or otherwise continues the immediately
+preceding analytical thread.
+
+Allowed decisions:
+- new_topic: answer "no" to logical continuation. The question starts a new analytical thread.
+- follow_up: answer "yes" to logical continuation. The question continues the
+  recent thread and can be executed safely.
+- ambiguous: the question appears to continue the thread, but required entities,
+  filters, date ranges, or datasource scope cannot be inferred safely.
+
+Decision rules:
+1. First answer the yes/no question: is turn t a logical continuation of t-1/t-2?
+2. A question can be a logical continuation even when it is already
+   self-contained. In that case use follow_up, set
+   current_question_is_standalone to true, and set standalone_question to the
+   current question.
+3. If the answer is no, use new_topic and set standalone_question to the current question.
+4. If the answer is yes and the current question is elliptical, rewrite it as a
+   standalone data question using t-1/t-2.
+5. Use ambiguous only when the answer is yes but the continuation cannot be
+   rewritten or executed safely without asking the user.
+6. Treat detail/projection requests about the previous result as follow_up when
+   the previous turn defines the result set. If the previous question counted,
+   grouped, or filtered records and the user now asks for descriptions, names,
+   statuses, fields, details, or values for those same records, rewrite by
+   preserving the previous filters/date range/datasource and changing only the
+   returned fields.
+7. Do not mark a projection/detail follow-up ambiguous merely because the
+   previous answer did not expose row ids. The previous standalone question and
+   SQL are enough context for the next SQL generation step.
+8. Never include rows or sensitive data in the standalone question.
+
+Output rules:
+- Return only a JSON object.
+- Do not include markdown.
+- Do not include reasoning outside the JSON.
+- Do not include <think> blocks.
+- Use exactly this JSON shape:
+  {
+    "is_continuation": false,
+    "decision": "new_topic",
+    "current_question_is_standalone": true,
+    "confidence": 0.0,
+    "standalone_question": "rewritten or current question",
+    "reason": "short reason"
+  }
+"""
+
+DEFAULT_CONVERSATION_CONTEXT_CLASSIFICATION_USER_PROMPT = """Decide whether turn t is a logical continuation of turns t-2 and t-1.
+
+Input JSON:
+{payload}
+
+Return one JSON object with:
+- is_continuation: boolean yes/no answer to the logical-continuation question
+- decision: one of new_topic, follow_up, ambiguous
+- current_question_is_standalone: boolean
+- confidence: number from 0 to 1
+- standalone_question: required for follow_up and new_topic; empty only for ambiguous
+- reason: short explanation
+"""
+
 DEFAULT_RESULT_INTERPRETATION_SYSTEM_PROMPT = """You are GAARD Data Result Interpreter.
 
 Your task is to explain SQL query results to the user.
@@ -186,6 +255,16 @@ DEFAULT_PROMPTS = [
         "description": "Generates one safe SQL SELECT statement from a user question and schema.",
         "system_prompt": DEFAULT_SQL_GENERATION_SYSTEM_PROMPT,
         "user_prompt_template": DEFAULT_SQL_GENERATION_USER_PROMPT,
+    },
+    {
+        "prompt_key": "conversation_context_classification",
+        "name": "Conversation context classification",
+        "description": (
+            "Decides whether the current question is a logical continuation "
+            "of recent conversation turns."
+        ),
+        "system_prompt": DEFAULT_CONVERSATION_CONTEXT_CLASSIFICATION_SYSTEM_PROMPT,
+        "user_prompt_template": DEFAULT_CONVERSATION_CONTEXT_CLASSIFICATION_USER_PROMPT,
     },
     {
         "prompt_key": "result_interpretation",

@@ -63,6 +63,7 @@ var state = {
   metricEditDraftLabel: "",
   metricEditPending: false,
   metricEditError: "",
+  metricDeletePendingKey: "",
   dashboardLayoutSaveTimer: null
 };
 rememberActiveView(state.activeView);
@@ -866,16 +867,84 @@ function renderQueriesView() {
     </section>`;
 }
 function renderMetricsView() {
+  const groups = groupSavedMetricsByDatasource(state.savedMetrics);
+  const waitingForDatasourceNames = (
+    state.token &&
+    state.savedMetrics.some((metric) => normalizeMetricDatasourceKey(metric) === "default") &&
+    !state.datasourcesLoaded
+  );
   return `
     <section class="placeholder-view metrics-view">
       ${state.savedMetricsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.savedMetricsError)}</div>` : ""}
       ${state.savedMetricsLoading ? renderDashboardLoadingState("Loading saved metrics...", "Please wait while GAARD prepares your saved metrics.") : ""}
+      ${!state.savedMetricsLoading && waitingForDatasourceNames ? renderDashboardLoadingState("Loading data sources...", "Please wait while GAARD resolves saved metric sources.") : ""}
       ${!state.savedMetricsLoading && !state.token ? `<div class="datasource-empty">Log in to manage saved metrics.</div>` : ""}
       ${!state.savedMetricsLoading && state.token && !state.savedMetrics.length ? `<div class="datasource-empty">No saved metrics yet. Save a successful query from Home first.</div>` : ""}
-      ${!state.savedMetricsLoading && state.savedMetrics.length ? `
-      <div class="placeholder-list metrics-list">
-        ${state.savedMetrics.map(renderSavedMetricCard).join("")}
+      ${!state.savedMetricsLoading && !waitingForDatasourceNames && state.savedMetrics.length ? `
+      <div class="metrics-groups">
+        ${groups.map(renderMetricDatasourceGroup).join("")}
       </div>` : ""}
+    </section>`;
+}
+function normalizeMetricDatasourceKey(metric) {
+  return String(metric.datasource_key || "default").trim() || "default";
+}
+function formatMetricDatasourceName(datasourceKey) {
+  const normalizedKey = String(datasourceKey || "default").trim() || "default";
+  if (normalizedKey === "default") {
+    return formatDefaultMetricDatasourceName();
+  }
+  const source = state.datasources.find((item) => (
+    String(item.connector_key || "") === normalizedKey
+    || String(item.id || "") === normalizedKey
+    || String(item.name || "") === normalizedKey
+  ));
+  if (source) {
+    return source.name || source.connector_key || normalizedKey;
+  }
+  return normalizedKey
+    .replace(/[-_](db|database)$/i, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+function formatDefaultMetricDatasourceName() {
+  const activeSource = state.datasources.find((item) => (
+    item.active && item.connector_key !== "metadata-db"
+  ));
+  const defaultSource = state.datasources.find((item) => item.connector_key === "default");
+  const source = activeSource || defaultSource;
+  const name = source?.name || source?.connector_key || "Default source";
+  return `${name} (default)`;
+}
+function groupSavedMetricsByDatasource(metrics) {
+  const groups = new Map();
+  metrics.forEach((metric) => {
+    const key = normalizeMetricDatasourceKey(metric);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: formatMetricDatasourceName(key),
+        items: []
+      });
+    }
+    groups.get(key).items.push(metric);
+  });
+  return Array.from(groups.values()).sort((left, right) => {
+    if (left.key === "default") return -1;
+    if (right.key === "default") return 1;
+    return left.label.localeCompare(right.label);
+  });
+}
+function renderMetricDatasourceGroup(group) {
+  return `
+    <section class="metric-source-group" aria-label="Data Source: ${escapeHtml(group.label)}">
+      <header class="metric-source-header">
+        <h2>Data Source: ${escapeHtml(group.label)}</h2>
+        <span>${group.items.length} ${group.items.length === 1 ? "metric" : "metrics"}</span>
+      </header>
+      <div class="metrics-list">
+        ${group.items.map(renderSavedMetricCard).join("")}
+      </div>
     </section>`;
 }
 function renderSavedMetricCard(metric) {
@@ -883,7 +952,9 @@ function renderSavedMetricCard(metric) {
   const rows = getRowsFromResult(result);
   const typeLabel = metric.widget_type === "scalar" ? "Number-ready" : metric.widget_type === "timeseries" ? "Time series" : "Table";
   const widgetKey = metric.widget_key || "";
-  const details = [typeLabel, metric.datasource_key || "default"];
+  const deleting = state.metricDeletePendingKey === widgetKey;
+  const label = metric.label || metric.widget_key || "Saved metric";
+  const details = [typeLabel];
   if (metric.result) {
     details.push(`${rows.length} rows`);
   }
@@ -891,12 +962,17 @@ function renderSavedMetricCard(metric) {
     <article class="placeholder-item metric-card">
       ${renderIcon(metric.widget_type === "scalar" ? "metrics" : "dashboards")}
       <span>
-        <strong>${escapeHtml(metric.label || metric.widget_key || "Saved metric")}</strong>
+        <strong class="metric-title" title="${escapeHtml(label)}">${escapeHtml(label)}</strong>
         <small>${escapeHtml(details.join(" · "))}</small>
       </span>
-      <button class="metric-edit-button" type="button" data-edit-metric="${escapeHtml(widgetKey)}" aria-label="Edit metric name" title="Edit metric name" ${!widgetKey ? "disabled" : ""}>
-        ${renderIcon("edit")}
-      </button>
+      <div class="metric-card-actions">
+        <button class="metric-action-button" type="button" data-edit-metric="${escapeHtml(widgetKey)}" aria-label="Edit metric name" title="Edit metric name" ${!widgetKey || deleting ? "disabled" : ""}>
+          ${renderIcon("edit")}
+        </button>
+        <button class="metric-action-button metric-delete-button" type="button" data-delete-metric="${escapeHtml(widgetKey)}" aria-label="Delete metric" title="Delete metric" ${!widgetKey || deleting ? "disabled" : ""}>
+          ${renderIcon("trash")}
+        </button>
+      </div>
     </article>`;
 }
 function renderDatasourcesView() {
@@ -1076,6 +1152,9 @@ function render(options = {}) {
   document.querySelectorAll("[data-edit-metric]").forEach((button) => {
     button.addEventListener("click", openMetricEditDialog);
   });
+  document.querySelectorAll("[data-delete-metric]").forEach((button) => {
+    button.addEventListener("click", deleteSavedMetric);
+  });
   document.querySelectorAll("[data-close-metric-edit]").forEach((button) => {
     button.addEventListener("click", closeMetricEditDialog);
   });
@@ -1140,7 +1219,7 @@ function formatApiResponseError(response, message) {
   return detail === "Request failed." ? `${prefix}: Request failed.` : `${prefix}: ${detail}`;
 }
 function maybeLoadDatasourcesForActiveView() {
-    if (state.activeView === "datasources" && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
+    if ((state.activeView === "datasources" || state.activeView === "metrics") && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
         void loadDatasources();
     }
 }
@@ -1501,6 +1580,24 @@ function closeMetricEditDialog() {
 function changeMetricEditLabel(event) {
     state.metricEditDraftLabel = event.currentTarget.value || "";
 }
+function applySavedMetricDelete(widgetKey) {
+    state.savedMetrics = state.savedMetrics.filter((metric) => metric.widget_key !== widgetKey);
+    state.dashboardWidgets = state.dashboardWidgets.filter(
+        (widget) => widget.metric_widget_key !== widgetKey
+    );
+    if (state.dashboardWidgetMetricKey === widgetKey) {
+        state.dashboardWidgetMetricKey = state.savedMetrics[0]?.widget_key || "";
+        state.dashboardWidgetType = state.savedMetrics[0]
+            ? recommendWidgetType(state.savedMetrics[0])
+            : "";
+    }
+    if (state.metricEditWidgetKey === widgetKey) {
+        state.metricEditDialogOpen = false;
+        state.metricEditWidgetKey = "";
+        state.metricEditDraftLabel = "";
+        state.metricEditError = "";
+    }
+}
 function applySavedMetricUpdate(metric) {
     if (!metric?.widget_key) return;
     state.savedMetrics = state.savedMetrics.map((item) => (
@@ -1523,6 +1620,37 @@ function applySavedMetricUpdate(metric) {
             result: nextMetric.result || widget.result
         };
     });
+}
+async function deleteSavedMetric(event) {
+    const widgetKey = event.currentTarget.dataset.deleteMetric || "";
+    if (!state.token || !widgetKey || state.metricDeletePendingKey) return;
+    if (!window.confirm("Deleting this metric will also remove it from all dashboards.")) {
+        return;
+    }
+    state.metricDeletePendingKey = widgetKey;
+    state.savedMetricsError = "";
+    render();
+    const params = new URLSearchParams({ backend_url: state.backendUrl });
+    try {
+        const response = await fetch(
+            `/api/dashboard-metrics/${encodeURIComponent(widgetKey)}?${params.toString()}`,
+            {
+                method: "DELETE",
+                headers: authHeaders()
+            }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        applySavedMetricDelete(widgetKey);
+    } catch (error) {
+        state.savedMetricsError = error.message || "Metric could not be deleted.";
+        reportApiError(error, "Metric could not be deleted.");
+    } finally {
+        state.metricDeletePendingKey = "";
+        render();
+    }
 }
 async function saveMetricLabel(event) {
     event.preventDefault();
@@ -2603,6 +2731,7 @@ function logout() {
   state.metricEditDraftLabel = "";
   state.metricEditPending = false;
   state.metricEditError = "";
+  state.metricDeletePendingKey = "";
   state.activeView = "home";
   rememberActiveView(state.activeView);
   state.loginOpen = false;

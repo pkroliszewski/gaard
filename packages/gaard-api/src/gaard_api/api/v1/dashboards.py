@@ -232,6 +232,19 @@ def get_saved_metric_for_owner(
     )
 
 
+def get_saved_metric_link_for_owner(
+    session: Session,
+    widget_key: str,
+    owner_user_id: str,
+) -> UserSavedMetric | None:
+    return session.scalar(
+        select(UserSavedMetric).where(
+            UserSavedMetric.widget_key == widget_key,
+            UserSavedMetric.owner_user_id == owner_user_id,
+        )
+    )
+
+
 def list_saved_metrics_for_owner(
     session: Session,
     owner_user_id: str,
@@ -358,6 +371,50 @@ def update_saved_dashboard_metric(
     session.commit()
 
     return {"item": serialize_saved_metric(session, metric, include_result=False)}
+
+
+@router.delete("/dashboards/metrics/{widget_key}")
+def delete_saved_dashboard_metric(
+    widget_key: str,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    owner_user_id = dashboard_owner_user_id(principal)
+    metric = get_saved_metric_for_owner(session, widget_key, owner_user_id)
+    metric_link = get_saved_metric_link_for_owner(session, widget_key, owner_user_id)
+    if metric is None or metric_link is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Saved metric not found.",
+        )
+
+    dashboard_widgets = list(
+        session.scalars(
+            select(DashboardWidget).where(
+                DashboardWidget.metric_widget_key == widget_key,
+                DashboardWidget.owner_user_id == owner_user_id,
+            )
+        )
+    )
+    for widget in dashboard_widgets:
+        session.delete(widget)
+
+    session.delete(metric_link)
+    session.flush()
+
+    remaining_links = session.scalar(
+        select(UserSavedMetric.id).where(UserSavedMetric.widget_key == widget_key)
+    )
+    if remaining_links is None:
+        session.delete(metric)
+
+    session.commit()
+
+    return {
+        "status": "deleted",
+        "widget_key": widget_key,
+        "removed_dashboard_widgets": len(dashboard_widgets),
+    }
 
 
 @router.post("/dashboards")

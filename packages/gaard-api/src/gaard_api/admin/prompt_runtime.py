@@ -1,8 +1,14 @@
+from typing import Any
+
 from gaard_core.errors import ConfigurationError
 from gaard_core.json_utils import json_dumps
 from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.schema_formatter import SchemaPromptFormatter
-from gaard_core.query_pipeline.models import QueryRequest, QueryResult
+from gaard_core.query_pipeline.models import (
+    ConversationContextDecision,
+    QueryRequest,
+    QueryResult,
+)
 
 from gaard_api.admin.models import PromptTemplate
 from gaard_api.admin.services import get_active_prompt_template_safe
@@ -83,6 +89,62 @@ class MetadataIntentClassificationPromptCompiler:
                 "prompt_version": self.prompt_template.version,
             },
         )
+
+
+class MetadataConversationContextPromptCompiler:
+    def __init__(self, prompt_template: PromptTemplate) -> None:
+        self.prompt_template = prompt_template
+
+    def compile(
+        self,
+        request: QueryRequest,
+        conversation_context: dict[str, Any],
+    ) -> CompiledPrompt:
+        recent_turns = self._recent_turns(conversation_context)
+        payload = {
+            "turn_t_minus_2": recent_turns[0] if len(recent_turns) == 2 else {},
+            "turn_t_minus_1": recent_turns[-1] if recent_turns else {},
+            "turn_t": {
+                "question": request.question,
+                "datasource_id": request.datasource_id,
+                "datasource_ids": request.datasource_ids,
+            },
+        }
+        payload_json = json_dumps(payload, ensure_ascii=False, indent=2)
+
+        return CompiledPrompt(
+            system_prompt=self.prompt_template.system_prompt,
+            user_prompt=self.prompt_template.user_prompt_template.format(
+                payload=payload_json,
+                question=request.question,
+                datasource_id=request.datasource_id,
+                datasource_ids=json_dumps(request.datasource_ids, ensure_ascii=False),
+            ),
+            metadata={
+                "allowed_decisions": [item.value for item in ConversationContextDecision],
+                "decision_task": "logical_continuation_yes_no",
+                "prompt_key": self.prompt_template.prompt_key,
+                "prompt_version": self.prompt_template.version,
+            },
+        )
+
+    def _recent_turns(self, conversation_context: dict[str, Any]) -> list[dict[str, Any]]:
+        turns = [
+            turn for turn in conversation_context.get("turns", []) if isinstance(turn, dict)
+        ][-2:]
+        labels = ["t-2", "t-1"] if len(turns) == 2 else ["t-1"]
+        return [
+            {
+                "label": label,
+                "question": str(turn.get("question") or ""),
+                "standalone_question": str(turn.get("standalone_question") or ""),
+                "answer": str(turn.get("answer") or ""),
+                "sql": str(turn.get("sql") or ""),
+                "context_decision": str(turn.get("context_decision") or ""),
+                "context_reason": str(turn.get("context_reason") or ""),
+            }
+            for label, turn in zip(labels, turns, strict=False)
+        ]
 
 
 class MetadataResultInterpretationPromptCompiler:
@@ -168,6 +230,17 @@ def get_intent_classification_prompt_compiler() -> (
         return None
 
     return MetadataIntentClassificationPromptCompiler(prompt_template=prompt_template)
+
+
+def get_conversation_context_prompt_compiler() -> (
+    MetadataConversationContextPromptCompiler | None
+):
+    prompt_template = get_active_prompt_template_safe("conversation_context_classification")
+
+    if prompt_template is None:
+        return None
+
+    return MetadataConversationContextPromptCompiler(prompt_template=prompt_template)
 
 
 def get_result_interpretation_prompt_compiler() -> (

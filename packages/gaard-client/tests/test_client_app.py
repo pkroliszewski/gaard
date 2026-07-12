@@ -57,6 +57,13 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "Save metric" in response.text
     assert "data-edit-metric" in response.text
     assert "Edit metric name" in response.text
+    assert "data-delete-metric" in response.text
+    assert "Deleting this metric will also remove it from all dashboards." in response.text
+    assert "metrics-groups" in response.text
+    assert "Data Source:" in response.text
+    assert "metric-title" in response.text
+    assert "formatDefaultMetricDatasourceName" in response.text
+    assert "(default)" in response.text
     assert "hasLongSeries" in response.text
     assert "longSeriesWidgetOptions" in response.text
     assert 'types.push("stacked_bar", "multi_line")' in response.text
@@ -421,6 +428,54 @@ def test_client_app_proxies_saved_metric_update(monkeypatch) -> None:
     )
     assert captured["headers"] == {"Authorization": "Bearer token"}
     assert captured["json"] == {"label": "New metric name"}
+
+
+def test_client_app_proxies_saved_metric_delete(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def delete(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            request = httpx.Request("DELETE", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "status": "deleted",
+                    "widget_key": "client_metric",
+                    "removed_dashboard_widgets": 2,
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.delete(
+        "/api/dashboard-metrics/client_metric?backend_url=http://backend.example/",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "deleted",
+        "widget_key": "client_metric",
+        "removed_dashboard_widgets": 2,
+    }
+    assert captured["url"] == (
+        "http://backend.example/api/v1/dashboards/metrics/client_metric"
+    )
+    assert captured["headers"] == {"Authorization": "Bearer token"}
 
 
 def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:

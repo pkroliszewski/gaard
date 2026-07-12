@@ -23,7 +23,7 @@ DEFAULT_BACKEND_URL = "http://localhost:8000"
 
 app = FastAPI(
     title="GAARD Client",
-    version="0.2.6",
+    version="2.0.7",
     description="Community client for asking governed natural-language questions.",
 )
 
@@ -623,6 +623,38 @@ async def update_dashboard_metric(
             response = await client.patch(
                 metric_url,
                 **backend_request_kwargs(authorization, {"label": request.label}),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.delete("/api/dashboard-metrics/{widget_key}")
+async def delete_dashboard_metric(
+    widget_key: str,
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    metric_url = f"{backend_url}/api/v1/dashboards/metrics/{widget_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.delete(
+                metric_url,
+                headers=backend_auth_headers(authorization),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(

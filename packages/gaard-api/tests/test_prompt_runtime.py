@@ -4,6 +4,7 @@ from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 
 from gaard_api.admin.models import PromptTemplate
 from gaard_api.admin.prompt_runtime import (
+    MetadataConversationContextPromptCompiler,
     MetadataIntentClassificationPromptCompiler,
     MetadataResultClassificationPromptCompiler,
     MetadataResultInterpretationPromptCompiler,
@@ -57,6 +58,44 @@ def test_metadata_intent_classification_prompt_compiler_serializes_question() ->
     assert "zmodufikuj zlecenia" in compiled.user_prompt
     assert '"datasource_id": "design_db"' in compiled.user_prompt
     assert compiled.metadata["prompt_key"] == "intent_classification"
+
+
+def test_metadata_conversation_context_prompt_compiler_serializes_recent_turns() -> None:
+    compiler = MetadataConversationContextPromptCompiler(
+        prompt_template=PromptTemplate(
+            prompt_key="conversation_context_classification",
+            name="Conversation context classification",
+            system_prompt="system",
+            user_prompt_template="{payload}\n{question}",
+            version=3,
+            active=True,
+        )
+    )
+
+    compiled = compiler.compile(
+        request=QueryRequest(question="ilu pacjentów przyjęto w tym tygodniu"),
+        conversation_context={
+            "turns": [
+                {
+                    "question": "ilu pacjentów było przyjętych tydzień temu",
+                    "answer": "12",
+                },
+                {
+                    "question": "a dwa tygodnie temu?",
+                    "standalone_question": "ilu pacjentów było przyjętych dwa tygodnie temu",
+                    "answer": "9",
+                },
+            ]
+        },
+    )
+
+    assert '"turn_t_minus_2"' in compiled.user_prompt
+    assert '"turn_t_minus_1"' in compiled.user_prompt
+    assert '"turn_t"' in compiled.user_prompt
+    assert "ilu pacjentów przyjęto w tym tygodniu" in compiled.user_prompt
+    assert compiled.metadata["prompt_key"] == "conversation_context_classification"
+    assert compiled.metadata["prompt_version"] == 3
+    assert compiled.metadata["decision_task"] == "logical_continuation_yes_no"
 
 
 def test_metadata_result_classification_prompt_compiler_serializes_answer() -> None:

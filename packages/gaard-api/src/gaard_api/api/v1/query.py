@@ -38,6 +38,7 @@ from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 
 from gaard_api.admin.prompt_runtime import (
+    get_conversation_context_prompt_compiler,
     get_intent_classification_prompt_compiler,
     get_result_classification_prompt_compiler,
     get_result_interpretation_prompt_compiler,
@@ -230,6 +231,7 @@ def create_conversation_context_classifier(
             client=create_llm_client(llm_config),
             model=llm_config.model,
             extra_body=llm_config.extra_body,
+            prompt_compiler=get_conversation_context_prompt_compiler(),
         )
 
     raise ConfigurationError(
@@ -799,20 +801,21 @@ def resolve_request_conversation(
             ),
         )
 
-    deterministic = deterministic_follow_up_classification(request, context)
-    if deterministic is not None:
-        return (
-            conversation,
-            deterministic,
-            request.model_copy(
-                update={
-                    "question": deterministic.standalone_question,
-                    "conversation_id": conversation.conversation_id,
-                }
-            ),
-        )
-
     context_mode = resolve_intent_classification_mode()
+    if context_mode != "llm":
+        deterministic = deterministic_follow_up_classification(request, context)
+        if deterministic is not None:
+            return (
+                conversation,
+                deterministic,
+                request.model_copy(
+                    update={
+                        "question": deterministic.standalone_question,
+                        "conversation_id": conversation.conversation_id,
+                    }
+                ),
+            )
+
     llm_config = get_llm_runtime_config_safe() if context_mode == "llm" else None
     classification = create_conversation_context_classifier(llm_config).classify(
         request,
@@ -831,6 +834,8 @@ def resolve_request_conversation(
             request.question,
             standalone_question,
             context,
+            classification,
+            allow_deterministic_fallback=context_mode != "llm",
         )
         if guard_rewrite is None:
             classification = classification.model_copy(
@@ -897,6 +902,7 @@ def deterministic_follow_up_classification(
                 "and change only the requested output fields."
             ),
             model_response=projected_result,
+            source="deterministic",
         )
 
     if is_open_only_command(question):
@@ -911,6 +917,7 @@ def deterministic_follow_up_classification(
             standalone_question=filter_rewrite["standalone_question"],
             reason="Deterministic rewrite: preserve previous topic and add open-status filter.",
             model_response=filter_rewrite,
+            source="deterministic",
         )
 
     previous_period = rewrite_previous_period_follow_up(previous, previous_question, question)
@@ -921,6 +928,7 @@ def deterministic_follow_up_classification(
             standalone_question=previous_period["standalone_question"],
             reason="Deterministic rewrite: replace current time period with previous period.",
             model_response=previous_period,
+            source="deterministic",
         )
 
     return None
@@ -930,6 +938,9 @@ def guard_follow_up_rewrite(
     original_question: str,
     standalone_question: str,
     context: dict[str, Any],
+    classification: ConversationContextClassification,
+    *,
+    allow_deterministic_fallback: bool,
 ) -> str | None:
     original = normalize_question_text(original_question)
     standalone = normalize_question_text(standalone_question)
@@ -944,6 +955,10 @@ def guard_follow_up_rewrite(
     )
 
     if rewrite_is_too_close_to_original(original, standalone):
+        if classification.model_response.get("current_question_is_standalone") is True:
+            return original_question.strip()
+        if not allow_deterministic_fallback:
+            return None
         deterministic = deterministic_follow_up_classification(
             QueryRequest(question=original_question),
             context,
@@ -955,6 +970,8 @@ def guard_follow_up_rewrite(
     if is_open_only_command(original) and not carries_previous_context(
         standalone, previous_question
     ):
+        if not allow_deterministic_fallback:
+            return None
         deterministic = deterministic_follow_up_classification(
             QueryRequest(question=original_question),
             context,

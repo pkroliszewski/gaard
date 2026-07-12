@@ -44,6 +44,8 @@ class ConversationContextClassification(BaseModel):
     standalone_question: str = ""
     reason: str = ""
     model_response: dict[str, Any] = Field(default_factory=dict)
+    prompt: dict[str, Any] = Field(default_factory=dict)
+    source: str = ""
 
 
 class QueryRequest(BaseModel):
