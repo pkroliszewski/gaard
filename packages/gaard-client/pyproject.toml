@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-client"
-version = "0.2.4"
+version = "0.2.6"
 description = "GAARD frontend web services providing client interface"
 readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = [
-    "gaard-plugin-api>=0.2.4,<0.3.0",
+    "gaard-plugin-api>=0.2.6,<0.3.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.7.0",

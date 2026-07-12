@@ -1,3 +1,6 @@
+### v.0.2.6 - Public package release
+- Bumped all public packages and local public package references to `0.2.6` for the next PyPI release.
+
 ### v.0.2.5 - Medical POC example data refresh
 - Added richer Medical POC demo data with specialty-specific volumes, seasonality, and trends.
 - Seeded the bundled Healthcare Operations dashboard and saved metrics with English metric names when installing the Medical POC example database.
