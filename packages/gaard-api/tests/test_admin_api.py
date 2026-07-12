@@ -918,6 +918,7 @@ def test_admin_first_login_requires_password_change(admin_client: TestClient) ->
     prompt_keys = {item["prompt_key"] for item in prompts_response.json()["items"]}
     assert len(prompt_keys) >= 2
     assert "conversation_context_classification" in prompt_keys
+    assert "answer_explanation" in prompt_keys
 
 
 def test_prompt_update_creates_admin_audit_event(admin_client: TestClient) -> None:
@@ -2661,6 +2662,96 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
     assert audit_log is not None
     assert audit_log.type == DataQueryAuditType.INFO
     assert audit_log.output_classification == OutputClassification.NEUTRAL_DATA
+
+
+def test_query_explain_endpoint_uses_answer_explanation_prompt(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    headers = auth_headers(admin_client)
+    monkeypatch.setattr(settings, "gaard_llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "gaard_llm_model", "explain-model")
+    with create_session() as session:
+        set_setting(session, "gaard_llm_api_key", "test-key", "test")
+        set_setting(session, "gaard_llm_model", "explain-model", "test")
+        connector = session.scalar(
+            select(DatasourceConnector).where(DatasourceConnector.active.is_(True))
+        )
+        assert connector is not None
+        connector_key = connector.connector_key
+        session.add(
+            BusinessLogicSuggestion(
+                connector_id=connector.id,
+                source_audit_id=None,
+                status="approved",
+                safety="safe",
+                enabled=True,
+                error_category="analysis",
+                title="Count completed appointments",
+                rule_text="When counting admitted patients, count completed appointments.",
+                terms_json=json.dumps(["patients", "appointments"]),
+                join_hints_json="[]",
+                confidence=0.9,
+                updated_by="test",
+            )
+        )
+        session.commit()
+
+    class FakeOpenAICompatibleClient:
+        requests = []
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def create_chat_completion(self, request):
+            self.__class__.requests.append(request)
+            return ChatCompletionResponse(
+                content="SQL liczy zakończone wizyty, bo o to pyta użytkownik.",
+                model="explain-model",
+            )
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.query.OpenAICompatibleClient",
+        FakeOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/query/explain",
+        headers=headers,
+        json={
+            "question": "Ilu pacjentów przyjęto w tym tygodniu?",
+            "sql": "SELECT COUNT(*) AS patient_count FROM appointments WHERE status = 'completed'",
+            "answer": "Przyjęto 12 pacjentów.",
+            "rows": [{"patient_count": 12}],
+            "metadata": {
+                "datasource_id": connector_key,
+                "datasource_ids": [connector_key],
+                "intent_decision": "read_only_data_question",
+                "sql_generation_mode": "llm",
+                "sql_generation_prompt_metadata": {
+                    "prompt_key": "sql_generation",
+                    "prompt_version": 3,
+                    "dialect": "sqlite",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["explanation"] == "SQL liczy zakończone wizyty, bo o to pyta użytkownik."
+    assert body["metadata"]["prompt_key"] == "answer_explanation"
+    assert body["metadata"]["business_logic_included"] is True
+    assert body["metadata"]["datasource_ids"] == [connector_key]
+
+    llm_request = FakeOpenAICompatibleClient.requests[0]
+    assert llm_request.model == "explain-model"
+    prompt_text = "\n".join(message.content for message in llm_request.messages)
+    assert "Ilu pacjentów przyjęto w tym tygodniu" in prompt_text
+    assert "SELECT COUNT(*) AS patient_count" in prompt_text
+    assert '"intent_decision": "read_only_data_question"' in prompt_text
+    assert '"prompt_key": "sql_generation"' in prompt_text
+    assert "When counting admitted patients" in prompt_text
 
 
 def test_query_endpoint_can_return_raw_sql_output_without_interpretation(

@@ -212,6 +212,44 @@ class MetadataResultClassificationPromptCompiler:
         )
 
 
+class MetadataAnswerExplanationPromptCompiler:
+    def __init__(self, prompt_template: PromptTemplate) -> None:
+        self.prompt_template = prompt_template
+
+    def compile(self, payload: dict[str, Any]) -> CompiledPrompt:
+        payload_json = json_dumps(payload, ensure_ascii=False, indent=2)
+        metadata = payload.get("metadata")
+        inference_metadata = payload.get("inference_metadata")
+        prompt_metadata = payload.get("prompt_metadata")
+
+        return CompiledPrompt(
+            system_prompt=self.prompt_template.system_prompt,
+            user_prompt=self.prompt_template.user_prompt_template.format(
+                payload=payload_json,
+                question=str(payload.get("question") or ""),
+                sql=str(payload.get("sql") or ""),
+                answer=str(payload.get("answer") or ""),
+                metadata=json_dumps(metadata, ensure_ascii=False),
+                inference_metadata=json_dumps(inference_metadata, ensure_ascii=False),
+                prompt_metadata=json_dumps(prompt_metadata, ensure_ascii=False),
+                business_logic=str(payload.get("business_logic") or ""),
+            ),
+            metadata={
+                "prompt_key": self.prompt_template.prompt_key,
+                "prompt_version": self.prompt_template.version,
+                "has_sql": bool(str(payload.get("sql") or "").strip()),
+                "has_result_rows": bool(
+                    (payload.get("result") or {}).get("rows")
+                    if isinstance(payload.get("result"), dict)
+                    else False
+                ),
+                "has_business_logic": bool(
+                    str(payload.get("business_logic") or "").strip()
+                ),
+            },
+        )
+
+
 def get_sql_generation_prompt_compiler() -> MetadataSqlGenerationPromptCompiler | None:
     prompt_template = get_active_prompt_template_safe("sql_generation")
 
@@ -263,3 +301,14 @@ def get_result_classification_prompt_compiler() -> (
         return None
 
     return MetadataResultClassificationPromptCompiler(prompt_template=prompt_template)
+
+
+def get_answer_explanation_prompt_compiler() -> (
+    MetadataAnswerExplanationPromptCompiler | None
+):
+    prompt_template = get_active_prompt_template_safe("answer_explanation")
+
+    if prompt_template is None:
+        return None
+
+    return MetadataAnswerExplanationPromptCompiler(prompt_template=prompt_template)

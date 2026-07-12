@@ -62,6 +62,7 @@ class GeneratedSql(BaseModel):
     sql: str
     confidence: float = 0.0
     assumptions: list[str] = Field(default_factory=list)
+    prompt_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class QueryResult(BaseModel):

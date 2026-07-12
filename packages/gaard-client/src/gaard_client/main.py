@@ -72,6 +72,21 @@ class ClientWidgetTitleSuggestionRequest(BaseModel):
     backend_url: str | None = None
 
 
+class ClientQueryExplanationRequest(BaseModel):
+    question: str = Field(min_length=1)
+    sql: str = ""
+    answer: str = ""
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    inference_metadata: dict[str, Any] = Field(default_factory=dict)
+    prompt_metadata: dict[str, Any] = Field(default_factory=dict)
+    business_logic: str = ""
+    datasource_id: str = ""
+    datasource_ids: list[str] = Field(default_factory=list)
+    backend_url: str | None = None
+
+
 class ClientDatasourceStateRequest(BaseModel):
     active: bool
     backend_url: str | None = None
@@ -185,6 +200,22 @@ def analysis_payload(request: ClientQueryRequest) -> dict[str, Any]:
     return payload
 
 
+def query_explanation_payload(request: ClientQueryExplanationRequest) -> dict[str, Any]:
+    return {
+        "question": request.question,
+        "sql": request.sql,
+        "answer": request.answer,
+        "rows": request.rows,
+        "columns": request.columns,
+        "metadata": request.metadata,
+        "inference_metadata": request.inference_metadata,
+        "prompt_metadata": request.prompt_metadata,
+        "business_logic": request.business_logic,
+        "datasource_id": request.datasource_id,
+        "datasource_ids": request.datasource_ids,
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -213,6 +244,37 @@ async def query_backend(
             response = await client.post(
                 query_url,
                 **backend_request_kwargs(authorization, query_payload(request)),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.post("/api/query/explain")
+async def explain_query_backend(
+    request: ClientQueryExplanationRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    explain_url = f"{backend_url}/api/v1/query/explain"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                explain_url,
+                **backend_request_kwargs(authorization, query_explanation_payload(request)),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(

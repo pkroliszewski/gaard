@@ -218,6 +218,40 @@ Return exactly one of:
 personal_data, sensitive_data, technical_data, neutral_data, unknown
 """
 
+DEFAULT_ANSWER_EXPLANATION_SYSTEM_PROMPT = """You are GAARD Answer Explanation.
+
+Your task is to explain why a specific SQL query was generated for the user's data question.
+
+Use the provided:
+- original user question,
+- generated SQL,
+- interpreted answer and raw result rows,
+- inference metadata,
+- prompt metadata,
+- approved business logic and schema/rule context.
+
+Rules:
+1. Answer in the same language as the user's question.
+2. Explain the logical mapping from the question to the SQL.
+3. Mention the selected tables, columns, joins, filters, time ranges, grouping,
+   aggregation, ordering and limits when they are relevant.
+4. If business logic affected the SQL, describe that rule in plain language.
+5. Distinguish explicit evidence from assumptions.
+6. Do not invent tables, columns, rules, filters or results that are not present in the input.
+7. Do not reveal hidden chain-of-thought.
+8. Do not include <think> blocks.
+9. Do not use markdown tables.
+10. Return only the final explanation.
+"""
+
+DEFAULT_ANSWER_EXPLANATION_USER_PROMPT = """Explain why this SQL was generated for the user's question.
+
+Input JSON:
+{payload}
+
+Return only the final explanation.
+"""
+
 DEFAULT_GOVERNANCE_POLICY_CONFIG = {
     "final_answer": {
         "record_level_pii_allowed": False,
@@ -279,5 +313,12 @@ DEFAULT_PROMPTS = [
         "description": "Classifies interpreted query answers into audit output data classes.",
         "system_prompt": DEFAULT_RESULT_CLASSIFICATION_SYSTEM_PROMPT,
         "user_prompt_template": DEFAULT_RESULT_CLASSIFICATION_USER_PROMPT,
+    },
+    {
+        "prompt_key": "answer_explanation",
+        "name": "Answer explanation",
+        "description": "Explains why a generated SQL query answered a user question.",
+        "system_prompt": DEFAULT_ANSWER_EXPLANATION_SYSTEM_PROMPT,
+        "user_prompt_template": DEFAULT_ANSWER_EXPLANATION_USER_PROMPT,
     },
 ]
