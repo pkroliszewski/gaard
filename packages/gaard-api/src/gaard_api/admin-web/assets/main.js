@@ -1,3 +1,4 @@
+import { createIdentityModule } from "./identity.js";
 // src/main.ts
 var app = document.querySelector("#app");
 var licensePackageUpdatePollTimer = null;
@@ -69,6 +70,8 @@ var state = {
   license: null,
   licensePackageUpdate: null
 };
+state.identities = [];
+var identityModule = createIdentityModule({ api, escapeHtml, state, render, setMessage });
 var packageUpdateStages = [
   { key: "downloading", label: "Downloading" },
   { key: "decompressing", label: "Decompressing" },
@@ -485,6 +488,7 @@ function attachShellHandlers() {
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.section = button.dataset.section;
+      if (state.section === "identity") identityModule.activate();
       state.mobileMenuOpen = false;
       state.overviewEditorWidgetKey = null;
       state.overviewLoading = state.section === "overview";
@@ -500,6 +504,7 @@ function attachShellHandlers() {
   document.querySelector("#logout-button")?.addEventListener("click", logout);
   document.querySelector("#top-logout-button")?.addEventListener("click", logout);
   attachSectionHandlers();
+  if (state.section === "identity") identityModule.attach();
 }
 function updateSidebar() {
   const sidebarHost = document.querySelector(".app-shell > .sidebar");
@@ -517,7 +522,7 @@ function renderSection() {
   if (state.section === "llm-config") return renderLlmConfig();
   if (state.section === "reasoning") return renderReasoningConfig();
   if (state.section === "governance-policy") return renderGovernancePolicy();
-  if (state.section === "identity") return renderStub("Identity connector", "FreeIPA connector configuration is planned.");
+  if (state.section === "identity") return identityModule.render();
   if (state.section === "datasources") return renderDatasources();
   if (state.section === "license") return renderLicense();
   if (state.section === "admin-audit") return renderAdminAudit();

@@ -28,11 +28,26 @@ class AuthenticationProvider(Protocol):
         ...
 
 
+class IdentityProvider(Protocol):
+    provider_id: str
+    provider_name: str
+
+    def list_users(self, session: Session, refresh: bool = False) -> list[dict[str, Any]]:
+        ...
+
+
 class AuthProviderRegistry:
     """Ordered authentication provider chain supplied by extensions."""
 
     def __init__(self) -> None:
         self._providers: list[AuthenticationProvider] = []
+        self._identity_providers: list[IdentityProvider] = []
+
+    def register_identity_provider(self, provider: IdentityProvider) -> None:
+        self._identity_providers.append(provider)
+
+    def identity_providers(self) -> list[IdentityProvider]:
+        return list(self._identity_providers)
 
     def register(self, provider: AuthenticationProvider) -> None:
         self._providers.append(provider)

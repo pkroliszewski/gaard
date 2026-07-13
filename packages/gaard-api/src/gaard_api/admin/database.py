@@ -75,6 +75,7 @@ def init_metadata_store() -> None:
         engine = get_engine()
         Base.metadata.create_all(engine)
         ensure_admin_session_schema(engine)
+        ensure_admin_user_schema(engine)
         ensure_data_query_audit_schema(engine)
         ensure_overview_widget_schema(engine)
 
@@ -105,6 +106,28 @@ def seed_admin_user(session: Session) -> None:
             must_change_password=True,
         )
     )
+
+
+def ensure_admin_user_schema(engine: Engine) -> None:
+    columns = {column["name"] for column in inspect(engine).get_columns("admin_users")}
+    additions = {
+        "display_name": "ALTER TABLE admin_users ADD COLUMN display_name VARCHAR(255) NOT NULL DEFAULT ''",
+        "auth_provider": "ALTER TABLE admin_users ADD COLUMN auth_provider VARCHAR(255) NOT NULL DEFAULT 'local'",
+    }
+    with engine.begin() as connection:
+        for name, sql in additions.items():
+            if name not in columns:
+                connection.execute(text(sql))
+        if engine.dialect.name == "sqlite":
+            connection.execute(
+                text("UPDATE admin_users SET auth_provider = substr(username, 1, instr(username, ':') - 1) "
+                     "WHERE auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0")
+            )
+        elif engine.dialect.name == "postgresql":
+            connection.execute(
+                text("UPDATE admin_users SET auth_provider = substring(username from 1 for position(':' in username) - 1) "
+                     "WHERE auth_provider = 'local' AND password_hash = 'external$disabled' AND position(':' in username) > 0")
+            )
 
 
 def seed_settings(session: Session) -> None:

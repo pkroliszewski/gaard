@@ -29,6 +29,8 @@ class AdminUser(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    auth_provider: Mapped[str] = mapped_column(String(255), index=True, default="local")
     password_hash: Mapped[str] = mapped_column(Text)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

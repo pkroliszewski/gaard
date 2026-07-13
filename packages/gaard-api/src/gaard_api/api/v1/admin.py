@@ -21,7 +21,7 @@ from gaard_core.query_pipeline.models import (
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import sqlglot
@@ -130,6 +130,12 @@ class LoginResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1)
     new_password: str = Field(min_length=8)
+
+
+class IdentityUpdateRequest(BaseModel):
+    display_name: str | None = None
+    username: str | None = Field(default=None, min_length=1, max_length=255)
+    new_password: str | None = Field(default=None, min_length=8)
 
 
 class MeResponse(BaseModel):
@@ -995,7 +1001,12 @@ def get_or_create_external_auth_user(
     username: str,
 ) -> AdminUser:
     local_username = f"{provider_id}:{username}"
-    user = session.scalar(select(AdminUser).where(AdminUser.username == local_username))
+    user = session.scalar(
+        select(AdminUser).where(
+            AdminUser.username == local_username,
+            AdminUser.auth_provider == provider_id,
+        )
+    )
     if user is not None:
         user.must_change_password = False
         return user
@@ -1004,6 +1015,7 @@ def get_or_create_external_auth_user(
         username=local_username,
         password_hash="external$disabled",
         must_change_password=False,
+        auth_provider=provider_id,
     )
     session.add(user)
     session.flush()
@@ -1047,6 +1059,78 @@ def change_password(
     session.commit()
 
     return MeResponse(username=user.username, must_change_password=False)
+
+
+@router.get("/identities")
+def list_identities(
+    refresh: bool = False,
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    with create_session() as session:
+        items = [{
+            "id": f"local:{item.id}", "username": item.username,
+            "name": item.display_name or item.username, "role": "admin",
+            "provider": "Built-in", "provider_id": "local",
+            "editable_name": True, "editable_password": True, "attributes": {},
+        } for item in session.scalars(
+            select(AdminUser).where(AdminUser.auth_provider == "local").order_by(AdminUser.username)
+        ).all()]
+        if license_service.identity_management_allowed():
+            for provider in get_auth_provider_registry().identity_providers():
+                items.extend(provider.list_users(session, refresh=refresh))
+        mark_overshadowed_identities(items)
+        return {"items": items}
+
+
+def mark_overshadowed_identities(items: list[dict[str, Any]]) -> None:
+    """Mirror authentication-provider order when exposing duplicate identities."""
+    seen: dict[str, dict[str, Any]] = {}
+    for item in items:
+        username = str(item.get("username") or "").strip()
+        if not username or item.get("overshadowed"):
+            continue
+        key = username.casefold()
+        winner = seen.get(key)
+        if winner is not None:
+            item["overshadowed"] = True
+            item["overshadowed_by"] = {
+                "username": winner.get("username", ""),
+                "provider": winner.get("provider", ""),
+                "provider_id": winner.get("provider_id", ""),
+            }
+            continue
+        seen[key] = item
+
+
+@router.patch("/identities/{identity_id}")
+def update_identity(
+    identity_id: str,
+    request: IdentityUpdateRequest,
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    if not identity_id.startswith("local:"):
+        raise HTTPException(status_code=400, detail="External identities are managed by their provider.")
+    with create_session() as session:
+        target = session.get(AdminUser, int(identity_id.removeprefix("local:")))
+        if target is None:
+            raise HTTPException(status_code=404, detail="Identity not found.")
+        if request.display_name is not None:
+            target.display_name = request.display_name.strip()
+        if request.username is not None:
+            username = request.username.strip()
+            if not username:
+                raise HTTPException(status_code=400, detail="Username must not be empty.")
+            existing = session.scalar(select(AdminUser).where(AdminUser.username == username))
+            if existing is not None and existing.id != target.id:
+                raise HTTPException(status_code=400, detail="Username is already in use.")
+            target.username = username
+        if request.new_password:
+            target.password_hash = hash_password(request.new_password)
+            target.must_change_password = False
+        if request.username is not None or request.new_password:
+            session.execute(delete(AdminSession).where(AdminSession.user_id == target.id))
+        session.commit()
+        return {"status": "updated"}
 
 
 @router.get("/overview")
