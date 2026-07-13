@@ -68,7 +68,8 @@ var state = {
   dashboardLayoutSaving: false,
   dashboardLayoutSaveTimer: null,
   dashboardLayoutSavePromise: null,
-  dashboardLayoutSaveSequence: 0
+  dashboardLayoutSaveSequence: 0,
+  dashboardGrid: null
 };
 rememberActiveView(state.activeView);
 const WIDGET_TYPES = [
@@ -1858,6 +1859,7 @@ async function deleteDashboardWidget(event) {
 }
 function scheduleDashboardLayoutSave() {
     if (!state.dashboardEditMode) return;
+    if (!canPersistDashboardLayout()) return;
     const dashboardId = state.activeDashboardId;
     if (state.dashboardLayoutSaveTimer) {
         clearTimeout(state.dashboardLayoutSaveTimer);
@@ -1868,6 +1870,7 @@ function scheduleDashboardLayoutSave() {
 }
 async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
     if (!dashboardId || dashboardId !== state.activeDashboardId || !state.token) return;
+    if (!canPersistDashboardLayout()) return;
     const items = collectDashboardLayout();
     if (!items.length) return;
     state.dashboardLayoutSaveTimer = null;
@@ -1974,6 +1977,9 @@ function collectDashboardLayout() {
             h: Number.isFinite(node.h) ? node.h : Number(element.getAttribute("gs-h") || 4)
         };
     }).filter((item) => item.widget_id);
+}
+function canPersistDashboardLayout(grid = state.dashboardGrid) {
+    return Boolean(grid) && Number(grid.getColumn?.()) === 12;
 }
 function openSourcePicker() {
     if (state.datasourceUploadPending) return;
@@ -2126,6 +2132,7 @@ async function changeView(event) {
     await flushPendingDashboardLayoutSave();
   }
   state.dashboardEditMode = false;
+  state.dashboardGrid = null;
   state.activeView = view;
   rememberActiveView(view);
   state.error = "";
@@ -2136,6 +2143,7 @@ async function changeView(event) {
 }
 function initAnalysisDashboard() {
   if (state.activeView !== "analysis") return;
+  state.dashboardGrid = null;
   const gridElement = document.querySelector(".dashboard-grid");
   if (!gridElement) return;
   if (window.GridStack) {
@@ -2143,6 +2151,21 @@ function initAnalysisDashboard() {
       {
         cellHeight: 94,
         column: 12,
+        columnOpts: {
+          breakpointForWindow: false,
+          breakpoints: [
+            {
+              w: 700,
+              c: 1,
+              layout: "list"
+            },
+            {
+              w: 1100,
+              c: 6,
+              layout: "moveScale"
+            }
+          ]
+        },
         float: false,
         margin: 12,
         alwaysShowResizeHandle: state.dashboardEditMode,
@@ -2151,13 +2174,14 @@ function initAnalysisDashboard() {
       },
       gridElement
     );
+    state.dashboardGrid = grid;
     if (state.dashboardEditMode) {
       grid.enable?.();
     } else {
       grid.disable?.();
     }
-    grid.off?.("change dragstop resizestop");
-    grid.on?.("change dragstop resizestop", () => {
+    grid.off?.("dragstop resizestop");
+    grid.on?.("dragstop resizestop", () => {
       if (state.dashboardEditMode) {
         scheduleDashboardLayoutSave();
       }
