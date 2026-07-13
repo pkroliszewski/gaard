@@ -64,7 +64,11 @@ var state = {
   metricEditPending: false,
   metricEditError: "",
   metricDeletePendingKey: "",
-  dashboardLayoutSaveTimer: null
+  dashboardEditMode: false,
+  dashboardLayoutSaving: false,
+  dashboardLayoutSaveTimer: null,
+  dashboardLayoutSavePromise: null,
+  dashboardLayoutSaveSequence: 0
 };
 rememberActiveView(state.activeView);
 const WIDGET_TYPES = [
@@ -420,10 +424,25 @@ function renderAnalysisView() {
   return `
     <section class="dashboard-view" aria-label="Dashboard Analysis">
       <div class="dashboard-toolbar dashboard-toolbar-compact">
-        ${dashboard && state.token ? `
-        <button class="dashboard-add-widget-button" type="button" data-open-widget-dialog aria-label="Add widget" title="Add widget">
-          ${renderIcon("plus")}
-        </button>` : ""}
+        <div class="dashboard-toolbar-actions">
+          ${dashboard && state.token ? `
+          <button
+            class="dashboard-edit-mode-button ${state.dashboardEditMode ? "active" : ""} ${state.dashboardLayoutSaving ? "saving" : ""}"
+            type="button"
+            data-toggle-dashboard-edit
+            aria-pressed="${state.dashboardEditMode ? "true" : "false"}"
+            aria-label="${state.dashboardLayoutSaving ? "Saving dashboard layout" : state.dashboardEditMode ? "Finish editing dashboard layout" : "Edit dashboard layout"}"
+            title="${state.dashboardLayoutSaving ? "Saving..." : state.dashboardEditMode ? "Finish editing" : "Edit layout"}"
+            ${state.dashboardLayoutSaving ? "disabled" : ""}
+          >
+            ${state.dashboardLayoutSaving ? `<span class="dashboard-edit-saving-spinner" aria-hidden="true"></span>` : renderIcon("edit")}
+            <span>${state.dashboardLayoutSaving ? "Saving..." : state.dashboardEditMode ? "Finish editing" : "Edit layout"}</span>
+          </button>` : ""}
+          ${dashboard && state.token && state.dashboardEditMode ? `
+          <button class="dashboard-add-widget-button" type="button" data-open-widget-dialog aria-label="Add widget" title="Add widget">
+            ${renderIcon("plus")}
+          </button>` : ""}
+        </div>
       </div>
       ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
       ${state.dashboardWidgetsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardWidgetsError)}</div>` : ""}
@@ -474,15 +493,20 @@ function renderDashboardWidgetGrid(dashboard) {
         <h2>No widgets yet.</h2>
         <div class="dashboard-empty-copy">
           <span>Add a saved metric to start building this dashboard.</span>
+          ${state.dashboardEditMode ? `
           <button class="dashboard-inline-add" type="button" data-open-widget-dialog>
             ${renderIcon("plus")}
             <span>Add widget</span>
-          </button>
+          </button>` : `<p>Choose "Edit layout" to add the first widget.</p>`}
         </div>
       </div>`;
   }
   return `
-      <div class="grid-stack dashboard-grid">
+      <div class="grid-stack dashboard-grid ${
+        state.dashboardEditMode
+          ? "dashboard-grid-editing"
+          : "dashboard-grid-readonly"
+      }">
         ${state.dashboardWidgets.map(renderDashboardWidget).join("")}
       </div>`;
 }
@@ -755,9 +779,10 @@ function renderDashboardWidget(widget) {
       <article class="grid-stack-item-content dashboard-card dashboard-user-widget">
         <header>
           <h2>${escapeHtml(widget.title || widget.metric?.label || "Dashboard widget")}</h2>
+          ${state.dashboardEditMode ? `
           <button type="button" data-delete-dashboard-widget="${escapeHtml(widget.id)}" aria-label="Remove widget" title="Remove widget">
             ${renderIcon("trash")}
-          </button>
+          </button>` : ""}
         </header>
         ${content}
       </article>
@@ -1119,6 +1144,9 @@ function render(options = {}) {
   document.querySelectorAll("[data-open-widget-dialog]").forEach((button) => {
     button.addEventListener("click", openDashboardWidgetDialog);
   });
+  document
+    .querySelector("[data-toggle-dashboard-edit]")
+    ?.addEventListener("click", toggleDashboardEditMode);
   document.querySelectorAll("[data-close-widget-dialog]").forEach((button) => {
     button.addEventListener("click", closeDashboardWidgetDialog);
   });
@@ -1256,8 +1284,10 @@ async function loadDashboards() {
         state.dashboards = [];
         state.dashboardsLoaded = false;
         state.activeDashboardId = "";
+        state.dashboardEditMode = false;
         return;
     }
+    state.dashboardEditMode = false;
     state.dashboardsLoading = true;
     state.dashboardsError = "";
     render();
@@ -1317,6 +1347,10 @@ function closeDashboardCreate() {
 }
 async function selectDashboard(event) {
     const dashboardId = event.currentTarget.dataset.selectDashboard || "";
+    if (state.dashboardEditMode) {
+        await flushPendingDashboardLayoutSave();
+    }
+    state.dashboardEditMode = false;
     if (!dashboardId || dashboardId === state.activeDashboardId) {
         state.dashboardMenuOpen = false;
         state.dashboardCreateOpen = false;
@@ -1412,6 +1446,7 @@ async function createDashboard(event) {
                     ...state.dashboards.filter((dashboard) => dashboard.id !== payload.item.id)
                 ];
                 state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || payload.item.id || "";
+                state.dashboardEditMode = false;
                 state.dashboardWidgets = [];
                 state.dashboardWidgetsDashboardId = state.activeDashboardId;
             }
@@ -1435,6 +1470,16 @@ async function deleteDashboard(event) {
     if (!dashboardId || state.dashboardDeletePendingId) return;
     if (!window.confirm(`Delete dashboard "${dashboard?.name || "Untitled dashboard"}"?`)) {
         return;
+    }
+    if (state.activeDashboardId === dashboardId) {
+        state.dashboardEditMode = false;
+        state.dashboardLayoutSaving = false;
+        if (state.dashboardLayoutSaveTimer) {
+            clearTimeout(state.dashboardLayoutSaveTimer);
+            state.dashboardLayoutSaveTimer = null;
+        }
+        state.dashboardLayoutSavePromise = null;
+        state.dashboardLayoutSaveSequence += 1;
     }
     state.dashboardDeletePendingId = dashboardId;
     state.dashboardsError = "";
@@ -1699,6 +1744,7 @@ async function saveMetricLabel(event) {
     }
 }
 function openDashboardWidgetDialog() {
+    if (!state.dashboardEditMode) return;
     if (!state.token) {
         openLogin();
         return;
@@ -1737,6 +1783,7 @@ function changeDashboardWidgetType(event) {
 }
 async function addDashboardWidget(event) {
     event.preventDefault();
+    if (!state.dashboardEditMode) return;
     if (!state.token || state.dashboardWidgetPending || !state.activeDashboardId) return;
     const form = new FormData(event.currentTarget);
     const metricWidgetKey = String(form.get("metric_widget_key") || "").trim();
@@ -1785,6 +1832,7 @@ async function addDashboardWidget(event) {
     }
 }
 async function deleteDashboardWidget(event) {
+    if (!state.dashboardEditMode) return;
     const widgetId = event.currentTarget.dataset.deleteDashboardWidget || "";
     if (!widgetId || !state.activeDashboardId) return;
     if (!window.confirm("Remove this widget from the dashboard?")) {
@@ -1809,6 +1857,7 @@ async function deleteDashboardWidget(event) {
     }
 }
 function scheduleDashboardLayoutSave() {
+    if (!state.dashboardEditMode) return;
     const dashboardId = state.activeDashboardId;
     if (state.dashboardLayoutSaveTimer) {
         clearTimeout(state.dashboardLayoutSaveTimer);
@@ -1822,7 +1871,8 @@ async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
     const items = collectDashboardLayout();
     if (!items.length) return;
     state.dashboardLayoutSaveTimer = null;
-    try {
+    const saveSequence = ++state.dashboardLayoutSaveSequence;
+    const savePromise = (async () => {
         const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/widgets/layout`, {
             method: "PATCH",
             headers: {
@@ -1838,14 +1888,15 @@ async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
         if (!response.ok) {
             throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
         }
+        if (saveSequence !== state.dashboardLayoutSaveSequence) return;
         if (dashboardId !== state.activeDashboardId) return;
-        const updatedWidgets = new Map((payload.items || []).map((widget) => [widget.id, widget]));
         const layoutById = new Map(items.map((item) => [item.widget_id, item]));
-        state.dashboardWidgets = state.dashboardWidgets.map((widget) => {
-            const updated = updatedWidgets.get(widget.id);
-            if (updated) {
-                return updated;
+        (payload.items || []).forEach((updatedWidget) => {
+            if (updatedWidget?.id && updatedWidget.layout) {
+                layoutById.set(updatedWidget.id, updatedWidget.layout);
             }
+        });
+        state.dashboardWidgets = state.dashboardWidgets.map((widget) => {
             const layout = layoutById.get(widget.id);
             if (!layout) {
                 return widget;
@@ -1860,11 +1911,57 @@ async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
                 }
             };
         });
+    })();
+    state.dashboardLayoutSavePromise = savePromise;
+    try {
+        await savePromise;
     } catch (error) {
         state.dashboardWidgetsError = error.message || "Could not save widget layout.";
         reportApiError(error, "Could not save widget layout.");
         render();
+    } finally {
+        if (state.dashboardLayoutSavePromise === savePromise) {
+            state.dashboardLayoutSavePromise = null;
+        }
     }
+}
+async function flushPendingDashboardLayoutSave() {
+    if (state.dashboardLayoutSaveTimer) {
+        clearTimeout(state.dashboardLayoutSaveTimer);
+        state.dashboardLayoutSaveTimer = null;
+        await saveDashboardLayout(state.activeDashboardId);
+    }
+    if (state.dashboardLayoutSavePromise) {
+        try {
+            await state.dashboardLayoutSavePromise;
+        } catch {
+            // saveDashboardLayout reports the error; this keeps UI transitions from hanging.
+        }
+    }
+}
+async function toggleDashboardEditMode() {
+    if (!state.token || !getActiveDashboard()?.id || state.dashboardLayoutSaving) return;
+    if (state.dashboardEditMode) {
+        setDashboardLayoutSaving(true);
+        await flushPendingDashboardLayoutSave();
+        state.dashboardEditMode = false;
+        state.dashboardLayoutSaving = false;
+    } else {
+        state.dashboardEditMode = true;
+    }
+    render();
+}
+function setDashboardLayoutSaving(saving) {
+    state.dashboardLayoutSaving = saving;
+    const button = document.querySelector("[data-toggle-dashboard-edit]");
+    if (!button) return;
+    button.disabled = saving;
+    button.classList.toggle("saving", saving);
+    button.setAttribute("aria-label", saving ? "Saving dashboard layout" : "Finish editing dashboard layout");
+    button.setAttribute("title", saving ? "Saving..." : "Finish editing");
+    button.innerHTML = saving
+        ? `<span class="dashboard-edit-saving-spinner" aria-hidden="true"></span><span>Saving...</span>`
+        : `${renderIcon("edit")}<span>Finish editing</span>`;
 }
 function collectDashboardLayout() {
     return Array.from(document.querySelectorAll(".dashboard-grid .grid-stack-item")).map((element) => {
@@ -2022,9 +2119,13 @@ function friendlyDatasourceError(message) {
     }
     return message;
 }
-function changeView(event) {
+async function changeView(event) {
   const view = normalizeView(event.currentTarget.dataset.view);
   if (state.activeView === view) return;
+  if (state.activeView === "analysis" && state.dashboardEditMode) {
+    await flushPendingDashboardLayoutSave();
+  }
+  state.dashboardEditMode = false;
   state.activeView = view;
   rememberActiveView(view);
   state.error = "";
@@ -2042,18 +2143,25 @@ function initAnalysisDashboard() {
       {
         cellHeight: 94,
         column: 12,
-        disableResize: false,
         float: false,
         margin: 12,
-        alwaysShowResizeHandle: true,
+        alwaysShowResizeHandle: state.dashboardEditMode,
         staticGrid: false,
         resizable: { handles: "e,se,s,sw,w" }
       },
       gridElement
     );
-    grid.enableResize?.(true);
+    if (state.dashboardEditMode) {
+      grid.enable?.();
+    } else {
+      grid.disable?.();
+    }
     grid.off?.("change dragstop resizestop");
-    grid.on?.("change dragstop resizestop", () => scheduleDashboardLayoutSave());
+    grid.on?.("change dragstop resizestop", () => {
+      if (state.dashboardEditMode) {
+        scheduleDashboardLayoutSave();
+      }
+    });
   } else {
     document.querySelector("[data-dashboard-fallback]")?.removeAttribute("hidden");
   }
@@ -2694,6 +2802,7 @@ async function login(event) {
     state.dashboards = [];
     state.dashboardsLoaded = false;
     state.activeDashboardId = "";
+    state.dashboardEditMode = false;
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
     render();
@@ -2703,7 +2812,10 @@ async function login(event) {
     renderLogin();
   }
 }
-function logout() {
+async function logout() {
+  if (state.dashboardEditMode) {
+    await flushPendingDashboardLayoutSave();
+  }
   state.token = "";
   state.username = "";
   state.messages = [];
@@ -2719,6 +2831,7 @@ function logout() {
   state.dashboardCreateOpen = false;
   state.dashboardEditId = "";
   state.dashboardWidgetDialogOpen = false;
+  state.dashboardEditMode = false;
   state.savedMetrics = [];
   state.savedMetricsLoaded = false;
   state.savedMetricsResultsLoaded = false;
