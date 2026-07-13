@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+import io
 import json
 from pathlib import Path
 import sqlite3
@@ -25,14 +26,21 @@ from gaard_api.admin.database import (
 )
 from gaard_api.admin.models import (
     AdminSetting,
+    AdminUser,
     BusinessKnowledgeClaim,
     BusinessLogicSuggestion,
+    Dashboard,
+    DashboardWidget,
+    DashboardUserState,
     DataQueryAuditLog,
     DataQueryAuditType,
     DatasourceConnector,
     DatasourceSchemaCache,
+    OverviewWidget,
     PromptTemplate,
+    UserSavedMetric,
 )
+from gaard_api.admin.security import hash_password
 from gaard_api.admin.services import (
     get_active_business_logic_prompt_safe,
     get_governance_policy_for_schema,
@@ -43,9 +51,13 @@ from gaard_api.admin.services import (
     set_setting,
 )
 from gaard_api.core.settings import settings
-from gaard_api.example_database import install_medical_poc_example_database
+from gaard_api.example_database import (
+    MEDICAL_POC_DASHBOARD_ID,
+    install_medical_poc_example_database,
+)
 from gaard_api.main import app
 from gaard_api.query_hooks import QueryHookRegistry
+from gaard_connectors import create_builtin_connector_registry
 
 
 @pytest.fixture()
@@ -131,6 +143,31 @@ def auth_headers(client: TestClient) -> dict[str, str]:
     token = login(client)["token"]
     change_password(client, token)
     return {"Authorization": f"Bearer {token}"}
+
+
+def add_local_user(username: str, password: str) -> None:
+    with create_session() as session:
+        session.add(
+            AdminUser(
+                username=username,
+                password_hash=hash_password(password),
+                must_change_password=False,
+            )
+        )
+        session.commit()
+
+
+def login_as(client: TestClient, username: str, password: str) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/admin/auth/login",
+        json={
+            "username": username,
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
 def test_admin_lists_datasource_types_from_connector_registry(admin_client: TestClient) -> None:
@@ -276,6 +313,318 @@ def test_query_endpoint_accepts_authenticated_user(admin_client: TestClient) -> 
 
     assert response.status_code == 200
     assert response.json()["answer"]
+
+
+def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -> None:
+    admin_headers = auth_headers(admin_client)
+    add_local_user("analyst", "analyst-password")
+    analyst_headers = login_as(admin_client, "analyst", "analyst-password")
+
+    admin_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=admin_headers,
+        json={
+            "name": "Operations",
+            "description": "Daily operational dashboard.",
+        },
+    )
+    admin_second_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=admin_headers,
+        json={
+            "name": "Operations detail",
+            "description": "Detailed operational dashboard.",
+        },
+    )
+    analyst_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=analyst_headers,
+        json={
+            "name": "Finance",
+            "description": "Revenue tracking.",
+        },
+    )
+
+    assert admin_response.status_code == 200
+    assert admin_second_response.status_code == 200
+    assert analyst_response.status_code == 200
+    admin_dashboard = admin_response.json()["item"]
+    admin_second_dashboard = admin_second_response.json()["item"]
+    analyst_dashboard = analyst_response.json()["item"]
+    assert admin_dashboard["owner_username"] == "admin"
+    assert analyst_dashboard["owner_username"] == "analyst"
+    assert admin_second_response.json()["active_dashboard_id"] == admin_second_dashboard["id"]
+
+    active_response = admin_client.put(
+        "/api/v1/dashboards/active",
+        headers=admin_headers,
+        json={"dashboard_id": admin_dashboard["id"]},
+    )
+    assert active_response.status_code == 200
+    assert active_response.json()["active_dashboard_id"] == admin_dashboard["id"]
+
+    cross_active_response = admin_client.put(
+        "/api/v1/dashboards/active",
+        headers=admin_headers,
+        json={"dashboard_id": analyst_dashboard["id"]},
+    )
+    assert cross_active_response.status_code == 404
+
+    with create_session() as session:
+        session.add(
+            OverviewWidget(
+                widget_key="admin_saved_metric",
+                label="Prompt count",
+                widget_type="scalar",
+                datasource_key="metadata-db",
+                question="How many prompt templates are configured?",
+                sql="SELECT COUNT(*) AS value FROM prompt_templates",
+                active=False,
+                updated_by="admin",
+            )
+        )
+        session.add(
+            UserSavedMetric(
+                owner_user_id="1",
+                owner_username="admin",
+                widget_key="admin_saved_metric",
+            )
+        )
+        session.commit()
+
+    metrics_response = admin_client.get(
+        "/api/v1/dashboards/metrics",
+        headers=admin_headers,
+    )
+    assert metrics_response.status_code == 200
+    assert metrics_response.json()["items"][0]["widget_key"] == "admin_saved_metric"
+    assert metrics_response.json()["items"][0]["result"]["status"] == "ok"
+
+    lightweight_metrics_response = admin_client.get(
+        "/api/v1/dashboards/metrics?include_result=false",
+        headers=admin_headers,
+    )
+    assert lightweight_metrics_response.status_code == 200
+    assert lightweight_metrics_response.json()["items"][0]["widget_key"] == "admin_saved_metric"
+    assert "result" not in lightweight_metrics_response.json()["items"][0]
+
+    rename_metric_response = admin_client.patch(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=admin_headers,
+        json={"label": "Updated prompt count"},
+    )
+    assert rename_metric_response.status_code == 200
+    assert rename_metric_response.json()["item"]["label"] == "Updated prompt count"
+    assert "result" not in rename_metric_response.json()["item"]
+
+    cross_rename_metric_response = admin_client.patch(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=analyst_headers,
+        json={"label": "Cross user rename"},
+    )
+    assert cross_rename_metric_response.status_code == 404
+
+    dashboard_widget_response = admin_client.post(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=admin_headers,
+        json={
+            "metric_widget_key": "admin_saved_metric",
+            "title": "Prompt count",
+            "visualization_type": "number",
+        },
+    )
+    assert dashboard_widget_response.status_code == 200
+    dashboard_widget = dashboard_widget_response.json()["item"]
+    assert dashboard_widget["title"] == "Prompt count"
+    assert dashboard_widget["visualization_type"] == "number"
+    assert dashboard_widget["result"]["status"] == "ok"
+
+    cross_widget_response = admin_client.post(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=analyst_headers,
+        json={
+            "metric_widget_key": "admin_saved_metric",
+            "title": "Cross user",
+            "visualization_type": "number",
+        },
+    )
+    assert cross_widget_response.status_code == 404
+
+    layout_response = admin_client.patch(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets/layout",
+        headers=admin_headers,
+        json={
+            "items": [
+                {
+                    "widget_id": dashboard_widget["id"],
+                    "x": 6,
+                    "y": 2,
+                    "w": 4,
+                    "h": 3,
+                }
+            ]
+        },
+    )
+    assert layout_response.status_code == 200
+    assert layout_response.json()["items"][0]["layout"] == {
+        "x": 6,
+        "y": 2,
+        "w": 4,
+        "h": 3,
+    }
+
+    widgets_response = admin_client.get(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=admin_headers,
+    )
+    assert widgets_response.status_code == 200
+    assert widgets_response.json()["items"][0]["id"] == dashboard_widget["id"]
+    assert widgets_response.json()["items"][0]["layout"] == {
+        "x": 6,
+        "y": 2,
+        "w": 4,
+        "h": 3,
+    }
+
+    cross_delete_metric_response = admin_client.delete(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=analyst_headers,
+    )
+    assert cross_delete_metric_response.status_code == 404
+
+    delete_metric_response = admin_client.delete(
+        "/api/v1/dashboards/metrics/admin_saved_metric",
+        headers=admin_headers,
+    )
+    assert delete_metric_response.status_code == 200
+    assert delete_metric_response.json() == {
+        "status": "deleted",
+        "widget_key": "admin_saved_metric",
+        "removed_dashboard_widgets": 1,
+    }
+
+    deleted_metric_list = admin_client.get(
+        "/api/v1/dashboards/metrics",
+        headers=admin_headers,
+    )
+    assert deleted_metric_list.status_code == 200
+    assert all(
+        item["widget_key"] != "admin_saved_metric"
+        for item in deleted_metric_list.json()["items"]
+    )
+
+    widgets_after_metric_delete = admin_client.get(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=admin_headers,
+    )
+    assert widgets_after_metric_delete.status_code == 200
+    assert widgets_after_metric_delete.json()["items"] == []
+
+    with create_session() as session:
+        assert (
+            session.scalar(
+                select(UserSavedMetric).where(
+                    UserSavedMetric.owner_user_id == "1",
+                    UserSavedMetric.widget_key == "admin_saved_metric",
+                )
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(DashboardWidget).where(
+                    DashboardWidget.owner_user_id == "1",
+                    DashboardWidget.metric_widget_key == "admin_saved_metric",
+                )
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(OverviewWidget).where(
+                    OverviewWidget.widget_key == "admin_saved_metric",
+                )
+            )
+            is None
+        )
+
+    admin_list = admin_client.get("/api/v1/dashboards", headers=admin_headers)
+    analyst_list = admin_client.get("/api/v1/dashboards", headers=analyst_headers)
+
+    assert [item["id"] for item in admin_list.json()["items"]] == [
+        admin_second_dashboard["id"],
+        admin_dashboard["id"],
+        MEDICAL_POC_DASHBOARD_ID,
+    ]
+    assert admin_list.json()["active_dashboard_id"] == admin_dashboard["id"]
+    assert admin_list.json()["active_dashboard"]["id"] == admin_dashboard["id"]
+    assert [item["id"] for item in analyst_list.json()["items"]] == [
+        analyst_dashboard["id"]
+    ]
+    assert analyst_list.json()["active_dashboard_id"] == analyst_dashboard["id"]
+
+    cross_delete = admin_client.delete(
+        f"/api/v1/dashboards/{analyst_dashboard['id']}",
+        headers=admin_headers,
+    )
+    assert cross_delete.status_code == 404
+
+    update_dashboard_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=admin_headers,
+        json={
+            "name": "Operations renamed",
+            "description": "Updated daily operational dashboard.",
+        },
+    )
+    assert update_dashboard_response.status_code == 200
+    assert update_dashboard_response.json()["item"]["name"] == "Operations renamed"
+    assert update_dashboard_response.json()["item"]["description"] == (
+        "Updated daily operational dashboard."
+    )
+
+    cross_update_dashboard_response = admin_client.put(
+        f"/api/v1/dashboards/{analyst_dashboard['id']}",
+        headers=admin_headers,
+        json={
+            "name": "Cross user rename",
+            "description": "Should not be allowed.",
+        },
+    )
+    assert cross_update_dashboard_response.status_code == 404
+
+    admin_dashboards = admin_client.get(
+        "/api/v1/admin/dashboards",
+        headers=admin_headers,
+    )
+    assert admin_dashboards.status_code == 200
+    assert {item["id"] for item in admin_dashboards.json()["items"]} == {
+        admin_dashboard["id"],
+        admin_second_dashboard["id"],
+        analyst_dashboard["id"],
+        MEDICAL_POC_DASHBOARD_ID,
+    }
+
+    delete_response = admin_client.delete(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=admin_headers,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "deleted"
+    assert delete_response.json()["active_dashboard_id"] == admin_second_dashboard["id"]
+
+    with create_session() as session:
+        dashboards = session.scalars(select(Dashboard)).all()
+        assert {dashboard.dashboard_id for dashboard in dashboards} == {
+            admin_second_dashboard["id"],
+            analyst_dashboard["id"],
+            MEDICAL_POC_DASHBOARD_ID,
+        }
+        widgets = session.scalars(select(DashboardWidget)).all()
+        assert {widget.dashboard_id for widget in widgets} == {MEDICAL_POC_DASHBOARD_ID}
+        admin_state = session.get(DashboardUserState, "1")
+        assert admin_state is not None
+        assert admin_state.active_dashboard_id == admin_second_dashboard["id"]
 
 
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
@@ -467,7 +816,9 @@ def test_admin_first_login_requires_password_change(admin_client: TestClient) ->
     )
 
     assert prompts_response.status_code == 200
-    assert len(prompts_response.json()["items"]) >= 2
+    prompt_keys = {item["prompt_key"] for item in prompts_response.json()["items"]}
+    assert len(prompt_keys) >= 2
+    assert "conversation_context_classification" in prompt_keys
 
 
 def test_prompt_update_creates_admin_audit_event(admin_client: TestClient) -> None:
@@ -1010,7 +1361,7 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
         "prompt_templates_table",
     ]
     assert body["info_widgets"][0]["grid_width"] == 1
-    assert body["table_widgets"][0]["grid_width"] == 4
+    assert body["table_widgets"][0]["grid_width"] == 12
     assert body["table_widgets"][0]["result"]["status"] == "ok"
     assert body["table_widgets"][0]["result"]["columns"] == [
         "prompt_key",
@@ -1032,7 +1383,7 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
         item for item in widgets if item["widget_key"] == "runtime_daily_queries"
     )
     assert runtime_widget["active"] is False
-    assert runtime_widget["grid_width"] == 4
+    assert runtime_widget["grid_width"] == 12
 
     second_response = admin_client.get(
         "/api/v1/admin/overview",
@@ -1128,8 +1479,10 @@ def test_overview_widget_can_use_table_type(admin_client: TestClient) -> None:
 def test_overview_widget_can_be_saved_from_query_and_deleted(
     admin_client: TestClient,
 ) -> None:
+    headers = auth_headers(admin_client)
     create_response = admin_client.post(
         "/api/v1/admin/overview/widgets/from-query",
+        headers=headers,
         json={
             "label": "Prompt count from client",
             "widget_type": "scalar",
@@ -1145,13 +1498,17 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
     assert widget_key.startswith("client_prompt_count_from_client")
     assert created_item["active"] is False
     assert created_item["result_mode"] == "data"
-
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
+    assert created_item["result"]["status"] == "ok"
+    with create_session() as session:
+        saved_metric = session.scalar(
+            select(UserSavedMetric).where(UserSavedMetric.widget_key == widget_key)
+        )
+        assert saved_metric is not None
+        assert saved_metric.owner_username == "admin"
 
     overview_response = admin_client.get(
         "/api/v1/admin/overview",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert overview_response.status_code == 200
     assert all(
@@ -1161,7 +1518,7 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
 
     widgets_response = admin_client.get(
         "/api/v1/admin/overview/widgets",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert widgets_response.status_code == 200
     assert any(
@@ -1171,14 +1528,14 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
 
     delete_response = admin_client.delete(
         f"/api/v1/admin/overview/widgets/{widget_key}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert delete_response.status_code == 200
     assert delete_response.json()["status"] == "deleted"
 
     widgets_after_delete = admin_client.get(
         "/api/v1/admin/overview/widgets",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     assert widgets_after_delete.status_code == 200
     assert all(
@@ -1187,11 +1544,64 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
     )
 
 
+def test_overview_widget_title_suggestion_uses_llm(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = auth_headers(admin_client)
+
+    with create_session() as session:
+        set_setting(session, "gaard_llm_api_key", "test-key", "test")
+        set_setting(session, "gaard_llm_model", "title-model", "test")
+        session.commit()
+
+    class FakeOpenAICompatibleClient:
+        init_kwargs: dict | None = None
+        requests = []
+
+        def __init__(self, **kwargs) -> None:
+            self.__class__.init_kwargs = kwargs
+
+        def create_chat_completion(self, request):
+            self.__class__.requests.append(request)
+            return ChatCompletionResponse(
+                content="```text\nDoctors by Specialty.\n```",
+                model=request.model,
+            )
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.admin.OpenAICompatibleClient",
+        FakeOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/overview/widgets/title-suggestion",
+        headers=headers,
+        json={
+            "question": "How many doctors are there by specialty?",
+            "sql": "SELECT specialization, COUNT(*) FROM doctors GROUP BY specialization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"title": "Doctors by Specialty"}
+    assert FakeOpenAICompatibleClient.init_kwargs is not None
+    assert FakeOpenAICompatibleClient.init_kwargs["api_key"] == "test-key"
+    request = FakeOpenAICompatibleClient.requests[0]
+    assert request.model == "title-model"
+    assert request.temperature == 0.0
+    assert request.messages[0].role == "system"
+    assert "same language as the user question" in request.messages[0].content
+    assert "How many doctors" in request.messages[1].content
+
+
 def test_overview_widget_from_query_strips_datasource_qualifier(
     admin_client: TestClient,
 ) -> None:
+    headers = auth_headers(admin_client)
     create_response = admin_client.post(
         "/api/v1/admin/overview/widgets/from-query",
+        headers=headers,
         json={
             "label": "Qualified prompt count",
             "widget_type": "scalar",
@@ -1207,19 +1617,16 @@ def test_overview_widget_from_query_strips_datasource_qualifier(
         'SELECT COUNT(*) AS value FROM "metadata-db".prompt_templates'
     )
 
-    token = login(admin_client)["token"]
-    change_password(admin_client, token)
-
     state_response = admin_client.patch(
         f"/api/v1/admin/overview/widgets/{created_item['widget_key']}/state",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={"active": True},
     )
     assert state_response.status_code == 200
 
     overview_response = admin_client.get(
         "/api/v1/admin/overview",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
 
     assert overview_response.status_code == 200
@@ -1476,6 +1883,36 @@ def test_datasource_connector_builds_sqlite_url_from_database_path(
     assert item["database_type"] == "sqlite"
     assert item["database_url"] == f"sqlite:///{db_path}"
     assert item["sql_dialect"] == "sqlite"
+
+
+def test_excel_upload_without_duckdb_excel_connector_returns_400(
+    admin_client: TestClient,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    upload_dir = tmp_path / "excel-uploads"
+    monkeypatch.setattr(settings, "gaard_excel_upload_directory", str(upload_dir))
+    monkeypatch.setattr(admin_api, "get_connector_registry", create_builtin_connector_registry)
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/excel-upload",
+        headers={"Authorization": f"Bearer {token}"},
+        files={
+            "file": (
+                "cases.xlsx",
+                io.BytesIO(b"not a real workbook"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "duckdb-excel datasource connector" in response.json()["detail"]
+    assert not upload_dir.exists()
 
 
 def test_public_datasource_activation_keeps_single_active_datasource(

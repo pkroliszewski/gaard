@@ -12,5 +12,6 @@ build
 twine
 psycopg[binary]
 pymysql
+python-multipart
 types-openpyxl
 types-ldap3

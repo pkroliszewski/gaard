@@ -40,3 +40,12 @@ def test_validator_rejects_multiple_statements() -> None:
 
     with pytest.raises(SqlValidationError):
         validator.validate("SELECT * FROM patients; SELECT * FROM users")
+
+
+def test_validator_rejects_bind_parameters() -> None:
+    validator = SelectOnlySqlValidator(dialect="mysql")
+
+    with pytest.raises(SqlValidationError) as exc_info:
+        validator.validate("SELECT * FROM `lead` WHERE source_id = :source_id")
+
+    assert exc_info.value.metadata["primary_error_category"] == ("sql.validation.bind_parameter")

@@ -4,19 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-api"
-version = "0.2.3"
+version = "2.0.7"
 description = "GAARD backend web services providing admin interface"
 readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = [
-    "gaard-core==0.2.2",
-    "gaard-connectors==0.2.2",
-    "gaard-llm==0.2.2",
-    "gaard-plugin-api>=0.2.2,<0.3.0",
+    "gaard-core==2.0.7",
+    "gaard-connectors==2.0.7",
+    "gaard-llm==2.0.7",
+    "gaard-plugin-api>=2.0.7,<2.1.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.7.0",
+    "python-multipart>=0.0.9",
     "sqlalchemy>=2.0.0",
     "httpx2>=2.5.0",
     "certifi>=2024.8.30"

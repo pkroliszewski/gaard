@@ -3,15 +3,17 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
     QueryExecutionError,
     SqlValidationError,
 )
+from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import (
     OutputClassification,
     QueryRequest,
@@ -19,6 +21,9 @@ from gaard_core.query_pipeline.models import (
     QueryResult,
 )
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
+from gaard_connectors import ConnectorRegistryError
+from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
@@ -32,10 +37,12 @@ from gaard_api.admin.models import (
     AdminSession,
     AdminUser,
     BusinessLogicSuggestion,
+    Dashboard,
     DatasourceConnector,
     DatasourceSchemaCache,
     OverviewWidget,
     PromptTemplate,
+    UserSavedMetric,
 )
 from gaard_api.admin.security import (
     create_session_token,
@@ -225,21 +232,21 @@ class OverviewWidgetUpdateRequest(BaseModel):
         default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
     )
     position: int | None = Field(default=None, ge=10)
-    grid_width: int | None = Field(default=None, ge=1, le=4)
+    grid_width: int | None = Field(default=None, ge=1, le=12)
     active: bool | None = None
 
 
 class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
     widget_key: str = Field(min_length=1, max_length=255, pattern=r"^[a-zA-Z0-9_-]+$")
     position: int = Field(default=100, ge=10)
-    grid_width: int | None = Field(default=None, ge=1, le=4)
+    grid_width: int | None = Field(default=None, ge=1, le=12)
     active: bool = True
 
 
 class OverviewWidgetStateRequest(BaseModel):
     active: bool
     position: int | None = Field(default=None, ge=10)
-    grid_width: int | None = Field(default=None, ge=1, le=4)
+    grid_width: int | None = Field(default=None, ge=1, le=12)
 
 
 class OverviewWidgetFromQueryRequest(BaseModel):
@@ -251,6 +258,11 @@ class OverviewWidgetFromQueryRequest(BaseModel):
     result_mode: str = Field(
         default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
     )
+
+
+class OverviewWidgetTitleSuggestionRequest(BaseModel):
+    question: str = Field(min_length=1)
+    sql: str | None = None
 
 
 class DatasourceConnectorRequest(BaseModel):
@@ -279,6 +291,10 @@ class DatasourceConnectionTestRequest(BaseModel):
     connection_config: dict[str, Any] = Field(default_factory=dict)
     database_path: str | None = Field(default=None, min_length=1)
     database_url: str | None = Field(default=None, min_length=1)
+
+
+class DatasourceStateRequest(BaseModel):
+    active: bool
 
 
 class DatasourceSchemaTableSettingsRequest(BaseModel):
@@ -347,6 +363,18 @@ def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
         "formatted_schema": cache.formatted_schema,
         "introspected_at": serialize_datetime(cache.introspected_at),
         "updated_by": cache.updated_by,
+    }
+
+
+def serialize_admin_dashboard(dashboard: Dashboard) -> dict[str, Any]:
+    return {
+        "id": dashboard.dashboard_id,
+        "name": dashboard.name,
+        "description": dashboard.description,
+        "owner_user_id": dashboard.owner_user_id,
+        "owner_username": dashboard.owner_username,
+        "created_at": serialize_datetime(dashboard.created_at),
+        "updated_at": serialize_datetime(dashboard.updated_at),
     }
 
 
@@ -461,9 +489,9 @@ def normalize_overview_widget_grid_width(
     grid_width: int | None,
 ) -> int:
     if grid_width is None:
-        return 4 if widget_type in {OVERVIEW_WIDGET_TABLE, OVERVIEW_WIDGET_TIMESERIES} else 1
+        return 12 if widget_type in {OVERVIEW_WIDGET_TABLE, OVERVIEW_WIDGET_TIMESERIES} else 1
 
-    return max(1, min(4, int(grid_width)))
+    return max(1, min(12, int(grid_width)))
 
 
 def normalize_overview_widget_result_mode(value: str | None) -> str:
@@ -487,6 +515,143 @@ def build_client_widget_key(session: Session, label: str, question: str) -> str:
         suffix += 1
 
     return widget_key
+
+
+def normalize_metric_title(value: str, fallback: str) -> str:
+    cleaned = remove_thinking_blocks(value).strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```").strip()
+        if cleaned.startswith("text"):
+            cleaned = cleaned.removeprefix("text").strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned.removesuffix("```").strip()
+
+    cleaned = cleaned.strip().strip('"').strip("'")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.rstrip(".:;-")
+    if not cleaned:
+        cleaned = fallback.strip()
+
+    return cleaned[:80].strip() or "Saved Metric"
+
+
+def fallback_metric_title(question: str) -> str:
+    normalized = re.sub(r"\s+", " ", question.strip())
+    normalized = normalized.rstrip("?!.:;-")
+    if not normalized:
+        return "Saved Metric"
+
+    return normalized[0].upper() + normalized[1:80]
+
+
+def suggest_metric_title_with_llm(session: Session, request: OverviewWidgetTitleSuggestionRequest) -> str:
+    llm_config = get_llm_runtime_config(session)
+    if llm_config.provider != "openai-compatible":
+        raise ConfigurationError(f"Unsupported GAARD_LLM_PROVIDER: {llm_config.provider}")
+    if not llm_config.api_key or llm_config.api_key == "change-me":
+        raise ConfigurationError("GAARD_LLM_API_KEY must be configured to suggest metric titles.")
+
+    client = OpenAICompatibleClient(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        timeout_seconds=llm_config.timeout_seconds,
+    )
+    fallback = fallback_metric_title(request.question)
+    response = client.create_chat_completion(
+        ChatCompletionRequest(
+            model=llm_config.model,
+            temperature=0.0,
+            extra_body=llm_config.extra_body,
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=(
+                        "You write short human-friendly metric names for dashboard widgets. "
+                        "Return only the metric name, without quotes, markdown, explanations, "
+                        "or trailing punctuation. Use the same language as the user question. "
+                        "Prefer 3 to 8 words and keep it under 80 characters."
+                    ),
+                ),
+                ChatMessage(
+                    role="user",
+                    content=(
+                        "User question:\n"
+                        f"{request.question.strip()}\n\n"
+                        "Generated SQL, if useful:\n"
+                        f"{(request.sql or '').strip()}\n\n"
+                        "Return the metric name only."
+                    ),
+                ),
+            ],
+        )
+    )
+
+    return normalize_metric_title(response.content, fallback)
+
+
+def build_client_excel_datasource_key(session: Session, filename: str) -> str:
+    stem = Path(filename).stem or "excel"
+    normalized = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-") or "excel"
+    base_key = f"client_excel_{normalized[:48].strip('_-') or 'source'}"
+    connector_key = base_key
+    suffix = 2
+
+    while get_datasource_connector_by_key(session, connector_key) is not None:
+        suffix_text = f"_{suffix}"
+        connector_key = f"{base_key[: 255 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+
+    return connector_key
+
+
+def safe_excel_upload_path(directory: Path, filename: str) -> Path:
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", Path(filename).name).strip("._")
+    if not safe_name:
+        safe_name = "source.xlsx"
+    if Path(safe_name).suffix.lower() != ".xlsx":
+        safe_name = f"{Path(safe_name).stem or 'source'}.xlsx"
+
+    target = directory / safe_name
+    suffix = 2
+    while target.exists():
+        target = directory / f"{Path(safe_name).stem}_{suffix}.xlsx"
+        suffix += 1
+
+    return target
+
+
+def normalize_datasource_configuration_or_400(
+    *,
+    database_type: str,
+    connection_config: dict[str, Any] | None = None,
+    database_path: str | None = None,
+    database_url: str | None = None,
+    sql_dialect: str | None = None,
+):
+    try:
+        return normalize_datasource_configuration(
+            database_type=database_type,
+            connection_config=connection_config,
+            database_path=database_path,
+            database_url=database_url,
+            sql_dialect=sql_dialect,
+        )
+    except (ConnectorRegistryError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def ensure_excel_datasource_type_available() -> None:
+    try:
+        get_connector_registry().get("duckdb-excel")
+    except ConnectorRegistryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Excel workbook uploads require the duckdb-excel datasource connector, "
+                "which is not available in this GAARD API process."
+            ),
+        ) from exc
 
 
 def serialize_overview_widget(
@@ -1177,6 +1342,21 @@ def get_overview(
     }
 
 
+@router.get("/dashboards")
+def get_admin_dashboards(
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    dashboards = session.scalars(
+        select(Dashboard).order_by(Dashboard.updated_at.desc(), Dashboard.id.desc())
+    )
+
+    return {
+        "items": [serialize_admin_dashboard(dashboard) for dashboard in dashboards],
+        "viewer": user.username,
+    }
+
+
 @router.get("/overview/widgets")
 def get_overview_widget_configs(
     user: AdminUser = Depends(get_current_admin),
@@ -1317,6 +1497,7 @@ def create_overview_widget(
 @router.post("/overview/widgets/from-query")
 def create_overview_widget_from_query(
     request: OverviewWidgetFromQueryRequest,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     datasource = get_datasource_connector_by_key(session, request.datasource_key)
@@ -1372,9 +1553,16 @@ def create_overview_widget_from_query(
         ) from exc
 
     session.add(widget)
+    session.add(
+        UserSavedMetric(
+            owner_user_id=str(principal.user.id),
+            owner_username=principal.session.username or principal.user.username,
+            widget_key=widget.widget_key,
+        )
+    )
     record_admin_audit(
         session=session,
-        actor="client",
+        actor=principal.session.username or principal.user.username,
         action="overview_widget.create_from_query",
         resource_type="overview_widget",
         resource_id=widget.widget_key,
@@ -1389,8 +1577,25 @@ def create_overview_widget_from_query(
     session.commit()
 
     return {
-        "item": serialize_overview_widget_config(widget),
+        "item": serialize_overview_widget(session, widget),
     }
+
+
+@router.post("/overview/widgets/title-suggestion")
+def suggest_overview_widget_title(
+    request: OverviewWidgetTitleSuggestionRequest,
+    _principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        title = suggest_metric_title_with_llm(session, request)
+    except (ConfigurationError, LlmProviderError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {"title": title}
 
 
 @router.put("/overview/widgets/{widget_key}")
@@ -1833,16 +2038,13 @@ def create_datasource(
             detail="The metadata datasource is managed by GAARD.",
         )
 
-    try:
-        normalized_config = normalize_datasource_configuration(
-            database_type=request.database_type,
-            connection_config=request.connection_config,
-            database_path=request.database_path,
-            database_url=request.database_url,
-            sql_dialect=request.sql_dialect,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    normalized_config = normalize_datasource_configuration_or_400(
+        database_type=request.database_type,
+        connection_config=request.connection_config,
+        database_path=request.database_path,
+        database_url=request.database_url,
+        sql_dialect=request.sql_dialect,
+    )
 
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
@@ -1891,6 +2093,138 @@ def create_datasource(
     return {"item": serialize_datasource(connector)}
 
 
+@router.post("/datasources/excel-upload")
+async def upload_excel_datasource(
+    file: UploadFile = File(...),
+    active: bool = False,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    filename = file.filename or ""
+    if Path(filename).suffix.lower() != ".xlsx":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .xlsx files can be added as Excel datasources.",
+        )
+
+    ensure_excel_datasource_type_available()
+    license_service.ensure_datasource_type_allowed("duckdb-excel")
+
+    upload_dir = Path(settings.gaard_excel_upload_directory).expanduser().resolve()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    target_path = safe_excel_upload_path(upload_dir, filename)
+
+    try:
+        with target_path.open("wb") as destination:
+            while chunk := await file.read(1024 * 1024):
+                destination.write(chunk)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Excel file could not be saved: {exc}",
+        ) from exc
+
+    request = DatasourceConnectorRequest(
+        connector_key=build_client_excel_datasource_key(session, filename),
+        name=Path(filename).stem or target_path.stem,
+        database_type="duckdb-excel",
+        database_url=f"duckdb-excel:///{target_path.as_posix()}",
+        sql_dialect="duckdb",
+        active=active,
+    )
+
+    try:
+        normalized_config = normalize_datasource_configuration_or_400(
+            database_type=request.database_type,
+            connection_config=request.connection_config,
+            database_path=request.database_path,
+            database_url=request.database_url,
+            sql_dialect=request.sql_dialect,
+        )
+    except HTTPException:
+        target_path.unlink(missing_ok=True)
+        raise
+
+    connector = DatasourceConnector(
+        connector_key=request.connector_key,
+        name=request.name,
+        database_type=normalized_config.database_type,
+        database_url=normalized_config.database_url,
+        sql_dialect=normalized_config.sql_dialect,
+        active=active,
+        updated_by=user.username,
+    )
+    session.add(connector)
+    session.flush()
+
+    if active:
+        set_active_datasource_connector(session, connector, user.username)
+
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.excel_upload",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={
+            "database_type": connector.database_type,
+            "filename": Path(filename).name,
+            "active": connector.active,
+        },
+    )
+    session.commit()
+
+    return {"item": serialize_datasource(connector)}
+
+
+@router.post("/datasources/{connector_id}/state")
+def update_datasource_state(
+    connector_id: int,
+    request: DatasourceStateRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    if is_system_datasource_connector(connector):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The metadata datasource is managed by GAARD.",
+        )
+
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    if request.active:
+        set_active_datasource_connector(session, connector, user.username)
+    else:
+        connector.active = False
+        connector.updated_by = user.username
+
+    license_service.ensure_active_source_limit(list_datasource_connectors(session))
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.state.update",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={
+            "database_type": connector.database_type,
+            "active": connector.active,
+        },
+    )
+    session.commit()
+
+    return {"item": serialize_datasource(connector)}
+
+
 @router.put("/datasources/{connector_id}")
 def update_datasource(
     connector_id: int,
@@ -1912,16 +2246,13 @@ def update_datasource(
             detail="The metadata datasource is managed by GAARD.",
         )
 
-    try:
-        normalized_config = normalize_datasource_configuration(
-            database_type=request.database_type,
-            connection_config=request.connection_config,
-            database_path=request.database_path,
-            database_url=request.database_url,
-            sql_dialect=request.sql_dialect,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    normalized_config = normalize_datasource_configuration_or_400(
+        database_type=request.database_type,
+        connection_config=request.connection_config,
+        database_path=request.database_path,
+        database_url=request.database_url,
+        sql_dialect=request.sql_dialect,
+    )
 
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
@@ -2080,15 +2411,12 @@ def test_datasource(
 def test_datasource_from_request(
     request: DatasourceConnectionTestRequest,
 ) -> dict[str, Any]:
-    try:
-        normalized_config = normalize_datasource_configuration(
-            database_type=request.database_type,
-            connection_config=request.connection_config,
-            database_path=request.database_path,
-            database_url=request.database_url,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    normalized_config = normalize_datasource_configuration_or_400(
+        database_type=request.database_type,
+        connection_config=request.connection_config,
+        database_path=request.database_path,
+        database_url=request.database_url,
+    )
 
     connector = DatasourceConnector(
         connector_key="__preview__",

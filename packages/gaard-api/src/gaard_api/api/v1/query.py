@@ -1,10 +1,13 @@
 import json
+import re
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from gaard_core.conversation_context.llm_classifier import LlmConversationContextClassifier
+from gaard_core.conversation_context.mock_classifier import MockConversationContextClassifier
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -17,6 +20,9 @@ from gaard_core.query_intent.mock_classifier import MockQueryIntentClassifier
 from gaard_core.query_pipeline.llm_sql_generator import LlmSqlGenerator
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
 from gaard_core.query_pipeline.models import (
+    ContextMode,
+    ConversationContextClassification,
+    ConversationContextDecision,
     OutputClassification,
     QueryIntentClassification,
     QueryIntentDecision,
@@ -32,6 +38,7 @@ from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 
 from gaard_api.admin.prompt_runtime import (
+    get_conversation_context_prompt_compiler,
     get_intent_classification_prompt_compiler,
     get_result_classification_prompt_compiler,
     get_result_interpretation_prompt_compiler,
@@ -51,6 +58,17 @@ from gaard_api.admin.services import (
     record_data_query_sql_error_audit,
 )
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
+from gaard_api.conversations import (
+    ConversationPrincipal,
+    ambiguous_context_response,
+    build_compact_conversation_context,
+    build_conversation_metadata,
+    conversation_exists,
+    ensure_conversation,
+    load_conversation_for_owner,
+    new_topic_classification,
+    record_conversation_turn,
+)
 from gaard_api.extensions import get_query_hook_registry
 from gaard_api.license import license_service
 from gaard_api.query_hooks import (
@@ -130,9 +148,13 @@ def create_sql_generator(
         llm_config = llm_config or get_llm_runtime_config_safe()
 
         if datasource_context is None:
-            datasource_context = get_query_hook_registry().resolve_effective_query_context(
-                QueryRequest(question="__sql_generation_context__")
-            ).datasource_contexts
+            datasource_context = (
+                get_query_hook_registry()
+                .resolve_effective_query_context(
+                    QueryRequest(question="__sql_generation_context__")
+                )
+                .datasource_contexts
+            )
 
         if datasource_context is not None:
             datasource_contexts = normalize_datasource_contexts(datasource_context)
@@ -191,6 +213,29 @@ def create_intent_classifier(
     raise ConfigurationError(
         "Unsupported GAARD_INTENT_CLASSIFICATION_MODE: "
         f"{get_query_runtime_config_safe().intent_classification_mode}"
+    )
+
+
+def create_conversation_context_classifier(
+    llm_config: LlmRuntimeConfig | None = None,
+) -> MockConversationContextClassifier | LlmConversationContextClassifier:
+    context_classification_mode = resolve_intent_classification_mode()
+
+    if context_classification_mode == "mock":
+        return MockConversationContextClassifier()
+
+    if context_classification_mode == "llm":
+        llm_config = llm_config or get_llm_runtime_config_safe()
+
+        return LlmConversationContextClassifier(
+            client=create_llm_client(llm_config),
+            model=llm_config.model,
+            extra_body=llm_config.extra_body,
+            prompt_compiler=get_conversation_context_prompt_compiler(),
+        )
+
+    raise ConfigurationError(
+        f"Unsupported GAARD conversation context classification mode: {context_classification_mode}"
     )
 
 
@@ -258,9 +303,11 @@ def create_pipeline(
     interpret: bool = True,
 ) -> QueryPipeline:
     if datasource_context is None:
-        datasource_context = get_query_hook_registry().resolve_effective_query_context(
-            QueryRequest(question="__pipeline_context__")
-        ).datasource_contexts
+        datasource_context = (
+            get_query_hook_registry()
+            .resolve_effective_query_context(QueryRequest(question="__pipeline_context__"))
+            .datasource_contexts
+        )
 
     runtime_config = get_query_runtime_config_safe()
     datasource_contexts = normalize_datasource_contexts(datasource_context)
@@ -496,6 +543,8 @@ def access_refusal_answer(reason: str, metadata: dict[str, Any]) -> str:
         return CLARIFICATION_REFUSAL_ANSWER
     if "sql.validation.syntax" in categories:
         return SQL_SYNTAX_REFUSAL_ANSWER
+    if "sql.validation.bind_parameter" in categories:
+        return SQL_SYNTAX_REFUSAL_ANSWER
     if categories & {
         "sql.validation.disallowed_column",
         "sql.validation.disallowed_table",
@@ -520,9 +569,7 @@ def run_sql_request(
         **extra_metadata,
         "llm_sql_language": dialect_plan.prompt_dialect,
     }
-    learning_connector_id = (
-        datasource_contexts[0][0].id if len(datasource_contexts) == 1 else None
-    )
+    learning_connector_id = datasource_contexts[0][0].id if len(datasource_contexts) == 1 else None
     intent_mode = resolve_intent_classification_mode()
     intent_llm_config = get_llm_runtime_config_safe() if intent_mode == "llm" else None
     try:
@@ -704,6 +751,771 @@ def effective_query_request(
     return effective_context.request, effective_context.datasource_contexts
 
 
+def conversation_principal(user: AuthenticatedSession) -> ConversationPrincipal:
+    return ConversationPrincipal(
+        owner_user_id=str(user.user.id),
+        owner_username=user.user.username,
+    )
+
+
+def resolve_request_conversation(
+    request: QueryRequest,
+    principal: ConversationPrincipal,
+) -> tuple[object | None, ConversationContextClassification, QueryRequest | None]:
+    if request.context_mode == ContextMode.OFF:
+        return None, new_topic_classification(request.question), request
+
+    if request.context_mode != ContextMode.NEW and request.conversation_id:
+        conversation = ensure_existing_conversation(request.conversation_id, principal)
+    else:
+        conversation = ensure_conversation(
+            principal,
+            request,
+            force_new=request.context_mode == ContextMode.NEW,
+        )
+
+    if request.context_mode == ContextMode.NEW:
+        classification = new_topic_classification(request.question)
+        return (
+            conversation,
+            classification,
+            request.model_copy(
+                update={
+                    "question": request.question,
+                    "conversation_id": conversation.conversation_id,
+                }
+            ),
+        )
+
+    context = build_compact_conversation_context(conversation.conversation_id)
+    if not context.get("turns"):
+        classification = new_topic_classification(request.question)
+        return (
+            conversation,
+            classification,
+            request.model_copy(
+                update={
+                    "question": request.question,
+                    "conversation_id": conversation.conversation_id,
+                }
+            ),
+        )
+
+    context_mode = resolve_intent_classification_mode()
+    if context_mode != "llm":
+        deterministic = deterministic_follow_up_classification(request, context)
+        if deterministic is not None:
+            return (
+                conversation,
+                deterministic,
+                request.model_copy(
+                    update={
+                        "question": deterministic.standalone_question,
+                        "conversation_id": conversation.conversation_id,
+                    }
+                ),
+            )
+
+    llm_config = get_llm_runtime_config_safe() if context_mode == "llm" else None
+    classification = create_conversation_context_classifier(llm_config).classify(
+        request,
+        context,
+    )
+    if classification.decision == ConversationContextDecision.AMBIGUOUS:
+        return conversation, classification, None
+
+    standalone_question = (
+        classification.standalone_question.strip()
+        if classification.decision == ConversationContextDecision.FOLLOW_UP
+        else request.question
+    )
+    if classification.decision == ConversationContextDecision.FOLLOW_UP:
+        guard_rewrite = guard_follow_up_rewrite(
+            request.question,
+            standalone_question,
+            context,
+            classification,
+            allow_deterministic_fallback=context_mode != "llm",
+        )
+        if guard_rewrite is None:
+            classification = classification.model_copy(
+                update={
+                    "decision": ConversationContextDecision.AMBIGUOUS,
+                    "standalone_question": "",
+                    "reason": (
+                        classification.reason
+                        or "Follow-up was not rewritten with enough prior context."
+                    ),
+                }
+            )
+            return conversation, classification, None
+        standalone_question = guard_rewrite
+
+    if not standalone_question:
+        classification = classification.model_copy(
+            update={
+                "decision": ConversationContextDecision.AMBIGUOUS,
+                "reason": classification.reason or "Missing standalone follow-up question.",
+            }
+        )
+        return conversation, classification, None
+
+    classification = classification.model_copy(update={"standalone_question": standalone_question})
+    return (
+        conversation,
+        classification,
+        request.model_copy(
+            update={
+                "question": standalone_question,
+                "conversation_id": conversation.conversation_id,
+            }
+        ),
+    )
+
+
+def deterministic_follow_up_classification(
+    request: QueryRequest,
+    context: dict[str, Any],
+) -> ConversationContextClassification | None:
+    question = normalize_question_text(request.question)
+    previous = latest_completed_turn(context)
+    if previous is None:
+        return None
+
+    previous_question = previous_scope_question(previous)
+    if not previous_question:
+        return None
+
+    projected_result = rewrite_previous_result_projection(
+        original_question=request.question,
+        normalized_question=question,
+        previous=previous,
+        previous_question=previous_question,
+    )
+    if projected_result:
+        return ConversationContextClassification(
+            decision=ConversationContextDecision.FOLLOW_UP,
+            confidence=0.94,
+            standalone_question=projected_result["standalone_question"],
+            reason=(
+                "Deterministic rewrite: preserve the previous result set filters "
+                "and change only the requested output fields."
+            ),
+            model_response=projected_result,
+            source="deterministic",
+        )
+
+    if is_open_only_command(question):
+        filter_rewrite = rewrite_filter_follow_up(
+            previous,
+            previous_question,
+            filter_instruction="ogranicz do otwartych",
+        )
+        return ConversationContextClassification(
+            decision=ConversationContextDecision.FOLLOW_UP,
+            confidence=0.98,
+            standalone_question=filter_rewrite["standalone_question"],
+            reason="Deterministic rewrite: preserve previous topic and add open-status filter.",
+            model_response=filter_rewrite,
+            source="deterministic",
+        )
+
+    previous_period = rewrite_previous_period_follow_up(previous, previous_question, question)
+    if previous_period:
+        return ConversationContextClassification(
+            decision=ConversationContextDecision.FOLLOW_UP,
+            confidence=0.96,
+            standalone_question=previous_period["standalone_question"],
+            reason="Deterministic rewrite: replace current time period with previous period.",
+            model_response=previous_period,
+            source="deterministic",
+        )
+
+    return None
+
+
+def guard_follow_up_rewrite(
+    original_question: str,
+    standalone_question: str,
+    context: dict[str, Any],
+    classification: ConversationContextClassification,
+    *,
+    allow_deterministic_fallback: bool,
+) -> str | None:
+    original = normalize_question_text(original_question)
+    standalone = normalize_question_text(standalone_question)
+    if not standalone:
+        return None
+
+    previous = latest_completed_turn(context)
+    previous_question = (
+        str(previous.get("standalone_question") or previous.get("question") or "")
+        if previous
+        else ""
+    )
+
+    if rewrite_is_too_close_to_original(original, standalone):
+        if classification.model_response.get("current_question_is_standalone") is True:
+            return original_question.strip()
+        if not allow_deterministic_fallback:
+            return None
+        deterministic = deterministic_follow_up_classification(
+            QueryRequest(question=original_question),
+            context,
+        )
+        if deterministic is not None:
+            return deterministic.standalone_question
+        return None
+
+    if is_open_only_command(original) and not carries_previous_context(
+        standalone, previous_question
+    ):
+        if not allow_deterministic_fallback:
+            return None
+        deterministic = deterministic_follow_up_classification(
+            QueryRequest(question=original_question),
+            context,
+        )
+        if deterministic is not None:
+            return deterministic.standalone_question
+        return None
+
+    return standalone_question.strip()
+
+
+def rewrite_previous_result_projection(
+    *,
+    original_question: str,
+    normalized_question: str,
+    previous: dict[str, Any],
+    previous_question: str,
+) -> dict[str, Any]:
+    if not asks_for_previous_result_details(normalized_question):
+        return {}
+
+    if has_singular_result_reference(normalized_question) and not previous_result_is_single(
+        previous
+    ):
+        return {}
+
+    projection_instruction = normalize_projection_instruction(original_question)
+    if not projection_instruction:
+        return {}
+
+    previous_scope = previous_question.strip().rstrip(".?")
+    if not previous_scope:
+        return {}
+
+    return projection_rewrite_payload(
+        rule="previous_result_projection",
+        base_question=previous_scope,
+        projection_instruction=projection_instruction,
+        reference_sql=str(previous.get("sql") or ""),
+    )
+
+
+def rewrite_filter_follow_up(
+    previous: dict[str, Any],
+    previous_question: str,
+    *,
+    filter_instruction: str,
+) -> dict[str, Any]:
+    projection_instruction = previous_projection_instruction(previous)
+    filtered_question = append_filter_once(previous_question, filter_instruction).rstrip("?")
+    if projection_instruction:
+        return projection_rewrite_payload(
+            rule="open_only_filter",
+            base_question=filtered_question,
+            projection_instruction=projection_instruction,
+            reference_sql=str(previous.get("sql") or ""),
+        )
+
+    return {
+        "rule": "open_only_filter",
+        "base_question": filtered_question,
+        "standalone_question": f"{filtered_question}?",
+    }
+
+
+def rewrite_previous_period_follow_up(
+    previous: dict[str, Any],
+    previous_question: str,
+    normalized_question: str,
+) -> dict[str, Any]:
+    shifted_question = resolve_previous_period(normalized_question, previous_question)
+    if not shifted_question:
+        return {}
+
+    projection_instruction = previous_projection_instruction(previous)
+    if projection_instruction:
+        return projection_rewrite_payload(
+            rule="previous_period",
+            base_question=shifted_question,
+            projection_instruction=projection_instruction,
+            reference_sql=str(previous.get("sql") or ""),
+        )
+
+    return {
+        "rule": "previous_period",
+        "base_question": shifted_question,
+        "standalone_question": shifted_question,
+    }
+
+
+def projection_rewrite_payload(
+    *,
+    rule: str,
+    base_question: str,
+    projection_instruction: str,
+    reference_sql: str,
+) -> dict[str, Any]:
+    base = base_question.strip().rstrip(".?")
+    projection = projection_instruction.strip().rstrip(".?")
+    standalone_parts = [
+        (f"Zachowaj ten sam zestaw rekordów opisany przez pytanie bazowe: {base}."),
+    ]
+    if reference_sql.strip():
+        standalone_parts.append(
+            "Użyj poprzedniego SQL jako referencji dla JOIN i WHERE, bez kopiowania "
+            f"niepotrzebnych kolumn SELECT:\n{reference_sql.strip()}"
+        )
+    standalone_parts.append(f"Zmień tylko zwracane kolumny/SELECT tak, aby zwrócić: {projection}.")
+    standalone_parts.append(
+        "Nie używaj bind-parametrów ani placeholderów typu :name, ?, $1 lub @name; "
+        "SQL musi być wykonywalny bez podstawiania parametrów."
+    )
+
+    return {
+        "rule": rule,
+        "base_question": base,
+        "projection_instruction": projection,
+        "uses_reference_sql": bool(reference_sql.strip()),
+        "standalone_question": "\n".join(standalone_parts),
+    }
+
+
+def previous_scope_question(previous: dict[str, Any]) -> str:
+    model_response = previous_context_model_response(previous)
+    base_question = str(model_response.get("base_question") or "").strip()
+    if base_question:
+        return base_question
+
+    standalone = str(previous.get("standalone_question") or previous.get("question") or "")
+    parsed = parse_projection_rewrite(standalone)
+    if parsed:
+        return parsed["base_question"]
+
+    return standalone.strip()
+
+
+def previous_projection_instruction(previous: dict[str, Any]) -> str:
+    model_response = previous_context_model_response(previous)
+    projection_instruction = str(model_response.get("projection_instruction") or "").strip()
+    if projection_instruction:
+        return projection_instruction
+
+    standalone = str(previous.get("standalone_question") or "")
+    parsed = parse_projection_rewrite(standalone)
+    if parsed:
+        return parsed["projection_instruction"]
+
+    return ""
+
+
+def previous_context_model_response(previous: dict[str, Any]) -> dict[str, Any]:
+    model_response = previous.get("context_model_response")
+    return model_response if isinstance(model_response, dict) else {}
+
+
+def parse_projection_rewrite(value: str, depth: int = 0) -> dict[str, str]:
+    if depth > 3:
+        return {}
+
+    compact = value.strip()
+    if not compact:
+        return {}
+
+    new_format = re.search(
+        r"Zachowaj ten sam zestaw rekordów opisany przez pytanie bazowe:\s*"
+        r"(?P<base>.*?)\.\s*"
+        r"(?:Użyj poprzedniego SQL.*?\s*)?"
+        r"Zmień tylko zwracane kolumny/SELECT tak, aby zwrócić:\s*"
+        r"(?P<projection>.*?)\.\s*(?:Nie używaj|$)",
+        compact,
+        flags=re.DOTALL,
+    )
+    if new_format:
+        base = " ".join(new_format.group("base").split()).strip()
+        projection = " ".join(new_format.group("projection").split()).strip()
+        nested = parse_projection_rewrite(base, depth + 1)
+        if nested:
+            base = nested["base_question"]
+            base = move_projection_filters_to_base(
+                base,
+                nested["projection_instruction"],
+            )
+        base = move_projection_filters_to_base(base, projection)
+        return {
+            "base_question": base,
+            "projection_instruction": projection,
+        }
+
+    old_format = re.search(
+        r'Użyj tych samych filtrów, zakresu czasu i źródła danych co w pytaniu:\s*"'
+        r'(?P<base>.*)"\.\s*Zwróć dla tego samego zestawu rekordów:\s*'
+        r"(?P<projection>.*?)\.?$",
+        compact,
+        flags=re.DOTALL,
+    )
+    if old_format:
+        base = " ".join(old_format.group("base").split()).strip()
+        projection = " ".join(old_format.group("projection").split()).strip()
+        nested = parse_projection_rewrite(base, depth + 1)
+        if nested:
+            base = nested["base_question"]
+            base = move_projection_filters_to_base(
+                base,
+                nested["projection_instruction"],
+            )
+        base = move_projection_filters_to_base(base, projection)
+        return {
+            "base_question": base,
+            "projection_instruction": projection.rstrip(".?"),
+        }
+
+    return {}
+
+
+def move_projection_filters_to_base(base_question: str, projection_instruction: str) -> str:
+    normalized_projection = normalize_question_text(projection_instruction)
+    if "otwart" in normalized_projection and "otwart" not in normalize_question_text(base_question):
+        return append_filter_once(base_question, "ogranicz do otwartych").rstrip("?")
+
+    return base_question
+
+
+def asks_for_previous_result_details(normalized_question: str) -> bool:
+    if not normalized_question:
+        return False
+
+    if has_result_reference(normalized_question) and has_projection_signal(normalized_question):
+        return True
+
+    return (
+        has_projection_command(normalized_question)
+        and has_detail_projection_signal(normalized_question)
+        and not introduces_new_scope(normalized_question)
+    )
+
+
+def has_result_reference(normalized_question: str) -> bool:
+    tokens = normalized_tokens(normalized_question)
+    reference_tokens = {
+        "ich",
+        "nich",
+        "te",
+        "tej",
+        "tego",
+        "tym",
+        "tych",
+        "tamte",
+        "tamtych",
+        "same",
+        "samego",
+        "samych",
+        "their",
+        "them",
+        "these",
+        "those",
+        "this",
+        "that",
+        "it",
+    }
+    if tokens & reference_tokens:
+        return True
+
+    reference_phrases = (
+        "tych samych",
+        "ten sam",
+        "ta sama",
+        "to samo",
+        "same records",
+        "same rows",
+        "same result",
+        "previous result",
+        "poprzedni wynik",
+        "poprzedniego wyniku",
+    )
+    return any(phrase in normalized_question for phrase in reference_phrases)
+
+
+def has_singular_result_reference(normalized_question: str) -> bool:
+    tokens = normalized_tokens(normalized_question)
+    return bool(tokens & {"tej", "tego", "tym", "this", "that", "it"})
+
+
+def previous_result_is_single(previous: dict[str, Any]) -> bool:
+    result_summary = previous.get("result_summary")
+    if not isinstance(result_summary, dict):
+        return False
+
+    scalar_count = result_summary.get("scalar_count")
+    if isinstance(scalar_count, (int, float)) and not isinstance(scalar_count, bool):
+        return scalar_count == 1
+
+    row_count = result_summary.get("row_count")
+    if isinstance(row_count, int):
+        return row_count == 1
+
+    return False
+
+
+def has_projection_signal(normalized_question: str) -> bool:
+    return has_projection_command(normalized_question) or has_detail_projection_signal(
+        normalized_question
+    )
+
+
+def has_projection_command(normalized_question: str) -> bool:
+    command_prefixes = (
+        "daj ",
+        "podaj ",
+        "pokaż ",
+        "pokaz ",
+        "wypisz ",
+        "wyświetl ",
+        "wyswietl ",
+        "zwróć ",
+        "zwroc ",
+        "lista ",
+        "show ",
+        "list ",
+        "give ",
+        "return ",
+        "display ",
+    )
+    return normalized_question.startswith(command_prefixes)
+
+
+def has_detail_projection_signal(normalized_question: str) -> bool:
+    projection_terms = (
+        "opis",
+        "opisy",
+        "szczegół",
+        "szczegol",
+        "szczegóły",
+        "szczegoly",
+        "nazwa",
+        "nazwy",
+        "status",
+        "id",
+        "identyfikator",
+        "kolumn",
+        "atrybut",
+        "pole",
+        "pola",
+        "wartość",
+        "wartosc",
+        "wartości",
+        "wartosci",
+        "detail",
+        "details",
+        "description",
+        "descriptions",
+        "name",
+        "names",
+        "field",
+        "fields",
+        "column",
+        "columns",
+        "value",
+        "values",
+    )
+    return any(term in normalized_question for term in projection_terms)
+
+
+def introduces_new_scope(normalized_question: str) -> bool:
+    scope_terms = (
+        " w tym ",
+        " w poprzednim ",
+        " w przyszłym ",
+        " w przyszlym ",
+        " dzisiaj",
+        " wczoraj",
+        " jutro",
+        " ostatni",
+        " ostatnie",
+        " ostatnich",
+        " region",
+        " kraju",
+        " mieście",
+        " miescie",
+        " status ",
+        " filtr",
+        " gdzie ",
+        " from ",
+        " before ",
+        " after ",
+        " between ",
+        " where ",
+        " region",
+        " city",
+        " country",
+        " status ",
+        " filter",
+    )
+    padded = f" {normalized_question} "
+    return any(term in padded for term in scope_terms)
+
+
+def normalize_projection_instruction(question: str) -> str:
+    compact = question.strip().rstrip(".?")
+    compact = re.sub(
+        r"\b(ich|nich|tych|te|tej|tego|tym|tamte|tamtych|their|them|these|those|this|that|it)\b",
+        "",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    compact = re.sub(
+        r"\b(tych\s+samych|same\s+records|same\s+rows)\b", "", compact, flags=re.IGNORECASE
+    )
+    compact = " ".join(compact.split()).strip(" ,;:")
+    return compact or question.strip().rstrip(".?")
+
+
+def normalized_tokens(value: str) -> set[str]:
+    return set(re.findall(r"[\wąćęłńóśźż]+", value.lower()))
+
+
+def latest_completed_turn(context: dict[str, Any]) -> dict[str, Any] | None:
+    for turn in reversed(context.get("turns") or []):
+        if isinstance(turn, dict):
+            return turn
+    return None
+
+
+def normalize_question_text(value: str) -> str:
+    return " ".join(value.lower().strip().rstrip("?.!").split())
+
+
+def is_open_only_command(normalized_question: str) -> bool:
+    return normalized_question in {
+        "pokaż tylko otwarte",
+        "pokaz tylko otwarte",
+        "tylko otwarte",
+        "ogranicz do otwartych",
+        "ogranicz status do otwartych",
+        "ogranicz do spraw otwartych",
+        "pokaż otwarte",
+        "pokaz otwarte",
+    }
+
+
+def append_filter_once(previous_question: str, filter_text: str) -> str:
+    compact = previous_question.strip().rstrip(".?")
+    normalized = normalize_question_text(compact)
+    if "otwart" in normalized:
+        return f"{compact}?"
+    return f"{compact}, {filter_text}?"
+
+
+def resolve_previous_period(
+    normalized_question: str,
+    previous_question: str,
+) -> str:
+    if normalized_question not in {
+        "a w poprzednim",
+        "w poprzednim",
+        "a poprzedni",
+        "poprzedni",
+        "a w poprzednim?",
+    }:
+        return ""
+
+    replacements = [
+        (r"\bw tym tygodniu\b", "w poprzednim tygodniu"),
+        (r"\bbieżącym tygodniu\b", "poprzednim tygodniu"),
+        (r"\btym miesiącu\b", "poprzednim miesiącu"),
+        (r"\bbieżącym miesiącu\b", "poprzednim miesiącu"),
+        (r"\bdzisiaj\b", "wczoraj"),
+    ]
+    for pattern, replacement in replacements:
+        if re.search(pattern, previous_question, flags=re.IGNORECASE):
+            return re.sub(pattern, replacement, previous_question, flags=re.IGNORECASE)
+
+    return ""
+
+
+def rewrite_is_too_close_to_original(original: str, standalone: str) -> bool:
+    if standalone == original:
+        return True
+    if len(standalone.split()) <= max(3, len(original.split()) + 1):
+        return True
+    return False
+
+
+def carries_previous_context(standalone: str, previous_question: str) -> bool:
+    previous_tokens = {
+        token
+        for token in re.findall(r"[\wąćęłńóśźż]+", previous_question.lower())
+        if len(token) >= 5
+    }
+    standalone_tokens = set(re.findall(r"[\wąćęłńóśźż]+", standalone.lower()))
+    return bool(previous_tokens & standalone_tokens)
+
+
+def ensure_existing_conversation(
+    conversation_id: str,
+    principal: ConversationPrincipal,
+):
+    loaded = load_conversation_for_owner(conversation_id, principal)
+    if loaded is not None:
+        return loaded
+    if conversation_exists(conversation_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Conversation belongs to another user.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Conversation was not found.",
+    )
+
+
+def add_conversation_to_response(
+    response: QueryResponse,
+    *,
+    conversation,
+    classification: ConversationContextClassification,
+    original_request: QueryRequest,
+    effective_request: QueryRequest,
+    mode: str,
+    status_value: str = "completed",
+) -> QueryResponse:
+    response.question = original_request.question
+    audit_id = response.metadata.get("data_query_audit_id")
+    turn = record_conversation_turn(
+        conversation,
+        mode=mode,
+        original_question=original_request.question,
+        standalone_question=effective_request.question,
+        answer=response.answer,
+        sql=response.sql,
+        metadata=response.metadata,
+        context_classification=classification,
+        rows=response.rows,
+        status=status_value,
+        data_query_audit_id=audit_id if isinstance(audit_id, int) else None,
+        analysis_session_id=str(response.metadata.get("analysis_session_id") or ""),
+    )
+    response.metadata["conversation"] = build_conversation_metadata(
+        conversation,
+        turn,
+        classification,
+    )
+    return response
+
+
 def ndjson_line(payload: dict[str, Any]) -> str:
     return f"{json.dumps(payload, ensure_ascii=False)}\n"
 
@@ -714,17 +1526,47 @@ def query(
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> QueryResponse:
     effective_request, datasource_context = effective_query_request(request)
-    active_datasource_ids = [
-        connector.connector_key for connector, _cache in datasource_context
-    ]
-    if not active_datasource_ids:
-        return build_no_active_datasources_response(effective_request)
-
-    return run_sql_request(
+    conversation, context_classification, query_request = resolve_request_conversation(
         effective_request,
+        conversation_principal(_user),
+    )
+    if conversation is not None and query_request is None:
+        return ambiguous_context_response(
+            effective_request,
+            conversation,
+            context_classification,
+        )
+    query_request = query_request or effective_request
+    active_datasource_ids = [connector.connector_key for connector, _cache in datasource_context]
+    if not active_datasource_ids:
+        response = build_no_active_datasources_response(query_request)
+        if conversation is not None:
+            return add_conversation_to_response(
+                response,
+                conversation=conversation,
+                classification=context_classification,
+                original_request=effective_request,
+                effective_request=query_request,
+                mode="sql",
+                status_value="blocked",
+            )
+        return response
+
+    response = run_sql_request(
+        query_request,
         datasource_context,
         {"active_datasource_ids": active_datasource_ids} if active_datasource_ids else None,
     )
+    if conversation is not None:
+        return add_conversation_to_response(
+            response,
+            conversation=conversation,
+            classification=context_classification,
+            original_request=effective_request,
+            effective_request=query_request,
+            mode="sql",
+        )
+    return response
 
 
 @router.post("/query/stream")
@@ -733,31 +1575,59 @@ def query_stream(
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> StreamingResponse:
     effective_request, datasource_context = effective_query_request(request)
-    active_datasource_ids = [
-        connector.connector_key for connector, _cache in datasource_context
-    ]
+    conversation, context_classification, query_request = resolve_request_conversation(
+        effective_request,
+        conversation_principal(_user),
+    )
+    active_datasource_ids = [connector.connector_key for connector, _cache in datasource_context]
     extra_metadata = (
         {"active_datasource_ids": active_datasource_ids} if active_datasource_ids else None
     )
 
     def single_response() -> Iterator[str]:
-        if not active_datasource_ids:
+        if conversation is not None and query_request is None:
             yield ndjson_line(
-                {"final": build_no_active_datasources_response(effective_request).model_dump(
-                    mode="json"
-                )}
+                {
+                    "final": ambiguous_context_response(
+                        effective_request,
+                        conversation,
+                        context_classification,
+                    ).model_dump(mode="json")
+                }
             )
             return
 
-        yield ndjson_line(
-            {
-                "final": run_sql_request(
-                    effective_request,
-                    datasource_context,
-                    extra_metadata,
-                ).model_dump(mode="json")
-            }
+        resolved_request = query_request or effective_request
+        if not active_datasource_ids:
+            response = build_no_active_datasources_response(resolved_request)
+            if conversation is not None:
+                response = add_conversation_to_response(
+                    response,
+                    conversation=conversation,
+                    classification=context_classification,
+                    original_request=effective_request,
+                    effective_request=resolved_request,
+                    mode="sql",
+                    status_value="blocked",
+                )
+            yield ndjson_line({"final": response.model_dump(mode="json")})
+            return
+
+        response = run_sql_request(
+            resolved_request,
+            datasource_context,
+            extra_metadata,
         )
+        if conversation is not None:
+            response = add_conversation_to_response(
+                response,
+                conversation=conversation,
+                classification=context_classification,
+                original_request=effective_request,
+                effective_request=resolved_request,
+                mode="sql",
+            )
+        yield ndjson_line({"final": response.model_dump(mode="json")})
 
     return StreamingResponse(
         single_response(),

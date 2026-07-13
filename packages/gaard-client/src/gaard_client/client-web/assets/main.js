@@ -2,60 +2,1136 @@
 var app = document.querySelector("#app");
 var params = new URLSearchParams(window.location.search);
 var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || window.GAARD_CLIENT_CONFIG?.backendUrl || "http://localhost:8000").replace(/\/+$/, "");
+var storedToken = localStorage.getItem("gaard_client_token") || "";
+var storedUsername = localStorage.getItem("gaard_client_username") || "";
+var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
 var state = {
   backendUrl: configuredBackendUrl,
-  token: localStorage.getItem("gaard_client_token") || "",
-  username: localStorage.getItem("gaard_client_username") || "",
+  token: storedToken,
+  username: storedUsername,
+  activeView: normalizeView(params.get("view") || storedActiveView),
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
   nextMessageId: 1,
+  conversationId: "",
   pending: false,
-  error: ""
+  error: "",
+  apiError: null,
+  nextApiErrorId: 1,
+  loginOpen: false,
+  sourcesOpen: false,
+  datasources: [],
+  datasourcesLoaded: false,
+  datasourcesLoading: false,
+  datasourceError: "",
+  datasourceUploadPending: false,
+  datasourceStatePendingId: null,
+  newDatasourceActive: false,
+  dashboards: [],
+  dashboardsLoaded: false,
+  dashboardsLoading: false,
+  dashboardsError: "",
+  activeDashboardId: "",
+  dashboardMenuOpen: false,
+  dashboardCreateOpen: false,
+  dashboardEditId: "",
+  dashboardCreatePending: false,
+  dashboardDeletePendingId: "",
+  savedMetrics: [],
+  savedMetricsLoaded: false,
+  savedMetricsResultsLoaded: false,
+  savedMetricsLoading: false,
+  savedMetricsError: "",
+  dashboardWidgets: [],
+  dashboardWidgetsDashboardId: "",
+  dashboardWidgetsLoading: false,
+  dashboardWidgetsError: "",
+  dashboardWidgetDialogOpen: false,
+  dashboardWidgetPending: false,
+  dashboardWidgetMetricKey: "",
+  dashboardWidgetType: "",
+  saveWidgetDialogOpen: false,
+  saveWidgetMessageId: null,
+  saveWidgetDraftLabel: "",
+  saveWidgetTitleEdited: false,
+  saveWidgetSuggestionLoading: false,
+  saveWidgetSuggestionError: "",
+  saveWidgetPending: false,
+  saveWidgetError: "",
+  metricEditDialogOpen: false,
+  metricEditWidgetKey: "",
+  metricEditDraftLabel: "",
+  metricEditPending: false,
+  metricEditError: "",
+  metricDeletePendingKey: "",
+  dashboardLayoutSaveTimer: null
 };
+rememberActiveView(state.activeView);
+const WIDGET_TYPES = [
+  { key: "number", label: "Number", icon: "metrics" },
+  { key: "bar", label: "Bar chart", icon: "analysis" },
+  { key: "stacked_bar", label: "Stacked bar", icon: "analysis" },
+  { key: "line", label: "Line chart", icon: "metrics" },
+  { key: "multi_line", label: "Multi-line", icon: "metrics" },
+  { key: "pie", label: "Pie chart", icon: "dashboards" },
+  { key: "area", label: "Area chart", icon: "metrics" },
+  { key: "table", label: "Table", icon: "queries" }
+];
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
-function render(options = {}) {
-  if (!app) return;
-  if (!state.token) {
-    renderLogin();
-    return;
-  }
-  app.innerHTML = `
-    <main class="shell">
-      <header class="header">
-        <h1>GAARD - Governed AI Access to Relational Data</h1>
-        <div class="header-actions">
-          <span>${escapeHtml(state.username || "")}</span>
-          <button type="button" data-logout>Sign Out</button>
+function renderIcon(name) {
+  const icons = {
+    home: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m3 10 9-7 9 7" />
+        <path d="M5 9v11h14V9" />
+        <path d="M9 20v-6h6v6" />
+      </svg>`,
+    analysis: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 19V5" />
+        <path d="M9 19V9" />
+        <path d="M14 19V3" />
+        <path d="M19 19v-7" />
+      </svg>`,
+    metrics: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 19 10 8l4 7 6-11" />
+        <path d="M4 5v14h16" />
+      </svg>`,
+    datasources: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <ellipse cx="12" cy="5" rx="7" ry="3" />
+        <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+        <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+      </svg>`,
+    queries: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-3.5-3.5" />
+      </svg>`,
+    alerts: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+        <path d="M10 21h4" />
+      </svg>`,
+    calendar: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4" />
+        <path d="M8 2v4" />
+        <path d="M3 10h18" />
+      </svg>`,
+    plus: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </svg>`,
+    dashboards: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="3" width="7" height="8" rx="1.5" />
+        <rect x="14" y="3" width="7" height="5" rx="1.5" />
+        <rect x="14" y="12" width="7" height="9" rx="1.5" />
+        <rect x="3" y="15" width="7" height="6" rx="1.5" />
+      </svg>`,
+    history: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
+        <path d="M3 3v5h5" />
+        <path d="M12 7v5l3 2" />
+      </svg>`,
+    sources: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <ellipse cx="12" cy="5" rx="7" ry="3" />
+        <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+        <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+      </svg>`,
+    user: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M20 21a8 8 0 0 0-16 0" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>`,
+    lock: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="4" y="10" width="16" height="10" rx="2" />
+        <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+      </svg>`,
+    arrowUp: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m12 19 0-14" />
+        <path d="m5 12 7-7 7 7" />
+      </svg>`,
+    trash: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 6h18" />
+        <path d="M8 6V4h8v2" />
+        <path d="M19 6l-1 15H6L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+      </svg>`,
+    edit: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </svg>`,
+    chevronDown: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m6 9 6 6 6-6" />
+      </svg>`
+  };
+  return icons[name] || "";
+}
+function renderErrorIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v6" />
+      <path d="M12 17h.01" />
+    </svg>`;
+}
+function renderSidebar() {
+  const items = [
+    ["home", "Home", "Ask your data"],
+    ["analysis", "Analysis", "Dashboards"],
+    ["metrics", "Metrics", "Dashboard widgets"],
+    ["datasources", "Datasources", "Files and sources"],
+    ["queries", "My Queries", "Chat history"],
+    ["alerts", "Alerts", "Alert definitions"]
+  ];
+  return `
+    <aside class="sidebar" aria-label="Navigation">
+      <div class="brand">
+        <img class="brand-logo" src="/assets/getgaard.svg" alt="" />
+        <div class="brand-copy">
+          <strong>GAARD</strong>
+          <span>Data workspace</span>
         </div>
-      </header>
+      </div>
+      <nav class="nav-list" aria-label="Main sections">
+        ${items.map(([view, label, description]) => `
+          <button class="nav-item ${state.activeView === view ? "active" : ""}" type="button" data-view="${escapeHtml(view)}" title="${escapeHtml(label)}">
+            ${renderIcon(view)}
+            <span>
+              <strong>${escapeHtml(label)}</strong>
+              <small>${escapeHtml(description)}</small>
+            </span>
+          </button>`).join("")}
+      </nav>
+      <div class="data-status" role="status">
+        <span class="status-dot"></span>
+        <div>
+          <strong>Data status</strong>
+          <small>All systems operational</small>
+        </div>
+      </div>
+    </aside>`;
+}
+function renderSourcesNavItem(icon, label) {
+  return `
+    <div class="sources-nav">
+      <button class="nav-item ${state.sourcesOpen ? "active" : ""}" type="button" data-toggle-sources aria-expanded="${state.sourcesOpen ? "true" : "false"}" title="${escapeHtml(label)}">
+        ${renderIcon(icon)}
+        <span>${escapeHtml(label)}</span>
+      </button>
+      ${state.sourcesOpen ? renderSourcesPanel() : ""}
+    </div>`;
+}
+function renderSourcesPanel() {
+  const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
+  return `
+    <div class="sources-panel">
+      <div class="source-actions">
+        <button class="source-add" type="button" data-add-source aria-label="Add Excel file" title="Add Excel file" ${state.datasourceUploadPending || !state.token ? "disabled" : ""}>
+          <span aria-hidden="true">+</span>
+        </button>
+        <label class="new-source-state">
+          <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
+          <span>Add as active source</span>
+        </label>
+        
+      </div>
+      <div class="sources-list" aria-live="polite">
+        ${state.datasourcesLoading ? `<div class="source-muted">Loading...</div>` : ""}
+        ${!state.datasourcesLoading && !visibleSources.length ? `<div class="source-muted">No sources</div>` : ""}
+        ${visibleSources.map((source) => `
+          <div class="source-row" title="${escapeHtml(source.name)}">
+            <label class="source-state">
+              <input type="checkbox" data-source-active="${source.id}" ${source.active ? "checked" : ""} ${state.datasourceStatePendingId === source.id ? "disabled" : ""} />
+              <span>${escapeHtml(source.name)}</span>
+            </label>
+            <small>${source.active ? "Active" : "Inactive"}</small>
+          </div>`).join("")}
+      </div>
+      
+      ${state.datasourceError ? `<div class="source-error" role="alert">${escapeHtml(state.datasourceError)}</div>` : ""}
+    </div>`;
+}
+function renderAuthControls() {
+  if (state.token) {
+    return `
+      <div class="signed-in">
+        <button class="ghost-button" type="button" data-new-chat ${state.pending ? "disabled" : ""}>New chat</button>
+        <span class="user-chip" title="${escapeHtml(state.username || "Signed-in user")}">
+          ${renderIcon("user")}
+          <span>${escapeHtml(state.username || "User")}</span>
+        </span>
+        <button class="ghost-button" type="button" data-logout>Log out</button>
+      </div>`;
+  }
+  return `<button class="primary auth-button" type="button" data-open-login>Log in</button>`;
+}
+function renderEmptyState() {
+  if (!state.token) {
+    return `
+      <div class="empty-state locked">
+        <div class="empty-icon">${renderIcon("lock")}</div>
+        <h2>ask your data</h2>
+        <p>Log in to start a conversation.</p>
+        <button class="primary" type="button" data-open-login>Log in</button>
+      </div>`;
+  }
+  return `
+    <div class="empty-state">
+      <img class="empty-logo" src="/assets/getgaard.svg" alt="" />
+      <h2>ask your data</h2>
+      <p>Ask about metrics, records, trends, or run step-by-step analysis.</p>
+    </div>`;
+}
+function renderViewHeading() {
+  if (state.activeView === "analysis") {
+    return renderAnalysisHeading();
+  }
+  const headings = {
+    home: ["Home", "Ask your data"],
+    metrics: ["Metrics", "Defined dashboard widgets"],
+    datasources: ["Datasources", "Files and database sources"],
+    queries: ["My Queries", "Conversation history"],
+    alerts: ["Alerts", "Alert definitions"]
+  };
+  const [eyebrow, title] = headings[state.activeView] || headings.home;
+  return `
+    <div class="conversation-heading">
+      <span>${escapeHtml(eyebrow)}</span>
+      <strong>${escapeHtml(title)}</strong>
+    </div>`;
+}
+function renderAnalysisHeading() {
+  const dashboard = getActiveDashboard();
+  if (state.token && state.dashboardsLoaded && !state.dashboardsLoading && !dashboard) {
+    return `
+    <div class="conversation-heading analysis-heading analysis-heading-empty">
+      <div class="dashboard-title-row">
+        ${renderAddDashboardButton("dashboard-picker-button dashboard-add-heading")}
+      </div>
+    </div>`;
+  }
+  const title = dashboard?.name || "Analysis";
+  const description = dashboard?.description || (dashboard ? "No description yet." : "Create a dashboard to organize saved query widgets.");
+  return `
+    <div class="conversation-heading analysis-heading">
+      <span>Analysis</span>
+      <div class="dashboard-title-row">
+        ${dashboard ? `
+        <button class="dashboard-title-button" type="button" data-edit-active-dashboard aria-label="Edit dashboard details" title="Edit dashboard details">
+          ${escapeHtml(title)}
+        </button>` : `<strong>${escapeHtml(title)}</strong>`}
+        ${renderDashboardPicker()}
+      </div>
+      <p>${escapeHtml(description)}</p>
+    </div>`;
+}
+function renderActiveView() {
+  if (state.activeView === "analysis") {
+    return renderAnalysisView();
+  }
+  if (state.activeView === "metrics") {
+    return renderMetricsView();
+  }
+  if (state.activeView === "datasources") {
+    return renderDatasourcesView();
+  }
+  if (state.activeView === "queries") {
+    return renderQueriesView();
+  }
+  if (state.activeView === "alerts") {
+    return renderPlaceholderView({
+      title: "Alerts",
+      description: "Alert definitions and data monitoring rules will appear here once alert support is added.",
+      items: ["Threshold alerts", "Scheduled checks", "Notification channels"]
+    });
+  }
+  return renderHomeView();
+}
+function renderApiErrorBanner() {
+  if (!state.apiError) {
+    return "";
+  }
+  return `
+    <div class="api-error-banner" role="alert">
+      <div class="api-error-icon">${renderErrorIcon()}</div>
+      <p>${escapeHtml(state.apiError.message)}</p>
+      <button class="api-error-close" type="button" data-dismiss-api-error aria-label="Dismiss error" title="Dismiss">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
+        </svg>
+      </button>
+    </div>`;
+}
+function renderHomeView() {
+  return `
+    <section class="chat-shell" aria-label="GAARD chat">
       <section class="history" aria-live="polite">
-        ${state.messages.length ? state.messages.map(renderMessage).join("") : `<div class="empty-state">Ask a governed data question.</div>`}
+        ${state.messages.length ? state.messages.map(renderMessage).join("") : renderEmptyState()}
       </section>
-      <form id="query-form" class="query-bar">
-        <fieldset class="mode-control" ${state.pending ? "disabled" : ""}>
-          <legend>Mode</legend>
-          <label class="${state.queryMode === "sql" ? "active" : ""}">
-            <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
-            <span>SQL</span>
-          </label>
-          <label class="${state.queryMode === "analysis" ? "active" : ""}">
-            <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
-            <span>Analysis</span>
-          </label>
-        </fieldset>
-        <textarea id="question-input" name="question" placeholder="Ask a question" rows="1" ${state.pending ? "disabled" : ""}></textarea>
-        <button class="send-button" type="submit" aria-label="Send question" title="Send" ${state.pending ? "disabled" : ""}>
+      ${renderQueryForm()}
+    </section>`;
+}
+function renderQueryForm() {
+  const inputDisabled = state.pending || !state.token;
+  return `
+    <form id="query-form" class="query-bar">
+      <fieldset class="mode-control" ${inputDisabled ? "disabled" : ""}>
+        <legend>Work mode</legend>
+        <label class="${state.queryMode === "sql" ? "active" : ""}">
+          <input type="radio" name="mode" value="sql" ${state.queryMode === "sql" ? "checked" : ""}>
+          <span>SQL</span>
+        </label>
+        <label class="${state.queryMode === "analysis" ? "active" : ""}">
+          <input type="radio" name="mode" value="analysis" ${state.queryMode === "analysis" ? "checked" : ""}>
+          <span>Analysis</span>
+        </label>
+      </fieldset>
+      <textarea id="question-input" name="question" placeholder="${state.token ? "Ask your data" : "Log in to ask a question"}" rows="1" ${inputDisabled ? "disabled" : ""}></textarea>
+      <button class="send-button" type="submit" aria-label="Send question" title="Send" ${inputDisabled ? "disabled" : ""}>
+        ${renderIcon("arrowUp")}
+      </button>
+    </form>`;
+}
+function getActiveDashboard() {
+  if (!state.activeDashboardId && state.dashboards.length) {
+    state.activeDashboardId = state.dashboards[0].id || "";
+  }
+  return state.dashboards.find((item) => item.id === state.activeDashboardId) || state.dashboards[0] || null;
+}
+function renderAnalysisView() {
+  const dashboard = getActiveDashboard();
+  return `
+    <section class="dashboard-view" aria-label="Dashboard Analysis">
+      <div class="dashboard-toolbar dashboard-toolbar-compact">
+        ${dashboard && state.token ? `
+        <button class="dashboard-add-widget-button" type="button" data-open-widget-dialog aria-label="Add widget" title="Add widget">
+          ${renderIcon("plus")}
+        </button>` : ""}
+      </div>
+      ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
+      ${state.dashboardWidgetsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardWidgetsError)}</div>` : ""}
+      ${renderAnalysisDashboardBody(dashboard)}
+    </section>`;
+}
+function renderAnalysisDashboardBody(dashboard) {
+  if (!state.token) {
+    return `
+      <div class="dashboard-empty">
+        <h2>Log in to manage dashboards.</h2>
+        <p>Your dashboards are scoped to your authenticated GAARD account.</p>
+        <button class="primary" type="button" data-open-login>Log in</button>
+      </div>`;
+  }
+  if (state.dashboardsLoading && !state.dashboards.length) {
+    return renderDashboardLoadingState(
+      "Loading dashboards...",
+      "Please wait while GAARD prepares your dashboard list."
+    );
+  }
+  if (!dashboard) {
+    return `
+      <div class="dashboard-empty">
+        <h2>No dashboards yet.</h2>
+        <div class="dashboard-empty-copy">
+          <span>Create your first dashboard by clicking</span>
+          ${renderAddDashboardButton("dashboard-inline-add")}
+        </div>
+      </div>`;
+  }
+  return `
+      ${renderDashboardWidgetGrid(dashboard)}
+      <div class="dashboard-fallback" data-dashboard-fallback hidden>
+        Dashboard libraries are loading. Charts will appear when GridStack and ECharts are available.
+      </div>`;
+}
+function renderDashboardWidgetGrid(dashboard) {
+  if (state.dashboardWidgetsLoading && state.dashboardWidgetsDashboardId !== dashboard.id) {
+    return renderDashboardLoadingState(
+      "Loading widgets...",
+      "Please wait while GAARD prepares this dashboard."
+    );
+  }
+  if (!state.dashboardWidgets.length) {
+    return `
+      <div class="dashboard-empty">
+        <h2>No widgets yet.</h2>
+        <div class="dashboard-empty-copy">
+          <span>Add a saved metric to start building this dashboard.</span>
+          <button class="dashboard-inline-add" type="button" data-open-widget-dialog>
+            ${renderIcon("plus")}
+            <span>Add widget</span>
+          </button>
+        </div>
+      </div>`;
+  }
+  return `
+      <div class="grid-stack dashboard-grid">
+        ${state.dashboardWidgets.map(renderDashboardWidget).join("")}
+      </div>`;
+}
+function renderDashboardLoadingState(title, description) {
+  return `
+      <div class="dashboard-empty dashboard-loading">
+        <span class="dashboard-spinner" aria-hidden="true"></span>
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(description)}</p>
+      </div>`;
+}
+function renderDashboardPicker() {
+  const label = state.dashboardsLoading ? "Loading dashboards" : "Choose dashboard";
+  return `
+    <div class="dashboard-picker">
+      <button class="dashboard-picker-button dashboard-picker-icon-button" type="button" data-toggle-dashboard-menu aria-expanded="${state.dashboardMenuOpen ? "true" : "false"}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+        ${renderIcon("dashboards")}
+      </button>
+      ${state.dashboardMenuOpen ? renderDashboardMenu() : ""}
+    </div>`;
+}
+function renderAddDashboardButton(className = "dashboard-add-button") {
+  return `
+      <button class="${className}" type="button" data-toggle-dashboard-create>
+        ${renderIcon("plus")}
+        <span>Add new dashboard</span>
+      </button>`;
+}
+function renderDashboardMenu() {
+  return `
+    <div class="dashboard-menu" role="menu">
+      ${renderAddDashboardButton()}
+      <div class="dashboard-menu-list">
+        ${state.dashboardsLoading ? `<div class="dashboard-menu-empty">Loading...</div>` : ""}
+        ${!state.dashboardsLoading && !state.dashboards.length ? `<div class="dashboard-menu-empty">No dashboards yet.</div>` : ""}
+        ${state.dashboards.map((dashboard) => renderDashboardMenuItem(dashboard)).join("")}
+      </div>
+    </div>`;
+}
+function renderDashboardCreateDialog() {
+  const editing = Boolean(state.dashboardEditId);
+  const editingDashboard = state.dashboardEditId
+    ? state.dashboards.find((dashboard) => dashboard.id === state.dashboardEditId)
+    : null;
+  const title = editing ? "Edit dashboard" : "Add new dashboard";
+  const description = editing
+    ? "Update the dashboard name and description."
+    : "Name the workspace where saved query widgets will be organized.";
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-create-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-dashboard-create aria-label="Close dialog" title="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M22 2 11 13" />
-            <path d="m22 2-7 20-4-9-9-4Z" />
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
           </svg>
         </button>
-      </form>
+        <div class="dashboard-dialog-heading">
+          <span>Analysis</span>
+          <h2 id="dashboard-create-title">${escapeHtml(title)}</h2>
+          <p>${escapeHtml(description)}</p>
+        </div>
+        ${renderDashboardCreateForm(editingDashboard, editing)}
+      </section>
+    </div>`;
+}
+function renderDashboardCreateForm(editingDashboard = null, editing = false) {
+  return `
+    <form class="dashboard-create-form" data-dashboard-create-form>
+      <label>
+        <span>Name</span>
+        <input name="name" maxlength="255" required placeholder="Operations overview" value="${escapeHtml(editingDashboard?.name || "")}" ${state.dashboardCreatePending ? "disabled" : ""} />
+      </label>
+      <label>
+        <span>Description</span>
+        <textarea name="description" maxlength="2000" rows="2" placeholder="Weekly operational snapshot" ${state.dashboardCreatePending ? "disabled" : ""}>${escapeHtml(editingDashboard?.description || "")}</textarea>
+      </label>
+      ${state.dashboardsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardsError)}</div>` : ""}
+      <div class="dashboard-create-actions">
+        <button type="button" data-close-dashboard-create ${state.dashboardCreatePending ? "disabled" : ""}>Cancel</button>
+        <button class="primary" type="submit" ${state.dashboardCreatePending ? "disabled" : ""}>
+          ${state.dashboardCreatePending ? "Saving..." : editing ? "Save changes" : "Create dashboard"}
+        </button>
+      </div>
+    </form>`;
+}
+function renderDashboardWidgetDialog() {
+  const metrics = state.savedMetrics;
+  const selectedMetric = getSelectedSavedMetric();
+  const availableTypes = getAvailableWidgetTypes(selectedMetric);
+  const selectedType = normalizeDashboardWidgetType(state.dashboardWidgetType, availableTypes);
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog dashboard-widget-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-widget-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-widget-dialog aria-label="Close dialog" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Analysis</span>
+          <h2 id="dashboard-widget-title">Add widget</h2>
+          <p>Choose a saved metric and how it should be displayed on this dashboard.</p>
+        </div>
+        ${state.savedMetricsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.savedMetricsError)}</div>` : ""}
+        ${state.savedMetricsLoading ? renderSavedMetricsLoadingState("dashboard-menu-empty") : ""}
+        ${!state.savedMetricsLoading && !metrics.length ? renderNoSavedMetricsState() : ""}
+        ${!state.savedMetricsLoading && metrics.length ? renderDashboardWidgetForm(metrics, selectedMetric, availableTypes, selectedType) : ""}
+      </section>
+    </div>`;
+}
+function renderNoSavedMetricsState() {
+  return `
+    <div class="dashboard-widget-empty">
+      <strong>No saved metrics yet.</strong>
+      <p>Run a query on Home and use the save button on a successful answer.</p>
+    </div>`;
+}
+function renderSavedMetricsLoadingState(className) {
+  return `
+    <div class="${escapeHtml(className)} saved-metrics-loading" role="status" aria-live="polite">
+      <span class="saved-metrics-spinner" aria-hidden="true"></span>
+      <span>Loading saved metrics...</span>
+    </div>`;
+}
+function renderDashboardWidgetForm(metrics, selectedMetric, availableTypes, selectedType) {
+  const defaultTitle = selectedMetric?.label || "Dashboard widget";
+  return `
+    <form class="dashboard-widget-form" data-dashboard-widget-form>
+      <label>
+        <span>Saved metric</span>
+        <select name="metric_widget_key" data-widget-metric-select ${state.dashboardWidgetPending ? "disabled" : ""}>
+          ${metrics.map((metric) => `
+            <option value="${escapeHtml(metric.widget_key)}" ${metric.widget_key === selectedMetric?.widget_key ? "selected" : ""}>${escapeHtml(metric.label || metric.widget_key)}</option>
+          `).join("")}
+        </select>
+      </label>
+      <label>
+        <span>Widget name</span>
+        <input name="title" maxlength="255" required value="${escapeHtml(defaultTitle)}" ${state.dashboardWidgetPending ? "disabled" : ""} />
+      </label>
+      <fieldset class="widget-type-grid">
+        <legend>Widget type</legend>
+        ${WIDGET_TYPES.map((type) => renderWidgetTypeChoice(type, availableTypes, selectedType)).join("")}
+      </fieldset>
+      ${state.dashboardWidgetsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardWidgetsError)}</div>` : ""}
+      <div class="dashboard-create-actions">
+        <button type="button" data-close-widget-dialog ${state.dashboardWidgetPending ? "disabled" : ""}>Cancel</button>
+        <button class="primary" type="submit" ${state.dashboardWidgetPending ? "disabled" : ""}>
+          ${state.dashboardWidgetPending ? "Adding..." : "Add widget"}
+        </button>
+      </div>
+    </form>`;
+}
+function renderWidgetTypeChoice(type, availableTypes, selectedType) {
+  const disabled = !availableTypes.includes(type.key) || state.dashboardWidgetPending;
+  return `
+    <label class="widget-type-choice ${selectedType === type.key ? "active" : ""} ${disabled ? "disabled" : ""}">
+      <input type="radio" name="visualization_type" value="${escapeHtml(type.key)}" ${selectedType === type.key ? "checked" : ""} ${disabled ? "disabled" : ""} data-widget-type-select />
+      <span class="widget-type-preview ${escapeHtml(type.key)}">${renderWidgetTypePreview(type.key)}</span>
+      <strong>${escapeHtml(type.label)}</strong>
+    </label>`;
+}
+function renderSaveWidgetDialog() {
+  const message = state.messages.find((item) => item.id === state.saveWidgetMessageId);
+  const pending = state.saveWidgetPending;
+  const suggestionStatus = state.saveWidgetSuggestionLoading ? `
+    <div class="save-title-status" role="status" aria-live="polite">
+      <span class="saved-metrics-spinner" aria-hidden="true"></span>
+      <span>LLM is suggesting a name...</span>
+    </div>` : state.saveWidgetSuggestionError ? `
+    <div class="save-title-status warning" role="status">${escapeHtml(state.saveWidgetSuggestionError)}</div>` : "";
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog save-metric-dialog" role="dialog" aria-modal="true" aria-labelledby="save-metric-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-save-widget-dialog aria-label="Close dialog" title="Close" ${pending ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Metric</span>
+          <h2 id="save-metric-title">Save metric</h2>
+          <p>LLM suggests a short name from the query. You can edit it before saving.</p>
+        </div>
+        <form class="dashboard-create-form" data-save-widget-form>
+          <label>
+            <span>Metric name</span>
+            <input name="label" maxlength="255" required value="${escapeHtml(state.saveWidgetDraftLabel)}" ${pending ? "disabled" : ""} data-save-widget-label />
+          </label>
+          ${message ? `<div class="save-metric-question">${escapeHtml(message.question)}</div>` : ""}
+          ${suggestionStatus}
+          ${state.saveWidgetError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.saveWidgetError)}</div>` : ""}
+          <div class="dashboard-create-actions">
+            <button type="button" data-close-save-widget-dialog ${pending ? "disabled" : ""}>Cancel</button>
+            <button class="primary" type="submit" ${pending ? "disabled" : ""}>
+              ${pending ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>`;
+}
+function renderMetricEditDialog() {
+  const metric = state.savedMetrics.find((item) => item.widget_key === state.metricEditWidgetKey);
+  const pending = state.metricEditPending;
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog metric-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="metric-edit-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-metric-edit aria-label="Close dialog" title="Close" ${pending ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Metric</span>
+          <h2 id="metric-edit-title">Edit metric name</h2>
+          <p>Change the name shown in the saved metrics list.</p>
+        </div>
+        <form class="dashboard-create-form" data-metric-edit-form>
+          <label>
+            <span>Metric name</span>
+            <input name="label" maxlength="255" required value="${escapeHtml(state.metricEditDraftLabel || metric?.label || "")}" ${pending ? "disabled" : ""} data-metric-edit-label />
+          </label>
+          ${state.metricEditError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.metricEditError)}</div>` : ""}
+          <div class="dashboard-create-actions">
+            <button type="button" data-close-metric-edit ${pending ? "disabled" : ""}>Cancel</button>
+            <button class="primary" type="submit" ${pending ? "disabled" : ""}>
+              ${pending ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>`;
+}
+function renderWidgetTypePreview(type) {
+  if (type === "table") {
+    return `<i></i><i></i><i></i><i></i>`;
+  }
+  if (type === "number") {
+    return `<b>42</b>`;
+  }
+  if (type === "pie") {
+    return `<i></i>`;
+  }
+  return `<i></i><i></i><i></i>`;
+}
+function renderDashboardMenuItem(dashboard) {
+  const selected = dashboard.id === state.activeDashboardId;
+  const deleting = state.dashboardDeletePendingId === dashboard.id;
+  return `
+    <div class="dashboard-menu-item ${selected ? "active" : ""}">
+      <button type="button" data-select-dashboard="${escapeHtml(dashboard.id)}">
+        <strong>${escapeHtml(dashboard.name || "Untitled dashboard")}</strong>
+        <small>${escapeHtml(dashboard.description || "No description")}</small>
+      </button>
+      <button class="dashboard-delete-button" type="button" data-delete-dashboard="${escapeHtml(dashboard.id)}" aria-label="Delete ${escapeHtml(dashboard.name || "dashboard")}" title="Delete dashboard" ${deleting ? "disabled" : ""}>
+        ${renderIcon("trash")}
+      </button>
+    </div>`;
+}
+function renderDashboardWidget(widget) {
+  const layout = widget.layout || {};
+  const content = renderDashboardWidgetContent(widget);
+  return `
+    <div class="grid-stack-item" gs-id="${escapeHtml(widget.id)}" gs-x="${Number(layout.x) || 0}" gs-y="${Number(layout.y) || 0}" gs-w="${Number(layout.w) || 6}" gs-h="${Number(layout.h) || 4}">
+      <article class="grid-stack-item-content dashboard-card dashboard-user-widget">
+        <header>
+          <h2>${escapeHtml(widget.title || widget.metric?.label || "Dashboard widget")}</h2>
+          <button type="button" data-delete-dashboard-widget="${escapeHtml(widget.id)}" aria-label="Remove widget" title="Remove widget">
+            ${renderIcon("trash")}
+          </button>
+        </header>
+        ${content}
+      </article>
+    </div>`;
+}
+function renderDashboardWidgetContent(widget) {
+  const result = widget.result || widget.metric?.result || {};
+  if (result.status && result.status !== "ok") {
+    return `<div class="dashboard-widget-error">${escapeHtml(result.message || result.error || "Widget data could not be loaded.")}</div>`;
+  }
+  if (widget.visualization_type === "table") {
+    return `<div class="dashboard-table-widget">${renderDataTable(getRowsFromResult(result))}</div>`;
+  }
+  if (widget.visualization_type === "number") {
+    return renderDashboardNumberWidget(result);
+  }
+  return `<div class="chart dashboard-widget-chart" data-dashboard-widget-chart="${escapeHtml(widget.id)}"></div>`;
+}
+function renderDashboardNumberWidget(result) {
+  const rows = getRowsFromResult(result);
+  const columns = Array.isArray(result?.columns) && result.columns.length ? result.columns : getColumns(rows);
+  const value = result?.value ?? rows[0]?.[columns[0]] ?? "";
+  const label = columns[0] || "Value";
+  return `
+    <div class="dashboard-number-widget">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatCellValue(value))}</strong>
+    </div>`;
+}
+function renderKpiCard(label, value, delta, helper, direction) {
+  return `
+    <article class="kpi-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <div class="kpi-delta ${direction}">
+        <b>${direction === "up" ? "↗" : "↘"} ${escapeHtml(delta)}</b>
+        <small>${escapeHtml(helper)}</small>
+      </div>
+    </article>`;
+}
+function renderGridWidget(id, title, bodyClass, x, y, w, h, content = "") {
+  return `
+    <div class="grid-stack-item" gs-id="${escapeHtml(id)}" gs-x="${x}" gs-y="${y}" gs-w="${w}" gs-h="${h}">
+      <article class="grid-stack-item-content dashboard-card">
+        <header>
+          <h2>${escapeHtml(title)}</h2>
+          <button type="button" aria-disabled="true" title="Widget settings">⌄</button>
+        </header>
+        <div class="${escapeHtml(bodyClass)}" data-chart="${escapeHtml(id)}">${content}</div>
+      </article>
+    </div>`;
+}
+function renderEpisodeSummary() {
+  return `
+    <div class="episode-summary">
+      <span>New episodes</span>
+      <strong>3,274</strong>
+      <small>↗ 7.1% vs May 5 - May 11</small>
+    </div>
+    <div class="chart-mini" data-chart="episodes-line"></div>`;
+}
+function renderIssuesTable() {
+  const issues = [
+    ["Lab analyzer downtime - Unit 3", "High", "Open", "May 12, 08:15"],
+    ["Radiology report backlog", "Medium", "In progress", "May 12, 07:42"],
+    ["Cardiology devices offline", "Medium", "Open", "May 12, 06:31"],
+    ["OR scheduling conflict", "Low", "Open", "May 11, 16:08"]
+  ];
+  return `
+    <table>
+      <thead><tr><th>Issue</th><th>Severity</th><th>Status</th><th>Opened</th></tr></thead>
+      <tbody>
+        ${issues.map(([issue, severity, status, opened]) => `
+          <tr>
+            <td>${escapeHtml(issue)}</td>
+            <td><span class="severity ${severity.toLowerCase()}">${escapeHtml(severity)}</span></td>
+            <td>${escapeHtml(status)}</td>
+            <td>${escapeHtml(opened)}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    <button class="link-button" type="button" aria-disabled="true">View all issues</button>`;
+}
+function renderQueriesView() {
+  const recent = state.messages.slice(-6).reverse();
+  return `
+    <section class="placeholder-view">
+      <div class="placeholder-intro">
+        <span>Marked feature</span>
+        <h1>My Queries</h1>
+        <p>Full chat history will appear here. For now, this shows recent questions from the current browser session.</p>
+      </div>
+      <div class="placeholder-list query-list">
+        ${recent.length ? recent.map((message) => `
+          <button type="button" data-view="home" class="placeholder-item">
+            ${renderIcon(message.mode === "analysis" ? "analysis" : "queries")}
+            <span>
+              <strong>${escapeHtml(message.question)}</strong>
+              <small>${escapeHtml(formatMode(message.mode))} · ${escapeHtml(message.status)}</small>
+            </span>
+          </button>`).join("") : `
+          <div class="placeholder-item muted">
+            ${renderIcon("queries")}
+            <span><strong>No local queries yet</strong><small>Ask your data on Home to start a session.</small></span>
+          </div>`}
+      </div>
+    </section>`;
+}
+function renderMetricsView() {
+  const groups = groupSavedMetricsByDatasource(state.savedMetrics);
+  const waitingForDatasourceNames = (
+    state.token &&
+    state.savedMetrics.some((metric) => normalizeMetricDatasourceKey(metric) === "default") &&
+    !state.datasourcesLoaded
+  );
+  return `
+    <section class="placeholder-view metrics-view">
+      ${state.savedMetricsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.savedMetricsError)}</div>` : ""}
+      ${state.savedMetricsLoading ? renderDashboardLoadingState("Loading saved metrics...", "Please wait while GAARD prepares your saved metrics.") : ""}
+      ${!state.savedMetricsLoading && waitingForDatasourceNames ? renderDashboardLoadingState("Loading data sources...", "Please wait while GAARD resolves saved metric sources.") : ""}
+      ${!state.savedMetricsLoading && !state.token ? `<div class="datasource-empty">Log in to manage saved metrics.</div>` : ""}
+      ${!state.savedMetricsLoading && state.token && !state.savedMetrics.length ? `<div class="datasource-empty">No saved metrics yet. Save a successful query from Home first.</div>` : ""}
+      ${!state.savedMetricsLoading && !waitingForDatasourceNames && state.savedMetrics.length ? `
+      <div class="metrics-groups">
+        ${groups.map(renderMetricDatasourceGroup).join("")}
+      </div>` : ""}
+    </section>`;
+}
+function normalizeMetricDatasourceKey(metric) {
+  return String(metric.datasource_key || "default").trim() || "default";
+}
+function formatMetricDatasourceName(datasourceKey) {
+  const normalizedKey = String(datasourceKey || "default").trim() || "default";
+  if (normalizedKey === "default") {
+    return formatDefaultMetricDatasourceName();
+  }
+  const source = state.datasources.find((item) => (
+    String(item.connector_key || "") === normalizedKey
+    || String(item.id || "") === normalizedKey
+    || String(item.name || "") === normalizedKey
+  ));
+  if (source) {
+    return source.name || source.connector_key || normalizedKey;
+  }
+  return normalizedKey
+    .replace(/[-_](db|database)$/i, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+function formatDefaultMetricDatasourceName() {
+  const activeSource = state.datasources.find((item) => (
+    item.active && item.connector_key !== "metadata-db"
+  ));
+  const defaultSource = state.datasources.find((item) => item.connector_key === "default");
+  const source = activeSource || defaultSource;
+  const name = source?.name || source?.connector_key || "Default source";
+  return `${name} (default)`;
+}
+function groupSavedMetricsByDatasource(metrics) {
+  const groups = new Map();
+  metrics.forEach((metric) => {
+    const key = normalizeMetricDatasourceKey(metric);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: formatMetricDatasourceName(key),
+        items: []
+      });
+    }
+    groups.get(key).items.push(metric);
+  });
+  return Array.from(groups.values()).sort((left, right) => {
+    if (left.key === "default") return -1;
+    if (right.key === "default") return 1;
+    return left.label.localeCompare(right.label);
+  });
+}
+function renderMetricDatasourceGroup(group) {
+  return `
+    <section class="metric-source-group" aria-label="Data Source: ${escapeHtml(group.label)}">
+      <header class="metric-source-header">
+        <h2>Data Source: ${escapeHtml(group.label)}</h2>
+        <span>${group.items.length} ${group.items.length === 1 ? "metric" : "metrics"}</span>
+      </header>
+      <div class="metrics-list">
+        ${group.items.map(renderSavedMetricCard).join("")}
+      </div>
+    </section>`;
+}
+function renderSavedMetricCard(metric) {
+  const result = metric.result || {};
+  const rows = getRowsFromResult(result);
+  const typeLabel = metric.widget_type === "scalar" ? "Number-ready" : metric.widget_type === "timeseries" ? "Time series" : "Table";
+  const widgetKey = metric.widget_key || "";
+  const deleting = state.metricDeletePendingKey === widgetKey;
+  const label = metric.label || metric.widget_key || "Saved metric";
+  const details = [typeLabel];
+  if (metric.result) {
+    details.push(`${rows.length} rows`);
+  }
+  return `
+    <article class="placeholder-item metric-card">
+      ${renderIcon(metric.widget_type === "scalar" ? "metrics" : "dashboards")}
+      <span>
+        <strong class="metric-title" title="${escapeHtml(label)}">${escapeHtml(label)}</strong>
+        <small>${escapeHtml(details.join(" · "))}</small>
+      </span>
+      <div class="metric-card-actions">
+        <button class="metric-action-button" type="button" data-edit-metric="${escapeHtml(widgetKey)}" aria-label="Edit metric name" title="Edit metric name" ${!widgetKey || deleting ? "disabled" : ""}>
+          ${renderIcon("edit")}
+        </button>
+        <button class="metric-action-button metric-delete-button" type="button" data-delete-metric="${escapeHtml(widgetKey)}" aria-label="Delete metric" title="Delete metric" ${!widgetKey || deleting ? "disabled" : ""}>
+          ${renderIcon("trash")}
+        </button>
+      </div>
+    </article>`;
+}
+function renderDatasourcesView() {
+  const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
+  const uploadLabel = state.datasourceUploadPending
+    ? "Uploading..."
+    : state.token
+      ? "Upload .xlsx workbook"
+      : "Log in to upload .xlsx workbook";
+  return `
+    <section class="datasources-view placeholder-view">
+      <div class="datasource-actions-grid">
+        <button class="placeholder-item datasource-upload-card" type="button" data-add-source ${state.datasourceUploadPending ? "disabled" : ""}>
+          ${renderIcon("plus")}
+          <span><strong>Excel workbooks</strong><small>${escapeHtml(uploadLabel)}</small></span>
+        </button>
+        <label class="datasource-active-toggle">
+          <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
+          <span>
+            <strong>Add uploads as active</strong>
+            <small>New workbooks become available to the chat immediately.</small>
+          </span>
+        </label>
+        <div class="placeholder-item muted">
+          ${renderIcon("plus")}
+          <span><strong>CSV uploads</strong><small>Coming soon</small></span>
+        </div>
+        <div class="placeholder-item muted">
+          ${renderIcon("plus")}
+          <span><strong>Connected databases</strong><small>Coming soon</small></span>
+        </div>
+      </div>
+      <section class="datasource-list-panel" aria-live="polite">
+        <header>
+          <div>
+            <span>Available sources</span>
+            <h2>Select sources to ask questions about.</h2>
+          </div>
+          <button class="ghost-button" type="button" data-refresh-sources ${state.datasourcesLoading || !state.token ? "disabled" : ""}>
+            Refresh
+          </button>
+        </header>
+        ${state.datasourceError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.datasourceError)}</div>` : ""}
+        ${state.datasourcesLoading ? `<div class="datasource-empty">Loading data sources...</div>` : ""}
+        ${!state.datasourcesLoading && !state.token ? `<div class="datasource-empty">Log in to manage Excel workbooks.</div>` : ""}
+        ${!state.datasourcesLoading && state.token && !visibleSources.length ? `<div class="datasource-empty">No Excel workbooks have been added yet.</div>` : ""}
+        ${!state.datasourcesLoading && visibleSources.length ? `
+          <div class="datasource-table">
+            ${visibleSources.map(renderDatasourceRow).join("")}
+          </div>` : ""}
+      </section>
+    </section>`;
+}
+function renderDatasourceRow(source) {
+  const sourceId = Number(source.id);
+  const disabled = state.datasourceStatePendingId === sourceId;
+  const typeLabel = source.database_type || source.connector_key || "datasource";
+  return `
+    <article class="datasource-row">
+      <label class="datasource-row-main">
+        <input type="checkbox" data-source-active="${sourceId}" ${source.active ? "checked" : ""} ${disabled ? "disabled" : ""} />
+        <span>
+          <strong>${escapeHtml(source.name || source.connector_key || "Untitled source")}</strong>
+          <small>${escapeHtml(typeLabel)}</small>
+        </span>
+      </label>
+      <span class="datasource-status ${source.active ? "active" : ""}">${source.active ? "Active" : "Inactive"}</span>
+    </article>`;
+}
+function renderPlaceholderView({ title, description, items }) {
+  return `
+    <section class="placeholder-view">
+      <div class="placeholder-intro">
+        <span>Marked feature</span>
+        <h1>${escapeHtml(title)}</h1>
+        <p>${escapeHtml(description)}</p>
+      </div>
+      <div class="placeholder-list">
+        ${items.map((item) => `
+          <div class="placeholder-item">
+            ${renderIcon("plus")}
+            <span><strong>${escapeHtml(item)}</strong><small>Coming soon</small></span>
+          </div>`).join("")}
+      </div>
+    </section>`;
+}
+function render(options = {}) {
+  if (!app) return;
+  app.innerHTML = `
+    <main class="app-shell">
+      ${renderSidebar()}
+      <section class="workspace-shell" aria-label="GAARD workspace">
+        <header class="topbar">
+          ${renderViewHeading()}
+          <div class="header-actions">
+            ${renderAuthControls()}
+          </div>
+        </header>
+        <div class="api-error-slot">${renderApiErrorBanner()}</div>
+        ${renderActiveView()}
+      </section>
+      <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+      ${state.loginOpen ? renderLoginDialog() : ""}
+      ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
+      ${state.dashboardWidgetDialogOpen ? renderDashboardWidgetDialog() : ""}
+      ${state.saveWidgetDialogOpen ? renderSaveWidgetDialog() : ""}
+      ${state.metricEditDialogOpen ? renderMetricEditDialog() : ""}
     </main>`;
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.addEventListener("click", changeView);
+  });
   document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
   document.querySelector("[data-logout]")?.addEventListener("click", logout);
+  document.querySelector("[data-new-chat]")?.addEventListener("click", newChat);
+  document.querySelectorAll("[data-open-login]").forEach((button) => {
+    button.addEventListener("click", openLogin);
+  });
+  document.querySelector("[data-close-login]")?.addEventListener("click", closeLogin);
+  document.querySelector("[data-dismiss-api-error]")?.addEventListener("click", dismissApiError);
+  document.querySelector("[data-toggle-sources]")?.addEventListener("click", toggleSources);
+  document.querySelector("[data-add-source]")?.addEventListener("click", openSourcePicker);
+  document.querySelector("[data-refresh-sources]")?.addEventListener("click", () => loadDatasources());
+  document.querySelector("[data-new-source-active]")?.addEventListener("change", toggleNewSourceActive);
+  document.querySelectorAll("[data-source-active]").forEach((input2) => {
+    input2.addEventListener("change", updateSourceActive);
+  });
+  document.querySelector("[data-toggle-dashboard-menu]")?.addEventListener("click", toggleDashboardMenu);
+  document.querySelectorAll("[data-toggle-dashboard-create]").forEach((button) => {
+    button.addEventListener("click", openDashboardCreate);
+  });
+  document.querySelector("[data-edit-active-dashboard]")?.addEventListener("click", openActiveDashboardEdit);
+  document.querySelectorAll("[data-close-dashboard-create]").forEach((button) => {
+    button.addEventListener("click", closeDashboardCreate);
+  });
+  document.querySelectorAll("[data-dashboard-create-form]").forEach((form) => {
+    form.addEventListener("submit", createDashboard);
+  });
+  document.querySelectorAll("[data-select-dashboard]").forEach((button) => {
+    button.addEventListener("click", selectDashboard);
+  });
+  document.querySelectorAll("[data-delete-dashboard]").forEach((button) => {
+    button.addEventListener("click", deleteDashboard);
+  });
+  document.querySelectorAll("[data-open-widget-dialog]").forEach((button) => {
+    button.addEventListener("click", openDashboardWidgetDialog);
+  });
+  document.querySelectorAll("[data-close-widget-dialog]").forEach((button) => {
+    button.addEventListener("click", closeDashboardWidgetDialog);
+  });
+  document.querySelector("[data-dashboard-widget-form]")?.addEventListener("submit", addDashboardWidget);
+  document.querySelector("[data-widget-metric-select]")?.addEventListener("change", changeDashboardWidgetMetric);
+  document.querySelectorAll("[data-widget-type-select]").forEach((input2) => {
+    input2.addEventListener("change", changeDashboardWidgetType);
+  });
+  document.querySelectorAll("[data-delete-dashboard-widget]").forEach((button) => {
+    button.addEventListener("click", deleteDashboardWidget);
+  });
+  document.querySelector("#excel-source-input")?.addEventListener("change", uploadSelectedSource);
+  document.querySelector("#login-form")?.addEventListener("submit", login);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
     input2.addEventListener("change", handleModeChange);
   });
@@ -68,6 +1144,22 @@ function render(options = {}) {
   document.querySelectorAll("[data-save-widget]").forEach((button) => {
     button.addEventListener("click", saveWidgetFromMessage);
   });
+  document.querySelectorAll("[data-close-save-widget-dialog]").forEach((button) => {
+    button.addEventListener("click", closeSaveWidgetDialog);
+  });
+  document.querySelector("[data-save-widget-form]")?.addEventListener("submit", confirmSaveWidgetFromDialog);
+  document.querySelector("[data-save-widget-label]")?.addEventListener("input", changeSaveWidgetLabel);
+  document.querySelectorAll("[data-edit-metric]").forEach((button) => {
+    button.addEventListener("click", openMetricEditDialog);
+  });
+  document.querySelectorAll("[data-delete-metric]").forEach((button) => {
+    button.addEventListener("click", deleteSavedMetric);
+  });
+  document.querySelectorAll("[data-close-metric-edit]").forEach((button) => {
+    button.addEventListener("click", closeMetricEditDialog);
+  });
+  document.querySelector("[data-metric-edit-form]")?.addEventListener("submit", saveMetricLabel);
+  document.querySelector("[data-metric-edit-label]")?.addEventListener("input", changeMetricEditLabel);
   document.querySelectorAll("[data-analysis-reply-form]").forEach((form) => {
     form.addEventListener("submit", submitAnalysisReply);
   });
@@ -76,26 +1168,1169 @@ function render(options = {}) {
   });
   const input = document.querySelector("#question-input");
   input?.addEventListener("keydown", handleQuestionKeydown);
-  input?.focus();
+  if (state.token && state.activeView === "home") {
+    input?.focus();
+  }
+  initAnalysisDashboard();
+  maybeLoadDatasourcesForActiveView();
+  maybeLoadDashboardsForActiveView();
+  maybeLoadSavedMetricsForActiveView();
   if (options.scrollToLatest) {
     scrollToLatest();
   }
 }
-function renderLogin() {
-  app.innerHTML = `
-    <main class="login-shell">
-      <section class="login-panel">
-        <h1>GAARD Client</h1>
-        <p>Sign in with your GAARD account.</p>
+var apiErrorTimer = null;
+function apiErrorMessage(error, fallback = "Request failed.") {
+  const raw = typeof error === "string" ? error : error?.message;
+  return String(raw || fallback).trim() || fallback;
+}
+function reportApiError(error, fallback) {
+  const id = state.nextApiErrorId++;
+  state.apiError = {
+    id,
+    message: apiErrorMessage(error, fallback)
+  };
+  if (apiErrorTimer) {
+    clearTimeout(apiErrorTimer);
+  }
+  apiErrorTimer = setTimeout(() => {
+    if (state.apiError?.id === id) {
+      state.apiError = null;
+      render();
+    }
+  }, 8000);
+}
+function dismissApiError() {
+  if (apiErrorTimer) {
+    clearTimeout(apiErrorTimer);
+    apiErrorTimer = null;
+  }
+  state.apiError = null;
+  render();
+}
+function formatApiResponseError(response, message) {
+  const detail = apiErrorMessage(message);
+  const status = response?.status;
+  if (!status) {
+    return detail;
+  }
+  const statusText = response.statusText ? ` ${response.statusText}` : "";
+  const prefix = `HTTP ${status}${statusText}`;
+  return detail === "Request failed." ? `${prefix}: Request failed.` : `${prefix}: ${detail}`;
+}
+function maybeLoadDatasourcesForActiveView() {
+    if ((state.activeView === "datasources" || state.activeView === "metrics") && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
+        void loadDatasources();
+    }
+}
+function maybeLoadDashboardsForActiveView() {
+    if (state.activeView === "analysis" && state.token && !state.dashboardsLoaded && !state.dashboardsLoading) {
+        void loadDashboards();
+        return;
+    }
+    if (
+        state.activeView === "analysis" &&
+        state.token &&
+        state.activeDashboardId &&
+        state.dashboardWidgetsDashboardId !== state.activeDashboardId &&
+        !state.dashboardWidgetsLoading
+    ) {
+        void loadDashboardWidgets(state.activeDashboardId);
+    }
+}
+function maybeLoadSavedMetricsForActiveView() {
+    if (state.activeView === "metrics" && state.token && !state.savedMetricsLoaded && !state.savedMetricsLoading) {
+        void loadSavedMetrics({ includeResult: false });
+    }
+}
+async function toggleSources() {
+    state.sourcesOpen = !state.sourcesOpen;
+    state.datasourceError = "";
+    render();
+    if (state.sourcesOpen && state.token && !state.datasourcesLoaded) {
+        await loadDatasources();
+    }
+}
+async function loadDashboards() {
+    if (!state.token) {
+        state.dashboards = [];
+        state.dashboardsLoaded = false;
+        state.activeDashboardId = "";
+        return;
+    }
+    state.dashboardsLoading = true;
+    state.dashboardsError = "";
+    render();
+    try {
+        const response = await fetch(`/api/dashboards?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboards = payload.items || [];
+        state.dashboardsLoaded = true;
+        state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || state.dashboards[0]?.id || "";
+        if (state.activeDashboardId) {
+            await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+        }
+    } catch (error) {
+        state.dashboardsError = error.message || "Could not load dashboards.";
+        reportApiError(error, "Could not load dashboards.");
+        state.dashboardsLoaded = true;
+    } finally {
+        state.dashboardsLoading = false;
+        render();
+    }
+}
+function toggleDashboardMenu() {
+    state.dashboardMenuOpen = !state.dashboardMenuOpen;
+    state.dashboardsError = "";
+    render();
+    if (state.dashboardMenuOpen && state.token && !state.dashboardsLoaded) {
+        void loadDashboards();
+    }
+}
+function openDashboardCreate() {
+    state.dashboardCreateOpen = true;
+    state.dashboardEditId = "";
+    state.dashboardMenuOpen = false;
+    state.dashboardsError = "";
+    render();
+}
+function openActiveDashboardEdit() {
+    const dashboard = getActiveDashboard();
+    if (!dashboard?.id || !state.token) return;
+    state.dashboardCreateOpen = true;
+    state.dashboardEditId = dashboard.id;
+    state.dashboardMenuOpen = false;
+    state.dashboardsError = "";
+    render();
+}
+function closeDashboardCreate() {
+    if (state.dashboardCreatePending) return;
+    state.dashboardCreateOpen = false;
+    state.dashboardEditId = "";
+    state.dashboardsError = "";
+    render();
+}
+async function selectDashboard(event) {
+    const dashboardId = event.currentTarget.dataset.selectDashboard || "";
+    if (!dashboardId || dashboardId === state.activeDashboardId) {
+        state.dashboardMenuOpen = false;
+        state.dashboardCreateOpen = false;
+        state.dashboardEditId = "";
+        render();
+        return;
+    }
+    const previousDashboardId = state.activeDashboardId;
+    const previousWidgets = state.dashboardWidgets;
+    const previousWidgetsDashboardId = state.dashboardWidgetsDashboardId;
+    state.activeDashboardId = dashboardId;
+    state.dashboardWidgets = [];
+    state.dashboardWidgetsDashboardId = "";
+    state.dashboardWidgetsLoading = true;
+    state.dashboardMenuOpen = false;
+    state.dashboardCreateOpen = false;
+    state.dashboardEditId = "";
+    render();
+    try {
+        const response = await fetch("/api/dashboards/active", {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                dashboard_id: dashboardId,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || dashboardId;
+        await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+    } catch (error) {
+        state.activeDashboardId = previousDashboardId;
+        state.dashboardWidgets = previousWidgets;
+        state.dashboardWidgetsDashboardId = previousWidgetsDashboardId;
+        state.dashboardsError = error.message || "Could not select dashboard.";
+        reportApiError(error, "Could not select dashboard.");
+    } finally {
+        state.dashboardWidgetsLoading = false;
+        render();
+    }
+}
+async function createDashboard(event) {
+    event.preventDefault();
+    if (!state.token || state.dashboardCreatePending) return;
+    const editingDashboardId = state.dashboardEditId;
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "").trim();
+    const description = String(form.get("description") || "").trim();
+    if (!name) {
+        state.dashboardsError = "Dashboard name is required.";
+        render();
+        return;
+    }
+    state.dashboardCreatePending = true;
+    state.dashboardsError = "";
+    render();
+    try {
+        const response = await fetch(
+            editingDashboardId
+                ? `/api/dashboards/${encodeURIComponent(editingDashboardId)}`
+                : "/api/dashboards",
+            {
+                method: editingDashboardId ? "PUT" : "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...authHeaders()
+                },
+                body: JSON.stringify({
+                    name,
+                    description,
+                    backend_url: state.backendUrl
+                })
+            }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            if (editingDashboardId) {
+                state.dashboards = state.dashboards.map((dashboard) => (
+                    dashboard.id === payload.item.id ? payload.item : dashboard
+                ));
+            } else {
+                state.dashboards = [
+                    payload.item,
+                    ...state.dashboards.filter((dashboard) => dashboard.id !== payload.item.id)
+                ];
+                state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || payload.item.id || "";
+                state.dashboardWidgets = [];
+                state.dashboardWidgetsDashboardId = state.activeDashboardId;
+            }
+        }
+        state.dashboardsLoaded = true;
+        state.dashboardCreateOpen = false;
+        state.dashboardEditId = "";
+        state.dashboardMenuOpen = false;
+    } catch (error) {
+        state.dashboardsError = error.message || (editingDashboardId ? "Could not update dashboard." : "Could not create dashboard.");
+        reportApiError(error, editingDashboardId ? "Could not update dashboard." : "Could not create dashboard.");
+    } finally {
+        state.dashboardCreatePending = false;
+        render();
+    }
+}
+async function deleteDashboard(event) {
+    event.stopPropagation();
+    const dashboardId = event.currentTarget.dataset.deleteDashboard || "";
+    const dashboard = state.dashboards.find((item) => item.id === dashboardId);
+    if (!dashboardId || state.dashboardDeletePendingId) return;
+    if (!window.confirm(`Delete dashboard "${dashboard?.name || "Untitled dashboard"}"?`)) {
+        return;
+    }
+    state.dashboardDeletePendingId = dashboardId;
+    state.dashboardsError = "";
+    render();
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}?${params.toString()}`, {
+            method: "DELETE",
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboards = state.dashboards.filter((item) => item.id !== dashboardId);
+        if (state.activeDashboardId === dashboardId) {
+            state.activeDashboardId = payload.active_dashboard_id || state.dashboards[0]?.id || "";
+            state.dashboardWidgets = [];
+            state.dashboardWidgetsDashboardId = "";
+            if (state.activeDashboardId) {
+                await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+            }
+        }
+    } catch (error) {
+        state.dashboardsError = error.message || "Could not delete dashboard.";
+        reportApiError(error, "Could not delete dashboard.");
+    } finally {
+        state.dashboardDeletePendingId = "";
+        render();
+    }
+}
+async function loadDashboardWidgets(dashboardId, options = {}) {
+    if (!state.token || !dashboardId) {
+        state.dashboardWidgets = [];
+        state.dashboardWidgetsDashboardId = "";
+        return;
+    }
+    state.dashboardWidgetsLoading = true;
+    state.dashboardWidgetsError = "";
+    if (!options.silent) {
+        render();
+    }
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/widgets?${params.toString()}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (dashboardId === state.activeDashboardId) {
+            state.dashboardWidgets = payload.items || [];
+            state.dashboardWidgetsDashboardId = dashboardId;
+        }
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not load dashboard widgets.";
+        reportApiError(error, "Could not load dashboard widgets.");
+        if (dashboardId === state.activeDashboardId) {
+            state.dashboardWidgetsDashboardId = dashboardId;
+        }
+    } finally {
+        state.dashboardWidgetsLoading = false;
+        render();
+    }
+}
+async function loadSavedMetrics(options = {}) {
+    const includeResult = options.includeResult !== false;
+    if (!state.token) {
+        state.savedMetrics = [];
+        state.savedMetricsLoaded = false;
+        state.savedMetricsResultsLoaded = false;
+        return;
+    }
+    state.savedMetricsLoading = true;
+    state.savedMetricsError = "";
+    if (!options.silent) {
+        render();
+    }
+    try {
+        const params = new URLSearchParams({
+            backend_url: state.backendUrl,
+            include_result: includeResult ? "true" : "false"
+        });
+        const response = await fetch(`/api/dashboard-metrics?${params.toString()}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        const items = payload.items || [];
+        state.savedMetrics = includeResult ? items : mergeSavedMetricsPreservingResults(items);
+        state.savedMetricsLoaded = true;
+        state.savedMetricsResultsLoaded = includeResult || state.savedMetrics.every((metric) => Boolean(metric.result));
+        if (!state.dashboardWidgetMetricKey && state.savedMetrics.length) {
+            state.dashboardWidgetMetricKey = state.savedMetrics[0].widget_key || "";
+            state.dashboardWidgetType = recommendWidgetType(state.savedMetrics[0]);
+        }
+    } catch (error) {
+        state.savedMetricsError = error.message || "Could not load saved metrics.";
+        reportApiError(error, "Could not load saved metrics.");
+        state.savedMetricsLoaded = true;
+    } finally {
+        state.savedMetricsLoading = false;
+        render();
+        if (state.dashboardWidgetDialogOpen && !includeResult && !state.savedMetricsResultsLoaded && state.token) {
+            void loadSavedMetrics({ includeResult: true });
+        }
+    }
+}
+function mergeSavedMetricsPreservingResults(items) {
+    const existingByKey = new Map(state.savedMetrics.map((metric) => [metric.widget_key, metric]));
+    return items.map((item) => {
+        const existing = existingByKey.get(item.widget_key);
+        if (!existing?.result) return item;
+        return {
+            ...existing,
+            ...item,
+            result: existing.result
+        };
+    });
+}
+function openMetricEditDialog(event) {
+    const widgetKey = event.currentTarget.dataset.editMetric || "";
+    const metric = state.savedMetrics.find((item) => item.widget_key === widgetKey);
+    if (!metric || !widgetKey) return;
+    state.metricEditDialogOpen = true;
+    state.metricEditWidgetKey = widgetKey;
+    state.metricEditDraftLabel = metric.label || metric.widget_key || "";
+    state.metricEditPending = false;
+    state.metricEditError = "";
+    render();
+}
+function closeMetricEditDialog() {
+    if (state.metricEditPending) return;
+    state.metricEditDialogOpen = false;
+    state.metricEditWidgetKey = "";
+    state.metricEditDraftLabel = "";
+    state.metricEditError = "";
+    render();
+}
+function changeMetricEditLabel(event) {
+    state.metricEditDraftLabel = event.currentTarget.value || "";
+}
+function applySavedMetricDelete(widgetKey) {
+    state.savedMetrics = state.savedMetrics.filter((metric) => metric.widget_key !== widgetKey);
+    state.dashboardWidgets = state.dashboardWidgets.filter(
+        (widget) => widget.metric_widget_key !== widgetKey
+    );
+    if (state.dashboardWidgetMetricKey === widgetKey) {
+        state.dashboardWidgetMetricKey = state.savedMetrics[0]?.widget_key || "";
+        state.dashboardWidgetType = state.savedMetrics[0]
+            ? recommendWidgetType(state.savedMetrics[0])
+            : "";
+    }
+    if (state.metricEditWidgetKey === widgetKey) {
+        state.metricEditDialogOpen = false;
+        state.metricEditWidgetKey = "";
+        state.metricEditDraftLabel = "";
+        state.metricEditError = "";
+    }
+}
+function applySavedMetricUpdate(metric) {
+    if (!metric?.widget_key) return;
+    state.savedMetrics = state.savedMetrics.map((item) => (
+        item.widget_key === metric.widget_key
+            ? { ...item, ...metric, result: metric.result || item.result }
+            : item
+    ));
+    state.dashboardWidgets = state.dashboardWidgets.map((widget) => {
+        if (widget.metric_widget_key !== metric.widget_key || !widget.metric) {
+            return widget;
+        }
+        const nextMetric = {
+            ...widget.metric,
+            ...metric,
+            result: metric.result || widget.metric.result
+        };
+        return {
+            ...widget,
+            metric: nextMetric,
+            result: nextMetric.result || widget.result
+        };
+    });
+}
+async function deleteSavedMetric(event) {
+    const widgetKey = event.currentTarget.dataset.deleteMetric || "";
+    if (!state.token || !widgetKey || state.metricDeletePendingKey) return;
+    if (!window.confirm("Deleting this metric will also remove it from all dashboards.")) {
+        return;
+    }
+    state.metricDeletePendingKey = widgetKey;
+    state.savedMetricsError = "";
+    render();
+    const params = new URLSearchParams({ backend_url: state.backendUrl });
+    try {
+        const response = await fetch(
+            `/api/dashboard-metrics/${encodeURIComponent(widgetKey)}?${params.toString()}`,
+            {
+                method: "DELETE",
+                headers: authHeaders()
+            }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        applySavedMetricDelete(widgetKey);
+    } catch (error) {
+        state.savedMetricsError = error.message || "Metric could not be deleted.";
+        reportApiError(error, "Metric could not be deleted.");
+    } finally {
+        state.metricDeletePendingKey = "";
+        render();
+    }
+}
+async function saveMetricLabel(event) {
+    event.preventDefault();
+    if (!state.token || state.metricEditPending) return;
+    const form = new FormData(event.currentTarget);
+    const label = String(form.get("label") || "").trim();
+    const widgetKey = state.metricEditWidgetKey;
+    if (!widgetKey || !label) {
+        state.metricEditError = "Enter a metric name.";
+        render();
+        return;
+    }
+    state.metricEditPending = true;
+    state.metricEditError = "";
+    state.metricEditDraftLabel = label;
+    render();
+    try {
+        const response = await fetch(`/api/dashboard-metrics/${encodeURIComponent(widgetKey)}`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                label,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            applySavedMetricUpdate(payload.item);
+        }
+        state.metricEditDialogOpen = false;
+        state.metricEditWidgetKey = "";
+        state.metricEditDraftLabel = "";
+        state.metricEditError = "";
+    } catch (error) {
+        state.metricEditError = error.message || "Metric name could not be saved.";
+        reportApiError(error, "Metric name could not be saved.");
+    } finally {
+        state.metricEditPending = false;
+        render();
+    }
+}
+function openDashboardWidgetDialog() {
+    if (!state.token) {
+        openLogin();
+        return;
+    }
+    if (!state.activeDashboardId) {
+        state.dashboardWidgetsError = "Create a dashboard before adding widgets.";
+        render();
+        return;
+    }
+    state.dashboardWidgetDialogOpen = true;
+    state.dashboardWidgetsError = "";
+    render();
+    if ((!state.savedMetricsLoaded || !state.savedMetricsResultsLoaded) && !state.savedMetricsLoading) {
+        void loadSavedMetrics({ includeResult: true });
+    } else if (state.savedMetrics.length && !state.dashboardWidgetMetricKey) {
+        state.dashboardWidgetMetricKey = state.savedMetrics[0].widget_key || "";
+        state.dashboardWidgetType = recommendWidgetType(state.savedMetrics[0]);
+        render();
+    }
+}
+function closeDashboardWidgetDialog() {
+    if (state.dashboardWidgetPending) return;
+    state.dashboardWidgetDialogOpen = false;
+    state.dashboardWidgetsError = "";
+    render();
+}
+function changeDashboardWidgetMetric(event) {
+    state.dashboardWidgetMetricKey = event.currentTarget.value || "";
+    const metric = getSelectedSavedMetric();
+    state.dashboardWidgetType = recommendWidgetType(metric);
+    render();
+}
+function changeDashboardWidgetType(event) {
+    state.dashboardWidgetType = event.currentTarget.value || "";
+    render();
+}
+async function addDashboardWidget(event) {
+    event.preventDefault();
+    if (!state.token || state.dashboardWidgetPending || !state.activeDashboardId) return;
+    const form = new FormData(event.currentTarget);
+    const metricWidgetKey = String(form.get("metric_widget_key") || "").trim();
+    const title = String(form.get("title") || "").trim();
+    const selectedMetric = state.savedMetrics.find((metric) => metric.widget_key === metricWidgetKey);
+    const availableTypes = getAvailableWidgetTypes(selectedMetric);
+    const visualizationType = normalizeDashboardWidgetType(String(form.get("visualization_type") || ""), availableTypes);
+    if (!metricWidgetKey || !title) {
+        state.dashboardWidgetsError = "Choose a saved metric and name the widget.";
+        render();
+        return;
+    }
+    state.dashboardWidgetPending = true;
+    state.dashboardWidgetsError = "";
+    render();
+    try {
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(state.activeDashboardId)}/widgets`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                metric_widget_key: metricWidgetKey,
+                title,
+                visualization_type: visualizationType,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            state.dashboardWidgets = [...state.dashboardWidgets, payload.item];
+            state.dashboardWidgetsDashboardId = state.activeDashboardId;
+        }
+        await loadDashboardWidgets(state.activeDashboardId, { silent: true });
+        state.dashboardWidgetDialogOpen = false;
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not add widget.";
+        reportApiError(error, "Could not add widget.");
+    } finally {
+        state.dashboardWidgetPending = false;
+        render();
+    }
+}
+async function deleteDashboardWidget(event) {
+    const widgetId = event.currentTarget.dataset.deleteDashboardWidget || "";
+    if (!widgetId || !state.activeDashboardId) return;
+    if (!window.confirm("Remove this widget from the dashboard?")) {
+        return;
+    }
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(state.activeDashboardId)}/widgets/${encodeURIComponent(widgetId)}?${params.toString()}`, {
+            method: "DELETE",
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboardWidgets = state.dashboardWidgets.filter((widget) => widget.id !== widgetId);
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not remove widget.";
+        reportApiError(error, "Could not remove widget.");
+    } finally {
+        render();
+    }
+}
+function scheduleDashboardLayoutSave() {
+    const dashboardId = state.activeDashboardId;
+    if (state.dashboardLayoutSaveTimer) {
+        clearTimeout(state.dashboardLayoutSaveTimer);
+    }
+    state.dashboardLayoutSaveTimer = setTimeout(() => {
+        void saveDashboardLayout(dashboardId);
+    }, 600);
+}
+async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
+    if (!dashboardId || dashboardId !== state.activeDashboardId || !state.token) return;
+    const items = collectDashboardLayout();
+    if (!items.length) return;
+    state.dashboardLayoutSaveTimer = null;
+    try {
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/widgets/layout`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                items,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (dashboardId !== state.activeDashboardId) return;
+        const updatedWidgets = new Map((payload.items || []).map((widget) => [widget.id, widget]));
+        const layoutById = new Map(items.map((item) => [item.widget_id, item]));
+        state.dashboardWidgets = state.dashboardWidgets.map((widget) => {
+            const updated = updatedWidgets.get(widget.id);
+            if (updated) {
+                return updated;
+            }
+            const layout = layoutById.get(widget.id);
+            if (!layout) {
+                return widget;
+            }
+            return {
+                ...widget,
+                layout: {
+                    x: layout.x,
+                    y: layout.y,
+                    w: layout.w,
+                    h: layout.h
+                }
+            };
+        });
+    } catch (error) {
+        state.dashboardWidgetsError = error.message || "Could not save widget layout.";
+        reportApiError(error, "Could not save widget layout.");
+        render();
+    }
+}
+function collectDashboardLayout() {
+    return Array.from(document.querySelectorAll(".dashboard-grid .grid-stack-item")).map((element) => {
+        const node = element.gridstackNode || {};
+        return {
+            widget_id: element.getAttribute("gs-id") || node.id || "",
+            x: Number.isFinite(node.x) ? node.x : Number(element.getAttribute("gs-x") || 0),
+            y: Number.isFinite(node.y) ? node.y : Number(element.getAttribute("gs-y") || 0),
+            w: Number.isFinite(node.w) ? node.w : Number(element.getAttribute("gs-w") || 6),
+            h: Number.isFinite(node.h) ? node.h : Number(element.getAttribute("gs-h") || 4)
+        };
+    }).filter((item) => item.widget_id);
+}
+function openSourcePicker() {
+    if (state.datasourceUploadPending) return;
+    if (!state.token) {
+        openLogin();
+        return;
+    }
+    const input = document.querySelector("#excel-source-input");
+    if (!input) return;
+    input.value = "";
+    input.click();
+}
+function toggleNewSourceActive(event) {
+    state.newDatasourceActive = event.currentTarget.checked;
+}
+function mergeDatasourcesPreservingOrder(currentItems, nextItems) {
+    const nextById = new Map(nextItems.map((item) => [String(item.id), item]));
+    const seen = new Set();
+    const merged = currentItems.reduce((items, item) => {
+        const key = String(item.id);
+        const next = nextById.get(key);
+        if (!next) return items;
+        seen.add(key);
+        items.push(next);
+        return items;
+    }, []);
+    nextItems.forEach((item) => {
+        const key = String(item.id);
+        if (!seen.has(key)) {
+            merged.push(item);
+        }
+    });
+    return merged;
+}
+async function loadDatasources(options = {}) {
+    state.datasourcesLoading = true;
+    state.datasourceError = "";
+    render();
+    try {
+        const response = await fetch(`/api/datasources?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        const items = payload.items || [];
+        state.datasources = options.preserveOrder ? mergeDatasourcesPreservingOrder(state.datasources, items) : items;
+        state.datasourcesLoaded = true;
+    } catch (error) {
+        state.datasourceError = error.message || "Could not load data sources.";
+        reportApiError(error, "Could not load data sources.");
+        state.datasourcesLoaded = true;
+    } finally {
+        state.datasourcesLoading = false;
+        render();
+    }
+}
+async function uploadSelectedSource(event) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        state.datasourceError = "Choose an .xlsx file.";
+        render();
+        return;
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    state.datasourceUploadPending = true;
+    state.datasourceError = "";
+    render();
+    try {
+        const params = new URLSearchParams({
+            backend_url: state.backendUrl,
+            active: state.newDatasourceActive ? "true" : "false"
+        });
+        const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: formData
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(friendlyDatasourceError(formatApiResponseError(response, extractErrorMessage(payload))));
+        }
+        if (payload.item) {
+            state.datasources = mergeDatasourcesPreservingOrder(state.datasources, [
+                ...state.datasources,
+                payload.item
+            ]);
+        }
+        state.datasourcesLoaded = false;
+        await loadDatasources();
+    } catch (error) {
+        state.datasourceError = error.message || "Could not add the data source.";
+        reportApiError(error, "Could not add the data source.");
+    } finally {
+        state.datasourceUploadPending = false;
+        input.value = "";
+        render();
+    }
+}
+async function updateSourceActive(event) {
+    const input = event.currentTarget;
+    const sourceId = Number(input.dataset.sourceActive);
+    const active = input.checked;
+    if (!sourceId || state.datasourceStatePendingId) return;
+    state.datasourceStatePendingId = sourceId;
+    state.datasourceError = "";
+    render();
+    try {
+        const response = await fetch(`/api/datasources/${sourceId}/state`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                active,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(friendlyDatasourceError(formatApiResponseError(response, extractErrorMessage(payload))));
+        }
+        await loadDatasources({ preserveOrder: true });
+    } catch (error) {
+        state.datasourceError = error.message || "Could not update the source state.";
+        reportApiError(error, "Could not update the source state.");
+    } finally {
+        state.datasourceStatePendingId = null;
+        render();
+    }
+}
+function friendlyDatasourceError(message) {
+    if (message.includes("non-SQL source support") || message.includes("LICENSE_ENTITLEMENT_REQUIRED")) {
+        return "This license does not allow Excel files to be used as data sources.";
+    }
+    if (message.includes("multi-source access")) {
+        return "Using multiple active data sources requires a license with multi-source support.";
+    }
+    return message;
+}
+function changeView(event) {
+  const view = normalizeView(event.currentTarget.dataset.view);
+  if (state.activeView === view) return;
+  state.activeView = view;
+  rememberActiveView(view);
+  state.error = "";
+  state.dashboardMenuOpen = false;
+  state.dashboardCreateOpen = false;
+  state.dashboardEditId = "";
+  render();
+}
+function initAnalysisDashboard() {
+  if (state.activeView !== "analysis") return;
+  const gridElement = document.querySelector(".dashboard-grid");
+  if (!gridElement) return;
+  if (window.GridStack) {
+    const grid = window.GridStack.init(
+      {
+        cellHeight: 94,
+        column: 12,
+        disableResize: false,
+        float: false,
+        margin: 12,
+        alwaysShowResizeHandle: true,
+        staticGrid: false,
+        resizable: { handles: "e,se,s,sw,w" }
+      },
+      gridElement
+    );
+    grid.enableResize?.(true);
+    grid.off?.("change dragstop resizestop");
+    grid.on?.("change dragstop resizestop", () => scheduleDashboardLayoutSave());
+  } else {
+    document.querySelector("[data-dashboard-fallback]")?.removeAttribute("hidden");
+  }
+  if (window.echarts) {
+    renderDashboardCharts();
+  } else {
+    document.querySelector("[data-dashboard-fallback]")?.removeAttribute("hidden");
+  }
+}
+function renderDashboardCharts() {
+  state.dashboardWidgets.forEach((widget) => {
+    if (["number", "table"].includes(widget.visualization_type)) return;
+    const element = document.querySelector(`[data-dashboard-widget-chart="${selectorAttributeValue(widget.id)}"]`);
+    if (!element) return;
+    const options = dashboardWidgetChartOptions(widget);
+    if (!options) {
+      element.innerHTML = `<div class="dashboard-widget-error">This data cannot be displayed as ${escapeHtml(widget.visualization_type)}.</div>`;
+      return;
+    }
+    const chart = window.echarts.init(element, null, { renderer: "canvas" });
+    chart.setOption(options);
+    window.addEventListener("resize", () => chart.resize(), { passive: true });
+    const gridItem = element.closest(".grid-stack-item");
+    if (gridItem && window.ResizeObserver) {
+      new ResizeObserver(() => chart.resize()).observe(gridItem);
+    }
+  });
+}
+function selectorAttributeValue(value) {
+  return String(value ?? "").replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+function dashboardWidgetChartOptions(widget) {
+  const result = widget.result || widget.metric?.result || {};
+  const profile = getTabularProfile(result);
+  const { rows, numericColumns, dimensionColumns } = profile;
+  const categoryColumn = dimensionColumns[0] || profile.columns[0];
+  if (!rows.length || !categoryColumn) return null;
+  if (widget.visualization_type === "pie") {
+    const valueColumn = numericColumns[0];
+    if (!valueColumn) return null;
+    return pieWidgetOptions(aggregateRowsByCategory(rows, categoryColumn, valueColumn), "category", "value");
+  }
+  const seriesColumns = numericColumns.length ? numericColumns : profile.columns.filter((column) => column !== categoryColumn);
+  if (!seriesColumns.length) return null;
+  if (widget.visualization_type === "bar") {
+    const axisRows = profile.hasLongSeries
+      ? aggregateRowsByCategory(rows, categoryColumn, numericColumns[0])
+      : rows;
+    return axisWidgetOptions(axisRows, profile.hasLongSeries ? "category" : categoryColumn, profile.hasLongSeries ? ["value"] : seriesColumns, "bar");
+  }
+  if (widget.visualization_type === "stacked_bar") {
+    if (profile.hasLongSeries) {
+      return longSeriesWidgetOptions(rows, dimensionColumns[0], dimensionColumns[1], numericColumns[0], "bar", { stacked: true });
+    }
+    return axisWidgetOptions(rows, categoryColumn, seriesColumns, "bar", { stacked: true });
+  }
+  if (widget.visualization_type === "line") {
+    const axisRows = profile.hasLongSeries
+      ? aggregateRowsByCategory(rows, categoryColumn, numericColumns[0])
+      : rows;
+    return axisWidgetOptions(axisRows, profile.hasLongSeries ? "category" : categoryColumn, profile.hasLongSeries ? ["value"] : seriesColumns.slice(0, 1), "line");
+  }
+  if (widget.visualization_type === "multi_line") {
+    if (profile.hasLongSeries) {
+      return longSeriesWidgetOptions(rows, dimensionColumns[0], dimensionColumns[1], numericColumns[0], "line");
+    }
+    return axisWidgetOptions(rows, categoryColumn, seriesColumns, "line");
+  }
+  if (widget.visualization_type === "area") {
+    const axisRows = profile.hasLongSeries
+      ? aggregateRowsByCategory(rows, categoryColumn, numericColumns[0])
+      : rows;
+    return axisWidgetOptions(axisRows, profile.hasLongSeries ? "category" : categoryColumn, profile.hasLongSeries ? ["value"] : seriesColumns.slice(0, 1), "line", { area: true });
+  }
+  return null;
+}
+function longSeriesWidgetOptions(rows, categoryColumn, seriesColumn, valueColumn, type, options = {}) {
+  const categories = uniqueValues(rows.map((row) => formatCellValue(row?.[categoryColumn])));
+  const seriesNames = uniqueValues(rows.map((row) => formatCellValue(row?.[seriesColumn])));
+  const sums = new Map();
+  rows.forEach((row) => {
+    const category = formatCellValue(row?.[categoryColumn]);
+    const series = formatCellValue(row?.[seriesColumn]);
+    const key = `${category}\u0000${series}`;
+    sums.set(key, (sums.get(key) || 0) + (Number(row?.[valueColumn]) || 0));
+  });
+  return {
+    animationDuration: 650,
+    color: ["#2368d9", "#19a7a8", "#7aaeea", "#5b8ee8", "#6cc6d8"],
+    tooltip: { trigger: "axis", axisPointer: { type: type === "bar" ? "shadow" : "line" } },
+    legend: { right: 8, top: 6, textStyle: chartTextStyle() },
+    grid: { left: 42, right: 20, top: 42, bottom: 32 },
+    xAxis: {
+      type: "category",
+      boundaryGap: type === "bar",
+      data: categories,
+      axisLabel: chartTextStyle(),
+      axisTick: { show: false }
+    },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: seriesNames.map((series) => ({
+      name: series,
+      type,
+      smooth: type === "line",
+      stack: options.stacked ? "total" : void 0,
+      data: categories.map((category) => sums.get(`${category}\u0000${series}`) || 0)
+    }))
+  };
+}
+function axisWidgetOptions(rows, categoryColumn, seriesColumns, type, options = {}) {
+  return {
+    animationDuration: 650,
+    color: ["#2368d9", "#19a7a8", "#7aaeea", "#5b8ee8", "#6cc6d8"],
+    tooltip: { trigger: "axis", axisPointer: { type: type === "bar" ? "shadow" : "line" } },
+    legend: { right: 8, top: 6, textStyle: chartTextStyle() },
+    grid: { left: 42, right: 20, top: 42, bottom: 32 },
+    xAxis: {
+      type: "category",
+      boundaryGap: type === "bar",
+      data: rows.map((row) => formatCellValue(row?.[categoryColumn])),
+      axisLabel: chartTextStyle(),
+      axisTick: { show: false }
+    },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: seriesColumns.map((column) => ({
+      name: column,
+      type,
+      smooth: type === "line",
+      stack: options.stacked ? "total" : void 0,
+      areaStyle: options.area ? { color: "rgba(35, 104, 217, 0.1)" } : void 0,
+      data: rows.map((row) => Number(row?.[column]) || 0)
+    }))
+  };
+}
+function aggregateRowsByCategory(rows, categoryColumn, valueColumn) {
+  const sums = new Map();
+  rows.forEach((row) => {
+    const category = formatCellValue(row?.[categoryColumn]);
+    sums.set(category, (sums.get(category) || 0) + (Number(row?.[valueColumn]) || 0));
+  });
+  return Array.from(sums, ([category, value]) => ({ category, value }));
+}
+function uniqueValues(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+function pieWidgetOptions(rows, labelColumn, valueColumn) {
+  return {
+    animationDuration: 650,
+    color: ["#2368d9", "#19a7a8", "#7aaeea", "#5b8ee8", "#6cc6d8"],
+    tooltip: { trigger: "item" },
+    legend: { bottom: 0, textStyle: chartTextStyle() },
+    series: [
+      {
+        type: "pie",
+        radius: ["42%", "70%"],
+        center: ["50%", "44%"],
+        data: rows.map((row) => ({
+          name: formatCellValue(row?.[labelColumn]),
+          value: Number(row?.[valueColumn]) || 0
+        }))
+      }
+    ]
+  };
+}
+function chartTextStyle() {
+  return {
+    color: "#64707d",
+    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+  };
+}
+function capacityOptions() {
+  const days = ["May 6", "May 7", "May 8", "May 9", "May 10", "May 11", "May 12"];
+  return {
+    animationDuration: 700,
+    color: ["#19b2b4", "#2d6cdf", "#5b8ee8", "#7aaeea", "#6cc6d8"],
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    legend: {
+      right: 2,
+      top: 8,
+      orient: "vertical",
+      textStyle: chartTextStyle()
+    },
+    grid: { left: 44, right: 112, top: 26, bottom: 28 },
+    xAxis: { type: "category", data: days, axisLabel: chartTextStyle(), axisTick: { show: false } },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: [
+      { name: "Imaging", type: "bar", stack: "total", data: [430, 510, 470, 520, 500, 480, 430] },
+      { name: "Lab tests", type: "bar", stack: "total", data: [280, 320, 260, 350, 330, 300, 250] },
+      { name: "Surgery", type: "bar", stack: "total", data: [270, 245, 265, 260, 280, 240, 220] },
+      { name: "Cardiology", type: "bar", stack: "total", data: [310, 330, 340, 360, 370, 350, 320] },
+      { name: "Other", type: "bar", stack: "total", data: [120, 130, 110, 130, 140, 125, 105] }
+    ]
+  };
+}
+function flowOptions() {
+  const days = ["May 6", "May 7", "May 8", "May 9", "May 10", "May 11", "May 12"];
+  return {
+    animationDuration: 700,
+    color: ["#2d6cdf", "#6a93d5"],
+    tooltip: { trigger: "axis" },
+    legend: { right: 8, top: 6, textStyle: chartTextStyle() },
+    grid: { left: 42, right: 18, top: 40, bottom: 30 },
+    xAxis: { type: "category", boundaryGap: false, data: days, axisLabel: chartTextStyle(), axisTick: { show: false } },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: [
+      { name: "Arrivals", type: "line", smooth: true, symbolSize: 7, data: [500, 650, 590, 760, 620, 700, 640] },
+      { name: "Discharges", type: "line", smooth: true, symbolSize: 6, lineStyle: { type: "dashed" }, data: [360, 380, 420, 450, 390, 470, 430] }
+    ]
+  };
+}
+function episodesOptions() {
+  return {
+    animationDuration: 700,
+    color: ["#2d6cdf"],
+    grid: { left: 34, right: 18, top: 10, bottom: 24 },
+    xAxis: { type: "category", boundaryGap: false, data: ["May 6", "May 7", "May 8", "May 9", "May 10", "May 11", "May 12"], axisLabel: chartTextStyle(), axisTick: { show: false } },
+    yAxis: { type: "value", axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: "#edf1f4" } } },
+    series: [
+      {
+        type: "line",
+        smooth: true,
+        symbolSize: 7,
+        data: [220, 430, 360, 500, 390, 610, 470],
+        areaStyle: { color: "rgba(45, 108, 223, 0.08)" }
+      }
+    ]
+  };
+}
+function renderLoginDialog() {
+  return `
+    <div class="login-overlay" role="presentation">
+      <section class="login-panel" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <button class="icon-button close-login" type="button" data-close-login aria-label="Close login" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <img class="login-logo" src="/assets/getgaard.svg" alt="" />
+        <h1 id="login-title">GAARD Client</h1>
+        <p>Log in with your GAARD account.</p>
         <form id="login-form" class="form-grid">
           <label>Username<input name="username" autocomplete="username" /></label>
           <label>Password<input name="password" type="password" autocomplete="current-password" /></label>
           ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
-          <div class="form-actions"><button class="primary" type="submit">Sign in</button></div>
+          <div class="form-actions"><button class="primary" type="submit">Log in</button></div>
         </form>
       </section>
-    </main>`;
-  document.querySelector("#login-form")?.addEventListener("submit", login);
+    </div>`;
+}
+function renderLogin() {
+  state.loginOpen = true;
+  render();
+}
+function openLogin() {
+  state.error = "";
+  state.loginOpen = true;
+  render();
+}
+function closeLogin() {
+  state.error = "";
+  state.loginOpen = false;
+  render();
+}
+function newChat() {
+  if (state.pending) return;
+  state.messages = [];
+  state.conversationId = "";
+  state.error = "";
+  state.activeView = "home";
+  rememberActiveView(state.activeView);
+  render();
 }
 function renderMessage(message) {
   const rows = getRows(message.response);
@@ -128,8 +2363,9 @@ function renderMessage(message) {
     </article>`;
 }
 function renderMessageActions(message) {
-  const saveDisabled = state.pending || message.saveStatus === "saving" || message.saveStatus === "saved";
-  const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
+  const saveDialogOpen = state.saveWidgetDialogOpen && state.saveWidgetMessageId === message.id;
+  const saveDisabled = state.pending || saveDialogOpen || message.saveStatus === "saving" || message.saveStatus === "saved";
+  const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : saveDialogOpen || message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
   return `
     <div class="message-actions">
       <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
@@ -246,6 +2482,13 @@ function formatMode(value) {
 function normalizeQueryMode(value) {
   return value === "analysis" ? "analysis" : "sql";
 }
+function normalizeView(value) {
+  const allowed = new Set(["home", "analysis", "metrics", "datasources", "queries", "alerts"]);
+  return allowed.has(value) ? value : "home";
+}
+function rememberActiveView(value) {
+  localStorage.setItem("gaard_client_active_view", normalizeView(value));
+}
 function handleModeChange(event) {
   state.queryMode = normalizeQueryMode(event.currentTarget.value);
   render();
@@ -293,6 +2536,84 @@ async function saveWidgetFromMessage(event) {
   if (!message || !sql || message.saveStatus === "saving" || message.saveStatus === "saved") {
     return;
   }
+  state.saveWidgetDialogOpen = true;
+  state.saveWidgetMessageId = message.id;
+  state.saveWidgetDraftLabel = buildWidgetLabel(message.question);
+  state.saveWidgetTitleEdited = false;
+  state.saveWidgetSuggestionLoading = true;
+  state.saveWidgetSuggestionError = "";
+  state.saveWidgetPending = false;
+  state.saveWidgetError = "";
+  render();
+  void requestMetricTitleSuggestion(message);
+}
+function closeSaveWidgetDialog() {
+  if (state.saveWidgetPending) return;
+  state.saveWidgetDialogOpen = false;
+  state.saveWidgetMessageId = null;
+  state.saveWidgetDraftLabel = "";
+  state.saveWidgetTitleEdited = false;
+  state.saveWidgetSuggestionLoading = false;
+  state.saveWidgetSuggestionError = "";
+  state.saveWidgetError = "";
+  render();
+}
+function changeSaveWidgetLabel(event) {
+  state.saveWidgetDraftLabel = event.currentTarget.value || "";
+  state.saveWidgetTitleEdited = true;
+}
+async function requestMetricTitleSuggestion(message) {
+  const dialogMessageId = message.id;
+  const sql = message.response?.sql?.trim() || "";
+  try {
+    const response = await fetch("/api/widgets/title-suggestion", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({
+        question: message.question,
+        sql,
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+    }
+    const title = String(payload.title || "").trim();
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId && title && !state.saveWidgetTitleEdited) {
+      state.saveWidgetDraftLabel = title;
+    }
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId) {
+      state.saveWidgetSuggestionError = "";
+    }
+  } catch (_error) {
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId) {
+      state.saveWidgetSuggestionError = "Could not fetch the LLM suggestion. You can enter a name manually.";
+    }
+  } finally {
+    if (state.saveWidgetDialogOpen && state.saveWidgetMessageId === dialogMessageId) {
+      state.saveWidgetSuggestionLoading = false;
+      render();
+    }
+  }
+}
+async function confirmSaveWidgetFromDialog(event) {
+  event.preventDefault();
+  const message = state.messages.find((item) => item.id === state.saveWidgetMessageId);
+  const sql = message?.response?.sql?.trim() || "";
+  const form = new FormData(event.currentTarget);
+  const label = String(form.get("label") || "").trim();
+  if (!message || !sql || !label || state.saveWidgetPending) {
+    state.saveWidgetError = "Enter a metric name.";
+    render();
+    return;
+  }
+  state.saveWidgetPending = true;
+  state.saveWidgetError = "";
+  state.saveWidgetDraftLabel = label;
   message.saveStatus = "saving";
   message.saveError = "";
   render();
@@ -304,7 +2625,7 @@ async function saveWidgetFromMessage(event) {
         ...authHeaders()
       },
       body: JSON.stringify({
-        label: buildWidgetLabel(message.question),
+        label,
         widget_type: inferWidgetType(getRows(message.response)),
         datasource_key: message.response?.metadata?.datasource_id || "default",
         question: message.question,
@@ -315,13 +2636,31 @@ async function saveWidgetFromMessage(event) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(extractErrorMessage(payload));
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     }
     message.saveStatus = "saved";
+    state.saveWidgetDialogOpen = false;
+    state.saveWidgetMessageId = null;
+    state.saveWidgetDraftLabel = "";
+    state.saveWidgetTitleEdited = false;
+    state.saveWidgetSuggestionLoading = false;
+    state.saveWidgetSuggestionError = "";
+    state.saveWidgetError = "";
+    if (payload.item) {
+      state.savedMetrics = [payload.item, ...state.savedMetrics.filter((metric) => metric.widget_key !== payload.item.widget_key)];
+      state.savedMetricsLoaded = true;
+      state.savedMetricsResultsLoaded = state.savedMetrics.every((metric) => Boolean(metric.result));
+    } else {
+      state.savedMetricsLoaded = false;
+      state.savedMetricsResultsLoaded = false;
+    }
   } catch (error) {
     message.saveStatus = "error";
     message.saveError = error.message || "Widget could not be saved.";
+    state.saveWidgetError = message.saveError;
+    reportApiError(error, "Widget could not be saved.");
   } finally {
+    state.saveWidgetPending = false;
     render();
   }
 }
@@ -347,15 +2686,20 @@ async function login(event) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(extractErrorMessage(payload));
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     }
     state.token = payload.token || "";
     state.username = payload.username || "";
+    state.loginOpen = false;
+    state.dashboards = [];
+    state.dashboardsLoaded = false;
+    state.activeDashboardId = "";
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
     render();
   } catch (error) {
     state.error = error.message || "Login failed.";
+    reportApiError(error, "Login failed.");
     renderLogin();
   }
 }
@@ -363,6 +2707,34 @@ function logout() {
   state.token = "";
   state.username = "";
   state.messages = [];
+  state.conversationId = "";
+  state.datasources = [];
+  state.datasourcesLoaded = false;
+  state.datasourceError = "";
+  state.dashboards = [];
+  state.dashboardsLoaded = false;
+  state.dashboardsError = "";
+  state.activeDashboardId = "";
+  state.dashboardMenuOpen = false;
+  state.dashboardCreateOpen = false;
+  state.dashboardEditId = "";
+  state.dashboardWidgetDialogOpen = false;
+  state.savedMetrics = [];
+  state.savedMetricsLoaded = false;
+  state.savedMetricsResultsLoaded = false;
+  state.savedMetricsError = "";
+  state.dashboardWidgets = [];
+  state.dashboardWidgetsDashboardId = "";
+  state.dashboardWidgetsError = "";
+  state.metricEditDialogOpen = false;
+  state.metricEditWidgetKey = "";
+  state.metricEditDraftLabel = "";
+  state.metricEditPending = false;
+  state.metricEditError = "";
+  state.metricDeletePendingKey = "";
+  state.activeView = "home";
+  rememberActiveView(state.activeView);
+  state.loginOpen = false;
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
   render();
@@ -377,13 +2749,85 @@ function inferWidgetType(rows) {
   }
   return "table";
 }
+function getSelectedSavedMetric() {
+  return state.savedMetrics.find((metric) => metric.widget_key === state.dashboardWidgetMetricKey) || state.savedMetrics[0] || null;
+}
+function getAvailableWidgetTypes(metric) {
+  if (!metric) return ["table"];
+  const profile = getTabularProfile(metric.result || {});
+  if (metric.widget_type === "scalar" || (profile.rows.length === 1 && profile.columns.length === 1)) {
+    return ["number", "table"];
+  }
+  const types = ["table"];
+  if (profile.rows.length && profile.numericColumns.length) {
+    types.unshift("bar");
+    if (profile.dimensionColumns.length) {
+      types.push("pie");
+    }
+    if (profile.hasWideSeries || profile.hasLongSeries) {
+      types.push("stacked_bar", "multi_line");
+    }
+    types.push("line", "area");
+  }
+  return [...new Set(types)];
+}
+function recommendWidgetType(metric) {
+  const availableTypes = getAvailableWidgetTypes(metric);
+  if (availableTypes.includes("number")) return "number";
+  if (metric?.widget_type === "timeseries" && availableTypes.includes("line")) return "line";
+  if (availableTypes.includes("bar")) return "bar";
+  return availableTypes[0] || "table";
+}
+function normalizeDashboardWidgetType(value, availableTypes) {
+  return availableTypes.includes(value) ? value : availableTypes[0] || "table";
+}
+function getRowsFromResult(result) {
+  return Array.isArray(result?.rows) ? result.rows : [];
+}
+function getTabularProfile(result) {
+  const rows = getRowsFromResult(result);
+  const columns = Array.isArray(result?.columns) && result.columns.length ? result.columns : getColumns(rows);
+  const numericColumns = columns.filter((column) => rows.some((row) => isNumericValue(row?.[column])));
+  const dimensionColumns = columns.filter((column) => !numericColumns.includes(column));
+  return {
+    rows,
+    columns,
+    numericColumns,
+    dimensionColumns,
+    hasWideSeries: numericColumns.length > 1,
+    hasLongSeries: dimensionColumns.length >= 2 && numericColumns.length >= 1
+  };
+}
+function isNumericValue(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  return Number.isFinite(Number(value));
+}
 function getSelectedMode(form) {
   const value = new FormData(form).get("mode");
   return normalizeQueryMode(value);
 }
+function conversationPayload() {
+  return state.conversationId ? { conversation_id: state.conversationId } : {};
+}
+function syncConversationFromResponse(response) {
+  const conversationId = response?.metadata?.conversation?.id || response?.conversation_id || response?.session_started?.conversation_id || response?.session_resumed?.conversation_id || "";
+  if (conversationId) {
+    state.conversationId = String(conversationId);
+  }
+}
 async function submitQuestion(event) {
   event.preventDefault();
   if (state.pending) return;
+  if (!state.token) {
+    state.loginOpen = true;
+    render();
+    return;
+  }
   const form = event.currentTarget;
   const input = form.elements.namedItem("question");
   const question = String(input?.value || "").trim();
@@ -423,19 +2867,22 @@ async function submitQuestion(event) {
         body: JSON.stringify({
           question,
           mode,
+          ...conversationPayload(),
           backend_url: state.backendUrl
         })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(extractErrorMessage(payload));
+        throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
       }
+      syncConversationFromResponse(payload);
       message.status = "ok";
       message.response = payload;
     }
   } catch (error) {
     message.status = "error";
     message.error = error.message || "Request failed.";
+    reportApiError(error, "Request failed.");
   } finally {
     state.pending = false;
     render({ scrollToLatest: true });
@@ -450,12 +2897,13 @@ async function submitAnalysisQuestion(message, question) {
     },
     body: JSON.stringify({
       question,
+      ...conversationPayload(),
       backend_url: state.backendUrl
     })
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(extractErrorMessage(payload));
+    throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
   }
   await readAnalysisStream(message, response);
 }
@@ -477,6 +2925,7 @@ async function submitAnalysisReply(event) {
   } catch (error) {
     message.status = "error";
     message.error = error.message || "Request failed.";
+    reportApiError(error, "Request failed.");
   } finally {
     state.pending = false;
     render({ scrollToLatest: true });
@@ -496,7 +2945,7 @@ async function continueAnalysis(message, reply) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(extractErrorMessage(payload));
+    throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
   }
   await readAnalysisStream(message, response);
 }
@@ -534,6 +2983,7 @@ function handleAnalysisStreamLine(message, line) {
     throw new Error(payload.error.message);
   }
   if (payload?.final) {
+    syncConversationFromResponse(payload.final);
     message.status = "ok";
     message.response = payload.final;
     message.dataOpen = message.mode === "analysis" && getRows(payload.final).length > 0;
@@ -544,6 +2994,7 @@ function handleAnalysisStreamLine(message, line) {
   if (payload?.session_id && !message.analysisSessionId) {
     message.analysisSessionId = String(payload.session_id);
   }
+  syncConversationFromResponse(payload);
   if (payload?.event === "user_question") {
     const question = extractUserQuestion(payload);
     message.status = "waiting";
@@ -666,11 +3117,23 @@ function extractErrorMessage(payload) {
   if (typeof detail === "string") {
     return detail;
   }
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item?.msg || item?.message || String(item)).join("; ");
+  }
+  if (detail?.message) {
+    return detail.message;
+  }
+  if (detail?.detail) {
+    return typeof detail.detail === "string" ? detail.detail : JSON.stringify(detail.detail);
+  }
   if (detail?.error?.message) {
     return detail.error.message;
   }
   if (payload?.error?.message) {
     return payload.error.message;
+  }
+  if (payload?.message) {
+    return payload.message;
   }
   return "Request failed.";
 }

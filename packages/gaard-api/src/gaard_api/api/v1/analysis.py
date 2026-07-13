@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from gaard_core.llm_output import remove_thinking_blocks
-from gaard_core.query_pipeline.models import OutputClassification, QueryRequest, QueryResponse
+from gaard_core.query_pipeline.models import (
+    ConversationContextClassification,
+    OutputClassification,
+    QueryRequest,
+    QueryResponse,
+)
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 
@@ -28,12 +33,16 @@ from gaard_api.admin.services import (
 )
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 from gaard_api.api.v1.query import (
+    add_conversation_to_response,
+    conversation_principal,
     create_llm_client,
     effective_query_request,
     normalize_datasource_contexts,
     ndjson_line,
+    resolve_request_conversation,
     run_sql_request,
 )
+from gaard_api.conversations import load_conversation_for_owner
 from gaard_api.query_hooks import DatasourceContext, DatasourceContexts
 from gaard_api.siem import build_analysis_event, dispatch_siem_event
 
@@ -146,9 +155,7 @@ def create_analysis_session_record(request: QueryRequest) -> AnalysisSessionReco
 def load_analysis_session_record(session_id: str) -> AnalysisSessionRecord | None:
     with create_session() as session:
         return session.scalar(
-            select(AnalysisSessionRecord).where(
-                AnalysisSessionRecord.session_id == session_id
-            )
+            select(AnalysisSessionRecord).where(AnalysisSessionRecord.session_id == session_id)
         )
 
 
@@ -173,9 +180,7 @@ def save_analysis_context(
 ) -> None:
     with create_session() as session:
         record = session.scalar(
-            select(AnalysisSessionRecord).where(
-                AnalysisSessionRecord.session_id == session_id
-            )
+            select(AnalysisSessionRecord).where(AnalysisSessionRecord.session_id == session_id)
         )
         if record is None:
             return
@@ -185,6 +190,22 @@ def save_analysis_context(
         session.commit()
 
 
+def attach_conversation_to_analysis_context(
+    session_id: str,
+    conversation_id: str,
+    classification: ConversationContextClassification,
+    standalone_question: str,
+) -> None:
+    record = load_analysis_session_record(session_id)
+    if record is None:
+        return
+    context = json_object(record.context_json)
+    context["conversation_id"] = conversation_id
+    context["conversation_context"] = classification.model_dump(mode="json")
+    context["conversation_standalone_question"] = standalone_question
+    save_analysis_context(session_id, context, record.status)
+
+
 def append_analysis_event(
     session_id: str,
     event_type: str,
@@ -192,9 +213,7 @@ def append_analysis_event(
 ) -> dict[str, Any]:
     with create_session() as session:
         record = session.scalar(
-            select(AnalysisSessionRecord).where(
-                AnalysisSessionRecord.session_id == session_id
-            )
+            select(AnalysisSessionRecord).where(AnalysisSessionRecord.session_id == session_id)
         )
         if record is None:
             sequence = 1
@@ -319,10 +338,31 @@ DATABASE_LOCATION_TERMS = (
     "wiersz",
 )
 
+USER_CLARIFICATION_TERMS = (
+    "co rozumiesz",
+    "jak definiujesz",
+    "jak mam rozumieć",
+    "jak mam rozumiec",
+    "co masz na myśli",
+    "co masz na mysli",
+    "czy chodzi o",
+    "doprecyzuj",
+    "doprecyzować",
+    "doprecyzowac",
+    "which do you mean",
+    "what do you mean",
+    "how do you define",
+    "do you mean",
+    "please clarify",
+)
+
 
 def looks_like_database_evidence_question(value: str) -> bool:
     normalized = value.lower()
     if not normalized:
+        return False
+
+    if looks_like_user_clarification_question(normalized):
         return False
 
     if any(term in normalized for term in DATABASE_EVIDENCE_TERMS):
@@ -331,6 +371,10 @@ def looks_like_database_evidence_question(value: str) -> bool:
     return any(term in normalized for term in DATABASE_ENUM_TERMS) and any(
         term in normalized for term in DATABASE_LOCATION_TERMS
     )
+
+
+def looks_like_user_clarification_question(normalized: str) -> bool:
+    return any(term in normalized for term in USER_CLARIFICATION_TERMS)
 
 
 def coerce_database_evidence_decision(
@@ -679,9 +723,10 @@ class MockAnalysisPlanner:
                 ),
             )
 
-        if any(term in question for term in ("doprecyzuj", "dopytaj", "jaki okres")) and len(
-            messages
-        ) == 1:
+        if (
+            any(term in question for term in ("doprecyzuj", "dopytaj", "jaki okres"))
+            and len(messages) == 1
+        ):
             return AnalysisPlannerDecision(
                 action=AnalysisAction.ASK_USER,
                 visible_question="Czy potrzebuję doprecyzowania od użytkownika?",
@@ -957,10 +1002,35 @@ def final_metadata(
     }
 
 
+def finalize_analysis_response(
+    response: QueryResponse,
+    *,
+    conversation,
+    context_classification: ConversationContextClassification | None,
+    original_request: QueryRequest,
+    effective_request: QueryRequest,
+) -> QueryResponse:
+    if conversation is None or context_classification is None:
+        response.question = original_request.question
+        return response
+
+    return add_conversation_to_response(
+        response,
+        conversation=conversation,
+        classification=context_classification,
+        original_request=original_request,
+        effective_request=effective_request,
+        mode="analysis",
+    )
+
+
 def run_analysis_loop(
     session_id: str,
     request: QueryRequest,
     datasource_context: DatasourceContext | DatasourceContexts | None,
+    conversation=None,
+    context_classification: ConversationContextClassification | None = None,
+    original_request: QueryRequest | None = None,
 ) -> Iterator[str]:
     planner = create_analysis_planner()
     runtime_config = get_query_runtime_config_safe()
@@ -979,6 +1049,7 @@ def run_analysis_loop(
 
     context = json_object(record.context_json)
     original_question = str(context.get("original_question") or request.question)
+    visible_request = original_request or request.model_copy(update={"question": original_question})
 
     try:
         for iteration in range(1, max_iterations + 1):
@@ -1091,6 +1162,13 @@ def run_analysis_loop(
                     metadata_for_analysis(session_id, "final_query", original_question),
                 )
                 response.metadata.update(final_metadata(session_id, "completed", iteration))
+                response = finalize_analysis_response(
+                    response,
+                    conversation=conversation,
+                    context_classification=context_classification,
+                    original_request=visible_request,
+                    effective_request=request,
+                )
                 save_analysis_context(session_id, context, "completed")
                 yield stream_event(session_id, "final", response.model_dump(mode="json"))
                 return
@@ -1113,19 +1191,13 @@ def run_analysis_loop(
                     answer,
                 )
                 supporting_metadata = (
-                    supporting_observation.get("metadata") or {}
-                    if supporting_observation
-                    else {}
+                    supporting_observation.get("metadata") or {} if supporting_observation else {}
                 )
                 supporting_sql = (
-                    str(supporting_observation.get("sql") or "")
-                    if supporting_observation
-                    else ""
+                    str(supporting_observation.get("sql") or "") if supporting_observation else ""
                 )
                 supporting_rows = (
-                    supporting_observation.get("rows") or []
-                    if supporting_observation
-                    else []
+                    supporting_observation.get("rows") or [] if supporting_observation else []
                 )
                 response = QueryResponse(
                     question=request.question,
@@ -1154,21 +1226,33 @@ def run_analysis_loop(
                         ),
                     },
                 )
+                response = finalize_analysis_response(
+                    response,
+                    conversation=conversation,
+                    context_classification=context_classification,
+                    original_request=visible_request,
+                    effective_request=request,
+                )
                 save_analysis_context(session_id, context, "completed")
                 yield stream_event(session_id, "final", response.model_dump(mode="json"))
                 return
 
         response = QueryResponse(
             question=request.question,
-            answer=(
-                "Nie udało mi się zakończyć analizy w skonfigurowanym limicie kroków."
-            ),
+            answer=("Nie udało mi się zakończyć analizy w skonfigurowanym limicie kroków."),
             sql="",
             rows=[],
             metadata={
                 **final_metadata(session_id, "limit_reached", max_iterations),
                 "output_classification": OutputClassification.UNKNOWN.value,
             },
+        )
+        response = finalize_analysis_response(
+            response,
+            conversation=conversation,
+            context_classification=context_classification,
+            original_request=visible_request,
+            effective_request=request,
         )
         save_analysis_context(session_id, context, "limit_reached")
         yield stream_event(
@@ -1194,10 +1278,23 @@ def start_stream_for_record(
     request: QueryRequest,
     datasource_context: DatasourceContexts,
     resumed: bool = False,
+    conversation=None,
+    context_classification: ConversationContextClassification | None = None,
+    original_request: QueryRequest | None = None,
 ) -> Iterator[str]:
     event_name = "session_resumed" if resumed else "session_started"
-    yield stream_event(record.session_id, event_name, serialize_analysis_session(record))
-    yield from run_analysis_loop(record.session_id, request, datasource_context)
+    payload = serialize_analysis_session(record)
+    if conversation is not None:
+        payload["conversation_id"] = conversation.conversation_id
+    yield stream_event(record.session_id, event_name, payload)
+    yield from run_analysis_loop(
+        record.session_id,
+        request,
+        datasource_context,
+        conversation=conversation,
+        context_classification=context_classification,
+        original_request=original_request,
+    )
 
 
 @router.post("/analysis/stream")
@@ -1206,10 +1303,75 @@ def analysis_stream(
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> StreamingResponse:
     effective_request, datasource_context = effective_query_request(request)
+    conversation, context_classification, analysis_request = resolve_request_conversation(
+        effective_request,
+        conversation_principal(_user),
+    )
     record = create_analysis_session_record(effective_request)
+    if conversation is not None:
+        standalone_question = analysis_request.question if analysis_request is not None else ""
+        attach_conversation_to_analysis_context(
+            record.session_id,
+            conversation.conversation_id,
+            context_classification,
+            standalone_question,
+        )
+        record = load_analysis_session_record(record.session_id) or record
+
+    if conversation is not None and analysis_request is None:
+        response = QueryResponse(
+            question=effective_request.question,
+            answer=(
+                "Potrzebuję doprecyzowania, czy to pytanie jest kontynuacją poprzedniego "
+                "wątku i jak mam je rozumieć."
+            ),
+            sql="",
+            rows=[],
+            metadata={
+                **final_metadata(record.session_id, "waiting_for_user", 0),
+                "output_classification": OutputClassification.UNKNOWN.value,
+                "blocked": True,
+                "blocked_reason": "conversation.ambiguous_context",
+            },
+        )
+        response = finalize_analysis_response(
+            response,
+            conversation=conversation,
+            context_classification=context_classification,
+            original_request=effective_request,
+            effective_request=effective_request,
+        )
+
+        def ambiguous_stream() -> Iterator[str]:
+            yield stream_event(
+                record.session_id,
+                "session_started",
+                {
+                    **serialize_analysis_session(record),
+                    "conversation_id": conversation.conversation_id,
+                },
+            )
+            save_analysis_context(
+                record.session_id,
+                json_object(record.context_json),
+                "waiting_for_user",
+            )
+            yield stream_event(record.session_id, "final", response.model_dump(mode="json"))
+
+        return StreamingResponse(
+            ambiguous_stream(),
+            media_type="application/x-ndjson",
+        )
 
     return StreamingResponse(
-        start_stream_for_record(record, effective_request, datasource_context),
+        start_stream_for_record(
+            record,
+            analysis_request or effective_request,
+            datasource_context,
+            conversation=conversation,
+            context_classification=context_classification if conversation is not None else None,
+            original_request=effective_request,
+        ),
         media_type="application/x-ndjson",
     )
 
@@ -1228,6 +1390,25 @@ def analysis_message_stream(
         )
 
     context = json_object(record.context_json)
+    conversation = None
+    context_classification = None
+    conversation_id = str(context.get("conversation_id") or "")
+    if conversation_id:
+        conversation = load_conversation_for_owner(
+            conversation_id,
+            conversation_principal(_user),
+        )
+        if conversation is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Conversation belongs to another user.",
+            )
+        raw_classification = context.get("conversation_context") or {}
+        if isinstance(raw_classification, dict):
+            context_classification = ConversationContextClassification.model_validate(
+                raw_classification
+            )
+
     context.setdefault("messages", []).append(
         {
             "role": "user",
@@ -1237,9 +1418,10 @@ def analysis_message_stream(
     )
     save_analysis_context(session_id, context, "running")
     query_request = QueryRequest(
-        question=record.question,
+        question=str(context.get("conversation_standalone_question") or record.question),
         datasource_id=record.datasource_id,
         user_id=record.user_id,
+        conversation_id=conversation_id or None,
     )
     effective_request, datasource_context = effective_query_request(query_request)
     refreshed_record = load_analysis_session_record(session_id) or record
@@ -1250,6 +1432,9 @@ def analysis_message_stream(
             effective_request,
             datasource_context,
             resumed=True,
+            conversation=conversation,
+            context_classification=context_classification,
+            original_request=query_request.model_copy(update={"question": record.question}),
         ),
         media_type="application/x-ndjson",
     )

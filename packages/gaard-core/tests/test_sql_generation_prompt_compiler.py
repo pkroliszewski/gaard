@@ -31,6 +31,8 @@ def test_sql_generation_prompt_compiler_builds_prompt_with_rules_schema_and_ques
     assert "every table must have a short, stable alias" in compiled.system_prompt
     assert "every column reference must be qualified" in compiled.system_prompt
     assert "Do not use unqualified column names in joins" in compiled.system_prompt
+    assert "Do not use bind parameters" in compiled.system_prompt
+    assert "executable without any external parameter binding" in compiled.system_prompt
 
     assert "Table: patients" in compiled.user_prompt
     assert "- status: TEXT (not null)" in compiled.user_prompt

@@ -31,11 +31,51 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "output_classification_mode" in response.text
     assert "/api/analysis/stream" in response.text
     assert "/api/widgets/from-query" in response.text
+    assert "/api/dashboards" in response.text
     assert "data-save-widget" in response.text
+    assert "data-toggle-dashboard-menu" in response.text
+    assert "Add new dashboard" in response.text
+    assert "data-delete-dashboard" in response.text
     assert "analysis-progress" in response.text
     assert "analysis-log" in response.text
     assert "analysis-reply-question" in response.text
     assert "data-analysis-progress" in response.text
+    assert "data-new-chat" in response.text
+    assert "syncConversationFromResponse" in response.text
+    assert "renderDatasourcesView" in response.text
+    assert "Excel workbooks" in response.text
+    assert "Connected feature" not in response.text
+    assert "data-add-source" in response.text
+    assert "openSourcePicker" in response.text
+    assert "mergeDatasourcesPreservingOrder" in response.text
+    assert "preserveOrder: true" in response.text
+    assert "api-error-banner" in response.text
+    assert "reportApiError" in response.text
+    assert "formatApiResponseError" in response.text
+    assert "/api/widgets/title-suggestion" in response.text
+    assert "data-save-widget-form" in response.text
+    assert "Save metric" in response.text
+    assert "data-edit-metric" in response.text
+    assert "Edit metric name" in response.text
+    assert "data-delete-metric" in response.text
+    assert "Deleting this metric will also remove it from all dashboards." in response.text
+    assert "metrics-groups" in response.text
+    assert "Data Source:" in response.text
+    assert "metric-title" in response.text
+    assert "formatDefaultMetricDatasourceName" in response.text
+    assert "(default)" in response.text
+    assert "hasLongSeries" in response.text
+    assert "longSeriesWidgetOptions" in response.text
+    assert 'types.push("stacked_bar", "multi_line")' in response.text
+    assert "dashboard-spinner" in response.text
+    assert "data-edit-active-dashboard" in response.text
+    assert "Edit dashboard" in response.text
+    assert "Save changes" in response.text
+    assert "include_result" in response.text
+    assert "includeResult: false" in response.text
+    assert "resizestop" in response.text
+    assert "alwaysShowResizeHandle" in response.text
+    assert "/api/datasources/excel" in response.text
     assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
         response.text
     )
@@ -99,6 +139,61 @@ def test_client_app_proxies_query(monkeypatch) -> None:
     }
 
 
+def test_client_app_proxies_query_conversation_id(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["json"] = json
+            request = httpx.Request("POST", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "question": json["question"],
+                    "answer": "ok",
+                    "sql": "SELECT 1",
+                    "rows": [{"value": 1}],
+                    "metadata": {
+                        "conversation": {"id": json["conversation_id"]},
+                        "output_classification": "neutral_data",
+                    },
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/query",
+        json={
+            "question": "and in May?",
+            "conversation_id": "conversation-1",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "http://backend.example/api/v1/query"
+    assert captured["json"] == {
+        "question": "and in May?",
+        "user_id": "client",
+        "mode": "sql",
+        "conversation_id": "conversation-1",
+    }
+
+
 def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     captured = {}
 
@@ -118,8 +213,8 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
                     "session_id": "abc",
                     "analysis_step": {
                         "iteration": 1,
-                        "visible_question": "Czy mam wszystko?",
-                        "visible_reasoning": "Sprawdzam dostępną wiedzę.",
+                        "visible_question": "Do I have everything?",
+                        "visible_reasoning": "Checking available context.",
                     },
                 }
             ) + "\n"
@@ -162,7 +257,7 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     response = client.post(
         "/api/analysis/stream",
         json={
-            "question": "gdzie uciekajo mi pinionżki",
+            "question": "where is my spend going",
             "backend_url": "http://backend.example/",
         },
     )
@@ -174,7 +269,7 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     assert captured["method"] == "POST"
     assert captured["url"] == "http://backend.example/api/v1/analysis/stream"
     assert captured["json"] == {
-        "question": "gdzie uciekajo mi pinionżki",
+        "question": "where is my spend going",
         "user_id": "client",
     }
 
@@ -237,6 +332,344 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
         "sql": "SELECT COUNT(*) AS value FROM patients",
         "result_mode": "data",
     }
+
+
+def test_client_app_proxies_widget_title_suggestion(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            request = httpx.Request("POST", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"title": "Doctors by Specialty"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/widgets/title-suggestion",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "question": "How many doctors are there by specialty?",
+            "sql": "SELECT specialization, COUNT(*) FROM doctors GROUP BY specialization",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Doctors by Specialty"
+    assert captured["url"] == (
+        "http://backend.example/api/v1/admin/overview/widgets/title-suggestion"
+    )
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["json"] == {
+        "question": "How many doctors are there by specialty?",
+        "sql": "SELECT specialization, COUNT(*) FROM doctors GROUP BY specialization",
+    }
+
+
+def test_client_app_proxies_saved_metric_update(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def patch(self, url, json, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            request = httpx.Request("PATCH", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"item": {"widget_key": "client_metric", "label": json["label"]}},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.patch(
+        "/api/dashboard-metrics/client_metric",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "label": "New metric name",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["label"] == "New metric name"
+    assert captured["url"] == (
+        "http://backend.example/api/v1/dashboards/metrics/client_metric"
+    )
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["json"] == {"label": "New metric name"}
+
+
+def test_client_app_proxies_saved_metric_delete(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def delete(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            request = httpx.Request("DELETE", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "status": "deleted",
+                    "widget_key": "client_metric",
+                    "removed_dashboard_widgets": 2,
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.delete(
+        "/api/dashboard-metrics/client_metric?backend_url=http://backend.example/",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "deleted",
+        "widget_key": "client_metric",
+        "removed_dashboard_widgets": 2,
+    }
+    assert captured["url"] == (
+        "http://backend.example/api/v1/dashboards/metrics/client_metric"
+    )
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+
+
+def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def get(self, url, headers=None):
+            captured.append({"method": "GET", "url": url, "headers": headers})
+            request = httpx.Request("GET", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"items": [{"id": "dash-1", "name": "Operations"}]},
+            )
+
+        async def post(self, url, json, headers=None):
+            captured.append(
+                {"method": "POST", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("POST", url)
+            if url.endswith("/widgets"):
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    json={"item": {"id": "widget-1", "title": json["title"]}},
+                )
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"item": {"id": "dash-2", "name": json["name"]}},
+            )
+
+        async def put(self, url, json, headers=None):
+            captured.append(
+                {"method": "PUT", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("PUT", url)
+            if not url.endswith("/active"):
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    json={"item": {"id": url.rsplit("/", 1)[-1], "name": json["name"]}},
+                )
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "active_dashboard_id": json["dashboard_id"],
+                    "active_dashboard": {"id": json["dashboard_id"]},
+                },
+            )
+
+        async def patch(self, url, json, headers=None):
+            captured.append(
+                {"method": "PATCH", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("PATCH", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"items": json["items"]},
+            )
+
+        async def delete(self, url, headers=None):
+            captured.append({"method": "DELETE", "url": url, "headers": headers})
+            request = httpx.Request("DELETE", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"status": "deleted", "id": "dash-2"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer token"}
+
+    list_response = client.get(
+        "/api/dashboards?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    create_response = client.post(
+        "/api/dashboards",
+        headers=headers,
+        json={
+            "name": "Operations",
+            "description": "Daily view",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    update_response = client.put(
+        "/api/dashboards/dash-1",
+        headers=headers,
+        json={
+            "name": "Operations updated",
+            "description": "Updated daily view",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    delete_response = client.delete(
+        "/api/dashboards/dash-2?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    active_response = client.put(
+        "/api/dashboards/active",
+        headers=headers,
+        json={
+            "dashboard_id": "dash-1",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    metrics_response = client.get(
+        "/api/dashboard-metrics?backend_url=http://backend.example/&include_result=false",
+        headers=headers,
+    )
+    widget_list_response = client.get(
+        "/api/dashboards/dash-1/widgets?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    widget_create_response = client.post(
+        "/api/dashboards/dash-1/widgets",
+        headers=headers,
+        json={
+            "metric_widget_key": "client_metric",
+            "title": "Metric",
+            "visualization_type": "bar",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    widget_layout_response = client.patch(
+        "/api/dashboards/dash-1/widgets/layout",
+        headers=headers,
+        json={
+            "items": [{"widget_id": "widget-1", "x": 1, "y": 2, "w": 6, "h": 4}],
+            "backend_url": "http://backend.example/",
+        },
+    )
+    widget_delete_response = client.delete(
+        "/api/dashboards/dash-1/widgets/widget-1?backend_url=http://backend.example/",
+        headers=headers,
+    )
+
+    assert list_response.status_code == 200
+    assert create_response.status_code == 200
+    assert update_response.status_code == 200
+    assert delete_response.status_code == 200
+    assert active_response.status_code == 200
+    assert metrics_response.status_code == 200
+    assert widget_list_response.status_code == 200
+    assert widget_create_response.status_code == 200
+    assert widget_layout_response.status_code == 200
+    assert widget_delete_response.status_code == 200
+    assert captured[0]["url"] == "http://backend.example/api/v1/dashboards"
+    assert captured[1]["url"] == "http://backend.example/api/v1/dashboards"
+    assert captured[1]["json"] == {
+        "name": "Operations",
+        "description": "Daily view",
+    }
+    assert captured[2]["url"] == "http://backend.example/api/v1/dashboards/dash-1"
+    assert captured[2]["json"] == {
+        "name": "Operations updated",
+        "description": "Updated daily view",
+    }
+    assert captured[3]["url"] == "http://backend.example/api/v1/dashboards/dash-2"
+    assert captured[4]["url"] == "http://backend.example/api/v1/dashboards/active"
+    assert captured[4]["json"] == {"dashboard_id": "dash-1"}
+    assert captured[5]["url"] == (
+        "http://backend.example/api/v1/dashboards/metrics?include_result=false"
+    )
+    assert captured[6]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
+    assert captured[7]["url"] == "http://backend.example/api/v1/dashboards/dash-1/widgets"
+    assert captured[7]["json"] == {
+        "metric_widget_key": "client_metric",
+        "title": "Metric",
+        "visualization_type": "bar",
+    }
+    assert captured[8]["url"] == (
+        "http://backend.example/api/v1/dashboards/dash-1/widgets/layout"
+    )
+    assert captured[8]["json"] == {
+        "items": [{"widget_id": "widget-1", "x": 1, "y": 2, "w": 6, "h": 4}]
+    }
+    assert captured[9]["url"] == (
+        "http://backend.example/api/v1/dashboards/dash-1/widgets/widget-1"
+    )
+    assert all(call["headers"] == headers for call in captured)
 
 
 def test_client_app_streams_analysis_user_question(monkeypatch) -> None:
@@ -359,7 +792,7 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
     response = client.post(
         "/api/analysis/session-1/messages/stream",
         json={
-            "message": "ostatni miesiąc",
+            "message": "last month",
             "backend_url": "http://backend.example/",
         },
     )
@@ -371,7 +804,7 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
     assert captured["url"] == (
         "http://backend.example/api/v1/analysis/session-1/messages/stream"
     )
-    assert captured["json"] == {"message": "ostatni miesiąc"}
+    assert captured["json"] == {"message": "last month"}
 
 
 def test_client_app_rejects_invalid_backend_url() -> None:

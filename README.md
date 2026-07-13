@@ -5,6 +5,9 @@ GAARD is a self-hosted AI SQL Gateway for governed natural-language access to re
 GAARD allows applications and users to ask questions about relational databases using
 natural language while keeping SQL generation, validation, execution, prompts,
 connectors, and auditability under control.
+
+![gaard-client](docs/images/gaard-client.png)
+
 ## Quick Start - Gaard user
 ### 1. Create virtual python evironment (optional)
 To have things clean, use virtual environment to install Gaard only in specified directory.
@@ -32,18 +35,23 @@ gaard-core install-example-database
 
 ### 4. Start the Gaard API
 ```bash
-gaard-core start
+gaard admin
 ```
 The admin panel will be available at http://localhost:8000/admin
 
 ### 5. Start the Gaard Client
 ```bash
-gaard-client start
+gaard client
 ```
-The client will be available at http://localhost:8001/?backendUrl=http://localhost:8000
+The client will be available at http://localhost:8001
 
-The `backendUrl` frontend parameter is the only client-side configuration
-value. It points the client to the GAARD API backend.
+If your API is running elsewhere, pass its URL when starting the client:
+
+```bash
+gaard client --api-url http://localhost:8000
+```
+
+The `backendUrl` frontend parameter remains available for per-browser overrides.
 
 ## Upgrading Gaard
 
@@ -70,9 +78,9 @@ Put your LLM settings here:
 
 ## Ask a question to your data
 
-Use the shipped simple client UI:
+Use the shipped advanced client to ask your data, save results as a metrics and build your own dashboards:
 
-![example_ask_a_question](docs/images/example_ask_a_question.png)
+![example_ask_a_question](docs/images/gaard-client-v2.png)
 
 or use the API:
 
@@ -84,6 +92,10 @@ curl -X POST http://localhost:8000/api/v1/query \
 
 The response includes the natural-language answer, generated SQL, returned rows,
 and request metadata.
+
+The response (and the question) can be reused as a metric in the dashboard:
+
+![example_ask_a_question](docs/images/gaard-dashboard.png)
 
 ## Datasource Connectors
 
@@ -118,4 +130,3 @@ Details coming soon.
 - [Extensions](Extensions.md)
 - [Project Structure](ProjectStructure.md)
 - [Requirements](Requirements.md)
-

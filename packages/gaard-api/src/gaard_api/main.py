@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from gaard_api.api.v1.analysis import router as analysis_router
 from gaard_api.api.v1.admin import get_current_admin, router as admin_router
+from gaard_api.api.v1.dashboards import router as dashboards_router
 from gaard_api.api.v1.prompts import router as prompts_router
 from gaard_api.api.v1.query import router as query_router
 from gaard_api.api.v1.schema import router as schema_router
@@ -28,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GAARD API",
-    version="0.2.2",
+    version="2.0.7",
     description="Self-hosted AI SQL Gateway for governed natural-language access to relational data.",
     lifespan=lifespan,
 )
@@ -63,6 +64,7 @@ def license_status(user: AdminUser = Depends(get_current_admin)) -> dict[str, ob
 
 app.include_router(query_router, prefix="/api/v1", tags=["query"])
 app.include_router(analysis_router, prefix="/api/v1", tags=["analysis"])
+app.include_router(dashboards_router, prefix="/api/v1", tags=["dashboards"])
 app.include_router(schema_router, prefix="/api/v1", tags=["schema"])
 app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])

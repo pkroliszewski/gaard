@@ -111,6 +111,116 @@ class DataQueryAuditLog(Base):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    status: Mapped[str] = mapped_column(String(50), index=True, default="active")
+    datasource_id: Mapped[str] = mapped_column(String(255), index=True, default="")
+    datasource_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+    mode: Mapped[str] = mapped_column(String(50), index=True, default="sql")
+    status: Mapped[str] = mapped_column(String(50), index=True, default="completed")
+    original_question: Mapped[str] = mapped_column(Text)
+    standalone_question: Mapped[str] = mapped_column(Text, default="")
+    answer: Mapped[str] = mapped_column(Text, default="")
+    sql: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    data_query_audit_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    analysis_session_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    context_decision: Mapped[str] = mapped_column(String(50), index=True, default="new_topic")
+    context_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Dashboard(Base):
+    __tablename__ = "dashboards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dashboard_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class DashboardUserState(Base):
+    __tablename__ = "dashboard_user_states"
+
+    owner_user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    active_dashboard_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class UserSavedMetric(Base):
+    __tablename__ = "user_saved_metrics"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "widget_key", name="uq_user_saved_metrics_owner_widget"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    widget_key: Mapped[str] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DashboardWidget(Base):
+    __tablename__ = "dashboard_widgets"
+    __table_args__ = (
+        UniqueConstraint("widget_id", name="uq_dashboard_widgets_widget_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    widget_id: Mapped[str] = mapped_column(String(64), index=True)
+    dashboard_id: Mapped[str] = mapped_column(String(64), index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    metric_widget_key: Mapped[str] = mapped_column(String(255), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    visualization_type: Mapped[str] = mapped_column(String(50), default="table")
+    x: Mapped[int] = mapped_column(Integer, default=0)
+    y: Mapped[int] = mapped_column(Integer, default=0)
+    w: Mapped[int] = mapped_column(Integer, default=6)
+    h: Mapped[int] = mapped_column(Integer, default=4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class PromptTemplate(Base):
     __tablename__ = "prompt_templates"
     __table_args__ = (UniqueConstraint("prompt_key", name="uq_prompt_templates_key"),)
