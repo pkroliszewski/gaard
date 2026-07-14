@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from typing import Protocol
 
 from gaard_core.execution.mock_executor import MockQueryExecutor
@@ -57,7 +58,11 @@ class QueryPipeline:
         self.result_interpretation_mode = result_interpretation_mode
         self.output_classification_mode = output_classification_mode
 
-    def handle(self, request: QueryRequest) -> QueryResponse:
+    def handle(
+        self,
+        request: QueryRequest,
+        on_stage: Callable[[str], None] | None = None,
+    ) -> QueryResponse:
         started_at = time.perf_counter()
 
         try:
@@ -72,6 +77,8 @@ class QueryPipeline:
 
         self.sql_validator.validate(generated_sql.sql)
 
+        if on_stage is not None:
+            on_stage("waiting_on_data_server")
         result = self.executor.execute(generated_sql.sql)
         if not request.interpret:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)

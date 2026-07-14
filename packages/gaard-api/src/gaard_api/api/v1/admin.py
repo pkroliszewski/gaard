@@ -255,6 +255,7 @@ class OverviewWidgetFromQueryRequest(BaseModel):
     datasource_key: str = Field(default="default", min_length=1, max_length=255)
     question: str = Field(min_length=1)
     sql: str = Field(min_length=1)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
     result_mode: str = Field(
         default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
     )
@@ -1529,10 +1530,17 @@ def create_overview_widget_from_query(
     )
 
     try:
-        validate_overview_widget_result(
-            widget,
-            execute_overview_sql(session, datasource, request.sql),
+        query_result = QueryResult(
+            columns=list(dict.fromkeys(column for row in request.rows for column in row)),
+            rows=request.rows,
         )
+        result_payload = validate_overview_widget_result(widget, query_result)
+        result_payload["result_mode"] = result_mode
+        if result_mode == OVERVIEW_WIDGET_RESULT_INTERPRETATION:
+            interpretation = interpret_overview_widget_result(datasource, widget, query_result)
+            result_payload["answer"] = interpretation
+            result_payload["interpretation"] = interpretation
+            result_payload["value"] = interpretation
     except QueryExecutionError as exc:
         session.rollback()
         raise HTTPException(
@@ -1577,7 +1585,10 @@ def create_overview_widget_from_query(
     session.commit()
 
     return {
-        "item": serialize_overview_widget(session, widget),
+        "item": {
+            **serialize_overview_widget_config(widget),
+            "result": result_payload,
+        },
     }
 
 

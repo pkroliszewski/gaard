@@ -2335,7 +2335,7 @@ function newChat() {
 function renderMessage(message) {
   const rows = getRows(message.response);
   const meta = message.status === "ok" ? renderMeta(message, rows) : "";
-  const answer = message.status === "pending" ? "Processing..." : message.status === "waiting" ? "Waiting for your answer." : message.status === "error" ? message.error : message.response?.answer || "";
+  const answer = message.status === "pending" ? (message.processingStage || "Processing query..") : message.status === "waiting" ? "Waiting for your answer." : message.status === "error" ? message.error : message.response?.answer || "";
   const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
   const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
   const saveNotice = renderSaveNotice(message);
@@ -2630,6 +2630,7 @@ async function confirmSaveWidgetFromDialog(event) {
         datasource_key: message.response?.metadata?.datasource_id || "default",
         question: message.question,
         sql,
+        rows: getRows(message.response),
         result_mode: "data",
         backend_url: state.backendUrl
       })
@@ -2848,6 +2849,7 @@ async function submitQuestion(event) {
     saveError: "",
     progress: [],
     progressOpen: false,
+    processingStage: "Processing query..",
     analysisSessionId: "",
     userQuestion: ""
   };
@@ -2858,7 +2860,7 @@ async function submitQuestion(event) {
     if (mode === "analysis") {
       await submitAnalysisQuestion(message, question);
     } else {
-      const response = await fetch("/api/query", {
+      const response = await fetch("/api/query/stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2871,13 +2873,11 @@ async function submitQuestion(event) {
           backend_url: state.backendUrl
         })
       });
-      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
         throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
       }
-      syncConversationFromResponse(payload);
-      message.status = "ok";
-      message.response = payload;
+      await readQueryStream(message, response);
     }
   } catch (error) {
     message.status = "error";
@@ -2887,6 +2887,55 @@ async function submitQuestion(event) {
     state.pending = false;
     render({ scrollToLatest: true });
   }
+}
+async function readQueryStream(message, response) {
+  if (!response.body) {
+    throw new Error("Streaming response is not available.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalReceived = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      finalReceived = handleQueryStreamLine(message, line) || finalReceived;
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    finalReceived = handleQueryStreamLine(message, buffer) || finalReceived;
+  }
+  if (!finalReceived) {
+    throw new Error("Query stream ended without a final response.");
+  }
+}
+function handleQueryStreamLine(message, line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  const payload = JSON.parse(trimmed);
+  if (payload?.error?.message) {
+    throw new Error(payload.error.message);
+  }
+  if (payload?.stage) {
+    message.processingStage = payload.stage === "waiting_on_data_server"
+      ? "Waiting on data server..."
+      : "Processing query..";
+    render({ scrollToLatest: true });
+  }
+  if (payload?.final) {
+    syncConversationFromResponse(payload.final);
+    message.status = "ok";
+    message.response = payload.final;
+    message.processingStage = "";
+    render({ scrollToLatest: true });
+    return true;
+  }
+  return false;
 }
 async function submitAnalysisQuestion(message, question) {
   const response = await fetch("/api/analysis/stream", {

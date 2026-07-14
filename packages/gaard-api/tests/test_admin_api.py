@@ -1489,6 +1489,7 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
             "datasource_key": "metadata-db",
             "question": "How many prompts are configured?",
             "sql": "SELECT COUNT(*) AS value FROM prompt_templates",
+            "rows": [{"value": 1}],
         },
     )
 
@@ -1608,6 +1609,7 @@ def test_overview_widget_from_query_strips_datasource_qualifier(
             "datasource_key": "metadata-db",
             "question": "How many prompts are configured?",
             "sql": 'SELECT COUNT(*) AS value FROM "metadata-db".prompt_templates',
+            "rows": [{"value": 1}],
         },
     )
 

@@ -330,6 +330,7 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
         "datasource_key": "default",
         "question": "How many active patients?",
         "sql": "SELECT COUNT(*) AS value FROM patients",
+        "rows": [],
         "result_mode": "data",
     }
 

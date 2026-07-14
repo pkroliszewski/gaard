@@ -60,6 +60,7 @@ class ClientWidgetFromQueryRequest(BaseModel):
     datasource_key: str = "default"
     question: str = Field(min_length=1)
     sql: str = Field(min_length=1)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
     result_mode: str = "data"
     backend_url: str | None = None
 
@@ -303,6 +304,7 @@ async def create_widget_from_query(
                     "datasource_key": request.datasource_key,
                     "question": request.question,
                     "sql": request.sql,
+                    "rows": request.rows,
                     "result_mode": request.result_mode,
                 }),
             )

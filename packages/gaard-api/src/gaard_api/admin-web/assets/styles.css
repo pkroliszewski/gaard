@@ -114,6 +114,10 @@ label {
   font-weight: 600;
 }
 
+#app {
+  height:100vh;
+}
+
 .login-shell {
   min-height: 100vh;
   display: grid;
@@ -193,6 +197,8 @@ label {
   align-items: start;
 }
 
+.schema-editor-tabs { display: none; }
+
 .schema-object-list {
   min-width: 0;
   border: 1px solid var(--line);
@@ -269,6 +275,70 @@ label {
   align-content: start;
 }
 
+.datasource-detail-grid {
+  container-type: inline-size;
+}
+
+.datasource-mobile-tabs { display: none; }
+
+.datasource-form-with-permissions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 20px;
+  align-items: start;
+}
+
+.datasource-form-fields { display: grid; gap: 14px; min-width: 0; }
+.datasource-form-permissions { min-width: 0; }
+.datasource-form-actions { grid-column: 1 / -1; }
+
+.datasource-schema-layout { container-type: inline-size; }
+.datasource-schema-layout > .schema-editor { min-width: 0; }
+
+.schema-object-content { min-width: 0; display: grid; gap: 14px; container-type: inline-size; }
+.schema-object-content-tabs { display: none; gap: 6px; }
+.schema-object-content-tabs button.active { background: var(--accent); border-color: var(--accent); color: white; }
+.schema-object-content > .schema-object-details,
+.schema-object-content > .schema-object-details.active,
+.datasource-schema-permission-pane { width:100%;min-width: 300px }
+aside {height: 100%}
+
+.datasource-permissions {
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  padding-left: 20px;
+}
+
+.datasource-permissions h3 { margin: 0 0 10px; font-size: 16px; }
+.datasource-permissions input[type="search"] { margin-bottom: 10px; }
+.permission-user-list { max-height: 390px; overflow: auto; display: grid; gap: 4px; }
+.permission-user { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px; border-radius: 6px; background: #fbfcfd; }
+.permission-user input { width: auto; }
+.permission-user span { min-width: 0; display: grid; gap: 2px; }
+.permission-user small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.permission-user em { color: var(--muted); font-size: 11px; font-style: normal; }
+
+@container (max-width: 600px) {
+  .datasource-form-with-permissions { grid-template-columns: 1fr; }
+  .datasource-mobile-tabs { display: flex; gap: 6px; grid-column: 1 / -1; }
+  .schema-object-content-tabs { display: flex; gap: 6px; grid-column: 1 / -1; }
+  .schema-object-details { display: none }
+  .schema-object-details.active { display: grid }
+  .datasource-schema-permission-pane { display: none }
+  .datasource-schema-permission-pane.active { display: block }
+  .datasource-mobile-tabs button.active { background: var(--accent); border-color: var(--accent); color: white; }
+  .datasource-form-fields, .datasource-form-permissions { display: none; }
+  .datasource-form-fields.mobile-active, .datasource-form-permissions.mobile-active { display: grid; }
+  .datasource-permissions { border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; }
+  .schema-editor { grid-template-columns: 1fr; }
+  .schema-editor-tabs { display: flex; gap: 6px; grid-column: 1 / -1; }
+  .schema-editor-tabs button.active { background: var(--accent); border-color: var(--accent); color: white; }
+  .schema-object-list,
+  .schema-object-content { display: none; }
+  .schema-object-list.mobile-active,
+  .schema-object-content.mobile-active { display: grid; }
+}
+
 .schema-object-detail-header {
   display: flex;
   align-items: flex-start;
@@ -301,8 +371,13 @@ label {
   font-size: 13px;
 }
 
+.schema-object-content2{
+  display: flex;
+  min-width: 300px;
+}
+
 .app-shell {
-  height: 100vh;
+  height: 100%;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   overflow: hidden;
@@ -315,12 +390,37 @@ label {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
 }
 
 .sidebar-header {
   display: contents;
 }
 
+#admin-navigation {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #555 #111;
+}
+
+/* Chrome, Edge, Safari */
+#admin-navigation::-webkit-scrollbar {
+  width: 8px;
+}
+
+#admin-navigation::-webkit-scrollbar-track {
+  background: #111;
+}
+
+#admin-navigation::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 999px;
+  border: 2px solid #111;
+}
+
+#admin-navigation::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -439,9 +539,10 @@ label {
 .main {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  height: 100%;
   overflow: hidden;
+  flex-direction: column;
 }
 
 .topbar {
@@ -471,11 +572,12 @@ label {
 .content {
   min-width: 0;
   min-height: 0;
-  padding: 22px;
   display: grid;
   gap: 18px;
+  padding: 22px;
   align-content: start;
   overflow: auto;
+  max-height: 100%;
 }
 
 .toolbar {
@@ -520,6 +622,7 @@ label {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .extension-frame {
@@ -1206,6 +1309,8 @@ label {
 }
 
 .table-wrap {
+  min-width: 0;
+  max-width: 100%;
   overflow: auto;
 }
 
@@ -1213,6 +1318,28 @@ table {
   width: 100%;
   min-width: 760px;
   border-collapse: collapse;
+}
+
+.admin-audit-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.admin-audit-table th:nth-child(1) { width: 14%; }
+.admin-audit-table th:nth-child(2) { width: 11%; }
+.admin-audit-table th:nth-child(3) { width: 14%; }
+.admin-audit-table th:nth-child(4) { width: 16%; }
+.admin-audit-table th:nth-child(5) { width: 45%; }
+
+.admin-audit-table td,
+.admin-audit-table code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.admin-audit-table code {
+  white-space: pre-wrap;
 }
 
 th,
@@ -1360,8 +1487,7 @@ code {
   .license-status-grid,
   .package-update-steps,
   .widget-grid,
-  .split,
-  .schema-editor {
+  .split {
     grid-template-columns: 1fr;
   }
 
@@ -1418,3 +1544,12 @@ code {
 .identity-provider-table th, .identity-provider-table td { padding:7px 8px; border:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
 .identity-provider-table th { width:40%; color:var(--muted); font-weight:600; background:#fafbfc; }
 .identity-warning { cursor:help; font-size:13px; }
+.main-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.main-section > .content {
+  min-height: 100%;
+}

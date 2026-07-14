@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, TypeVar, cast
+from typing import Any, Protocol, TypeVar, cast
 
 from sqlglot import Dialects
 from sqlalchemy.orm import Session
@@ -36,6 +36,13 @@ class QueryExecutor(Protocol):
 
 
 class QueryBehaviorHook(Protocol):
+    def filter_datasource_contexts(
+        self,
+        principal: Any | None,
+        datasource_contexts: DatasourceContexts,
+    ) -> DatasourceContexts | None:
+        return None
+
     def resolve_effective_query_context(
         self,
         request: QueryRequest,
@@ -97,6 +104,21 @@ class QueryHookRegistry:
             request,
             default=lambda: default_effective_query_context(request),
         )
+
+    def filter_datasource_contexts(
+        self,
+        principal: Any | None,
+        datasource_contexts: DatasourceContexts,
+    ) -> DatasourceContexts:
+        contexts = datasource_contexts
+        for hook in self._hooks:
+            method = getattr(hook, "filter_datasource_contexts", None)
+            if method is None:
+                continue
+            result = method(principal, contexts)
+            if result is not None:
+                contexts = result
+        return contexts
 
     def format_datasource_schemas(self, datasource_contexts: DatasourceContexts) -> str:
         return self._first_result(

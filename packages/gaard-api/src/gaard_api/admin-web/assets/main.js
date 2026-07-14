@@ -17,13 +17,31 @@ var builtInSectionLabels = {
   license: "License",
   "admin-audit": "Admin audit"
 };
+var ADMIN_SECTION_STORAGE_KEY = "gaard_admin_section";
+var ADMIN_MENU_GROUPS_STORAGE_KEY = "gaard_admin_menu_groups";
+function getInitialAdminSection() {
+  const storedSection = localStorage.getItem(ADMIN_SECTION_STORAGE_KEY);
+  return storedSection && (builtInSectionLabels[storedSection] || storedSection.startsWith("extension:")) ? storedSection : "overview";
+}
+function getInitialOpenMenuGroups() {
+  try {
+    const storedGroups = JSON.parse(localStorage.getItem(ADMIN_MENU_GROUPS_STORAGE_KEY) || "{}");
+    if (!storedGroups || typeof storedGroups !== "object" || Array.isArray(storedGroups)) return {};
+    return Object.fromEntries(Object.entries(storedGroups).filter(([, isOpen]) => typeof isOpen === "boolean"));
+  } catch {
+    return {};
+  }
+}
+function persistOpenMenuGroups() {
+  localStorage.setItem(ADMIN_MENU_GROUPS_STORAGE_KEY, JSON.stringify(state.openMenuGroups));
+}
 var state = {
   token: localStorage.getItem("gaard_admin_token"),
   username: localStorage.getItem("gaard_admin_username") || "",
   mustChangePassword: localStorage.getItem("gaard_admin_must_change") === "true",
   mobileMenuOpen: false,
-  openMenuGroups: {},
-  section: "overview",
+  openMenuGroups: getInitialOpenMenuGroups(),
+  section: getInitialAdminSection(),
   error: "",
   success: "",
   overview: null,
@@ -65,6 +83,12 @@ var state = {
   datasourceSchemaSelectedObjectName: "",
   datasourceSchemaShowEnabledOnly: false,
   datasourceSchemaDraftTables: null,
+  datasourcePermissions: null,
+  datasourcePermissionUsers: [],
+  datasourcePermissionSearch: "",
+  datasourcePermissionsTab: "config",
+  datasourceSchemaContentTab: "details",
+  datasourceSchemaEditorTab: "tables",
   extensionSections: [],
   extensionsLoaded: false,
   license: null,
@@ -367,6 +391,8 @@ function logout() {
   localStorage.removeItem("gaard_admin_token");
   localStorage.removeItem("gaard_admin_username");
   localStorage.removeItem("gaard_admin_must_change");
+  localStorage.removeItem(ADMIN_SECTION_STORAGE_KEY);
+  localStorage.removeItem(ADMIN_MENU_GROUPS_STORAGE_KEY);
   render();
 }
 function render() {
@@ -374,6 +400,19 @@ function render() {
   if (!state.token) return renderLogin();
   if (state.mustChangePassword) return renderPasswordChange();
   renderShell();
+}
+function renderDatasourceSchemaPreservingScroll() {
+  const content = document.querySelector(".content");
+  const schemaObjectListBody = document.querySelector(".schema-object-list-body");
+  const contentScrollTop = content?.scrollTop || 0;
+  const schemaObjectListScrollTop = schemaObjectListBody?.scrollTop || 0;
+
+  render();
+
+  const nextContent = document.querySelector(".content");
+  const nextSchemaObjectListBody = document.querySelector(".schema-object-list-body");
+  if (nextContent) nextContent.scrollTop = contentScrollTop;
+  if (nextSchemaObjectListBody) nextSchemaObjectListBody.scrollTop = schemaObjectListScrollTop;
 }
 function renderLogin() {
   app.innerHTML = `
@@ -465,10 +504,12 @@ function renderShell() {
           <h1>${escapeHtml(activeLabel || "Admin")}</h1>
           <div class="topbar-actions"><span>${escapeHtml(state.username)}</span><button id="top-logout-button">Sign out</button></div>
         </header>
-        <section class="content">
-          <div id="message-region">${renderMessages()}</div>
-          ${renderSection()}
-        </section>
+        <div class="main-section">
+            <section class="content">
+              <div id="message-region">${renderMessages()}</div>
+              ${renderSection()}
+            </section>
+        </div>
       </main>
     </div>
     ${renderOverviewWidgetModal()}
@@ -482,12 +523,14 @@ function attachShellHandlers() {
       const groupKey = button.dataset.menuGroup;
       if (!groupKey) return;
       state.openMenuGroups[groupKey] = !state.openMenuGroups[groupKey];
+      persistOpenMenuGroups();
       updateSidebar();
     });
   });
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.section = button.dataset.section;
+      localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, state.section);
       if (state.section === "identity") identityModule.activate();
       state.mobileMenuOpen = false;
       state.overviewEditorWidgetKey = null;
@@ -586,7 +629,7 @@ function getExtensionFrameMaxHeight(frame) {
   return Math.max(1, content.clientHeight - reservedHeight);
 }
 function setExtensionFrameHeight(frame, height) {
-  const maxHeight = getExtensionFrameMaxHeight(frame);
+  const maxHeight = getExtensionFrameMaxHeight(frame)-1;
   frame.style.height = `${Math.ceil(Math.min(height+2, maxHeight))}px`;//+2 because of border 1px
 }
 window.addEventListener("message", (event) => {
@@ -1356,7 +1399,7 @@ function renderDatasources() {
       </section>
       <section class="panel">
         <div class="panel-header"><h2>${selected ? escapeHtml(selected.name) : "New datasource"}</h2></div>
-        <div class="panel-body">${renderDatasourceForm(selected)}</div>
+        <div class="panel-body datasource-detail-grid">${renderDatasourceForm(selected, selected ? renderDatasourcePermissions(selected) : "")}</div>
       </section>
     </div>
     ${selected ? renderDatasourceSchema() : ""}`;
@@ -1365,7 +1408,7 @@ function getSelectedDatasource() {
   if (state.selectedDatasourceId === "new") return null;
   return state.datasources.find((item) => item.id === state.selectedDatasourceId) || state.datasources[0] || null;
 }
-function renderDatasourceForm(connector) {
+function renderDatasourceForm(connector, permissions = "") {
   const systemManaged = connector?.system_managed === true;
   const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
   const selectedType = getDatasourceType(selectedTypeKey);
@@ -1375,7 +1418,9 @@ function renderDatasourceForm(connector) {
   const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
   const connectionValues = datasourceConnectionConfigDefaults(selectedType, connector);
   return `
-    <form id="datasource-form" class="form-grid">
+    <form id="datasource-form" class="form-grid datasource-form-with-permissions">
+      ${connector ? `<div class="datasource-mobile-tabs"><button type="button" data-datasource-permissions-tab="config" class="${state.datasourcePermissionsTab === "config" ? "active" : ""}">Configuration</button><button type="button" data-datasource-permissions-tab="permissions" class="${state.datasourcePermissionsTab === "permissions" ? "active" : ""}">Permissions</button></div>` : ""}
+      <div class="datasource-form-fields ${state.datasourcePermissionsTab === "config" ? "mobile-active" : ""}">
       <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
       ${systemManaged ? `<div class="badge">System managed</div>` : ""}
       <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
@@ -1389,7 +1434,9 @@ function renderDatasourceForm(connector) {
         ${renderDatasourceConnectionFields(selectedType, connectionValues, disabled)}
       </div>
       <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
-      <div class="button-row">
+      </div>
+      <div class="datasource-form-permissions ${state.datasourcePermissionsTab === "permissions" ? "mobile-active" : ""}">${permissions}</div>
+      <div class="button-row datasource-form-actions">
         <button type="button" id="test-datasource" ${disabled}>Test</button>
         <button type="button" id="introspect-datasource" ${connector ? "" : "disabled"}>Schema introspection</button>
         <button type="button" id="activate-datasource" ${connector && !connector.active && !systemManaged ? "" : "disabled"}>Activate</button>
@@ -1523,10 +1570,11 @@ function renderDatasourceSchema() {
   return `
     <section class="panel">
       <div class="panel-header"><h2>Schema introspection</h2><span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span></div>
-      <div class="panel-body">
+      <div class="panel-body datasource-schema-layout">
         ${state.datasourceSchemaLoading ? `<p class="muted">loading schema</p>` : state.datasourceSchemaError ? `<p class="error">${escapeHtml(state.datasourceSchemaError)}</p>` : schema ? `
-          <form id="datasource-schema-form" class="schema-editor">
-            <section class="schema-object-list">
+          <form id="datasource-schema-form" class="schema-editor mobile-active">
+            <div class="schema-editor-tabs"><button type="button" data-schema-editor-tab="tables" class="${state.datasourceSchemaEditorTab === "tables" ? "active" : ""}">Tables & views</button><button type="button" data-schema-editor-tab="details" class="${state.datasourceSchemaEditorTab === "details" ? "active" : ""}">Table settings</button></div>
+            <section class="schema-object-list ${state.datasourceSchemaEditorTab === "tables" ? "mobile-active" : ""}">
               <div class="schema-object-list-header">
                 <label class="inline-check"><input id="schema-show-enabled-only" type="checkbox" ${state.datasourceSchemaShowEnabledOnly ? "checked" : ""} /> Show enabled objects only</label>
               </div>
@@ -1534,13 +1582,29 @@ function renderDatasourceSchema() {
                 ${visibleTables.length ? visibleTables.map((table) => renderDatasourceObjectListItem(table, draftTables[table.name] || {}, selectedTable?.name === table.name)).join("") : `<p class="muted schema-object-empty">No enabled objects.</p>`}
               </div>
             </section>
-            <section class="schema-object-details">
-              ${selectedTable ? renderDatasourceObjectDetails(selectedTable, selectedSettings) : `<p class="muted">Select a table or view to edit its guidance.</p>`}
+            <div class="schema-object-content ${state.datasourceSchemaEditorTab === "details" ? "mobile-active" : ""}">
+              <div class="schema-object-content-tabs"><button type="button" data-datasource-schema-content-tab="details" class="${state.datasourceSchemaContentTab === "details" ? "active" : ""}">Table settings</button><button type="button" data-datasource-schema-content-tab="permissions" class="${state.datasourceSchemaContentTab === "permissions" ? "active" : ""}">Permissions</button></div>
+              <div class="schema-object-content2">
+              <section class="schema-object-details ${state.datasourceSchemaContentTab === "details" ? "active" : ""}">
+                ${selectedTable ? renderDatasourceObjectDetails(selectedTable, selectedSettings) : `<p class="muted">Select a table or view to edit its guidance.</p>`}
+              </section>
+              <div class="datasource-schema-permission-pane ${state.datasourceSchemaContentTab === "permissions" ? "active" : ""}">${renderDatasourcePermissions(getSelectedDatasource(), selectedTable)}</div>
+              </div>
               <div class="form-actions"><button class="primary" type="submit">Save schema settings</button></div>
-            </section>
-          </form>` : `<p class="muted">Run schema introspection to cache tables, views, keys and relationships.</p>`}
+            </div></form>` : `<p class="muted">Run schema introspection to cache tables, views, keys and relationships.</p>`}
       </div>
     </section>`;
+}
+function renderDatasourcePermissions(connector, table = null) {
+  if (!connector || !state.datasourcePermissions) return "";
+  const query = state.datasourcePermissionSearch.trim().toLowerCase();
+  const users = state.datasourcePermissionUsers.filter((user) => !query || [user.name, user.username, user.provider].some((value) => String(value || "").toLowerCase().includes(query)));
+  const assigned = new Set(table
+    ? (state.datasourcePermissions.table_denials?.[table.name] || [])
+    : (state.datasourcePermissions.datasource_user_ids || []));
+  const title = table ? `Permissions · ${table.name}` : "Datasource permissions";
+  const action = table ? "Disallow" : "Allow";
+  return `<aside class="datasource-permissions"><h3>${escapeHtml(title)}</h3><input id="datasource-permission-search" type="search" placeholder="Search users" value="${escapeHtml(state.datasourcePermissionSearch)}" /><p class="muted">${table ? "Checked users cannot use this table or view." : "Checked users can access this datasource."}</p><div class="permission-user-list">${users.length ? users.map((user) => `<label class="permission-user"><input type="checkbox" data-datasource-permission-user="${escapeHtml(user.id)}" data-datasource-permission-table="${escapeHtml(table?.name || "")}" ${assigned.has(user.id) ? "checked" : ""} /><span><strong>${escapeHtml(user.name || user.username)}</strong><small>${escapeHtml(user.username)} · ${escapeHtml(user.provider)}</small></span><em>${action}</em></label>`).join("") : `<p class="muted">No matching users.</p>`}</div></aside>`;
 }
 function getDatasourceSchemaDraftTables(rawTables, tableSettings) {
   if (!state.datasourceSchemaDraftTables) {
@@ -1831,7 +1895,7 @@ function renderLicensePackageProgress() {
 function renderAdminAudit() {
   return `
     <section class="panel"><div class="panel-header"><h2>Admin audit</h2></div>
-      <div class="table-wrap"><table>
+      <div class="table-wrap"><table class="admin-audit-table">
         <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Resource</th><th>Details</th></tr></thead>
         <tbody>${state.adminAudit.map((item) => `<tr><td>${escapeHtml(item.occurred_at)}</td><td>${escapeHtml(item.actor)}</td><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.resource_type)}:${escapeHtml(item.resource_id)}</td><td><code>${escapeHtml(JSON.stringify(item.details))}</code></td></tr>`).join("")}</tbody>
       </table></div>
@@ -1862,6 +1926,7 @@ function attachSectionHandlers() {
       state.overviewPlacementSlot = Number(button.dataset.overviewNewWidget || 0);
       state.selectedOverviewWidgetKey = "__new__";
       state.section = "widgets";
+      localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, state.section);
       render();
     });
   });
@@ -1935,6 +2000,11 @@ function attachSectionHandlers() {
   document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
   document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
   document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
+  document.querySelectorAll("[data-datasource-permissions-tab]").forEach((button) => button.addEventListener("click", () => { state.datasourcePermissionsTab = button.dataset.datasourcePermissionsTab; render(); }));
+  document.querySelectorAll("[data-schema-editor-tab]").forEach((button) => button.addEventListener("click", () => { syncDatasourceSchemaDraftFromForm(); state.datasourceSchemaEditorTab = button.dataset.schemaEditorTab; render(); }));
+  document.querySelectorAll("[data-datasource-schema-content-tab]").forEach((button) => button.addEventListener("click", () => { syncDatasourceSchemaDraftFromForm(); state.datasourceSchemaContentTab = button.dataset.datasourceSchemaContentTab; render(); }));
+  document.querySelector("#datasource-permission-search")?.addEventListener("input", (event) => { state.datasourcePermissionSearch = event.currentTarget.value; render(); });
+  document.querySelectorAll("[data-datasource-permission-user]").forEach((input) => input.addEventListener("change", saveDatasourcePermission));
   document.querySelector("#schema-show-enabled-only")?.addEventListener("change", (event) => {
     syncDatasourceSchemaDraftFromForm();
     state.datasourceSchemaShowEnabledOnly = event.currentTarget.checked;
@@ -1944,13 +2014,14 @@ function attachSectionHandlers() {
     input.addEventListener("change", () => {
       if (!state.datasourceSchemaShowEnabledOnly) return;
       syncDatasourceSchemaDraftFromForm();
-      render();
+      renderDatasourceSchemaPreservingScroll();
     });
   });
   document.querySelectorAll("[data-schema-object]").forEach((button) => {
     button.addEventListener("click", () => {
       syncDatasourceSchemaDraftFromForm();
       state.datasourceSchemaSelectedObjectName = button.dataset.schemaObject || "";
+      state.datasourceSchemaEditorTab = "details";
       render();
     });
   });
@@ -1962,6 +2033,7 @@ function attachSectionHandlers() {
   document.querySelectorAll("[data-open-business-logic]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.section = "business-logic";
+      localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, state.section);
       render();
       await loadBusinessLogicSuggestions();
     });
@@ -2885,6 +2957,7 @@ async function loadExtensions(shouldRender = true) {
   state.extensionsLoaded = true;
   if (isExtensionSection(state.section) && !getExtensionSection(state.section)) {
     state.section = "overview";
+    localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, state.section);
   }
   if (shouldRender) {
     render();
@@ -2968,6 +3041,40 @@ async function loadDatasources() {
   }
   render();
   void loadDatasourceSchema();
+  void loadDatasourcePermissions();
+}
+async function loadDatasourcePermissions() {
+  const selected = getSelectedDatasource();
+  if (!selected) { state.datasourcePermissions = null; return; }
+  try {
+    const [permissions, identities] = await Promise.all([
+      api(`/api/v1/extensions/identity-privileges/datasources/${selected.id}/permissions`),
+      api("/api/v1/admin/identities")
+    ]);
+    state.datasourcePermissions = permissions;
+    state.datasourcePermissionUsers = identities.items || [];
+  } catch (_error) {
+    state.datasourcePermissions = null;
+    state.datasourcePermissionUsers = [];
+  }
+  render();
+}
+async function saveDatasourcePermission(event) {
+  const input = event.currentTarget;
+  const selected = getSelectedDatasource();
+  if (!selected) return;
+  const identityId = input.dataset.datasourcePermissionUser;
+  const tableName = input.dataset.datasourcePermissionTable;
+  const url = tableName
+    ? `/api/v1/extensions/identity-privileges/datasources/${selected.id}/tables/${encodeURIComponent(tableName)}/permissions`
+    : `/api/v1/extensions/identity-privileges/datasources/${selected.id}/permissions`;
+  const body = tableName
+    ? { identity_id: identityId, denied: input.checked }
+    : { identity_id: identityId, allowed: input.checked };
+  try {
+    await api(url, { method: "PUT", body: JSON.stringify(body) });
+    await loadDatasourcePermissions();
+  } catch (error) { setMessage("error", error.message); await loadDatasourcePermissions(); }
 }
 async function loadDatasourceSchema() {
   const selected = getSelectedDatasource();

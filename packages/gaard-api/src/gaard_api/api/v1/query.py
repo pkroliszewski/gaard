@@ -1,5 +1,7 @@
 import json
 import re
+import queue
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -561,6 +563,7 @@ def run_sql_request(
     effective_request: QueryRequest,
     datasource_context: DatasourceContext | DatasourceContexts | None,
     extra_metadata: dict[str, Any] | None = None,
+    on_stage: Any | None = None,
 ) -> QueryResponse:
     extra_metadata = extra_metadata or {}
     datasource_contexts = normalize_datasource_contexts(datasource_context)
@@ -610,7 +613,7 @@ def run_sql_request(
         return response
     pipeline = create_pipeline(datasource_context, interpret=effective_request.interpret)
     try:
-        response = pipeline.handle(effective_request)
+        response = pipeline.handle(effective_request, on_stage=on_stage)
     except QueryExecutionError as exc:
         detected_datasource_ids = detect_datasource_ids_from_sql(
             exc.sql,
@@ -745,10 +748,15 @@ def run_sql_request(
 
 def effective_query_request(
     request: QueryRequest,
+    principal: AuthenticatedSession | None = None,
 ) -> tuple[QueryRequest, DatasourceContexts]:
     effective_context = get_query_hook_registry().resolve_effective_query_context(request)
-    license_service.ensure_datasource_contexts_allowed(effective_context.datasource_contexts)
-    return effective_context.request, effective_context.datasource_contexts
+    contexts = get_query_hook_registry().filter_datasource_contexts(
+        principal,
+        effective_context.datasource_contexts,
+    )
+    license_service.ensure_datasource_contexts_allowed(contexts)
+    return effective_context.request, contexts
 
 
 def conversation_principal(user: AuthenticatedSession) -> ConversationPrincipal:
@@ -1525,7 +1533,7 @@ def query(
     request: QueryRequest,
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> QueryResponse:
-    effective_request, datasource_context = effective_query_request(request)
+    effective_request, datasource_context = effective_query_request(request, _user)
     conversation, context_classification, query_request = resolve_request_conversation(
         effective_request,
         conversation_principal(_user),
@@ -1574,60 +1582,79 @@ def query_stream(
     request: QueryRequest,
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> StreamingResponse:
-    effective_request, datasource_context = effective_query_request(request)
-    conversation, context_classification, query_request = resolve_request_conversation(
-        effective_request,
-        conversation_principal(_user),
-    )
-    active_datasource_ids = [connector.connector_key for connector, _cache in datasource_context]
-    extra_metadata = (
-        {"active_datasource_ids": active_datasource_ids} if active_datasource_ids else None
-    )
-
     def single_response() -> Iterator[str]:
-        if conversation is not None and query_request is None:
-            yield ndjson_line(
-                {
-                    "final": ambiguous_context_response(
-                        effective_request,
-                        conversation,
-                        context_classification,
-                    ).model_dump(mode="json")
-                }
-            )
-            return
+        yield ndjson_line({"stage": "processing_query"})
+        events: queue.Queue[dict[str, Any] | None] = queue.Queue()
 
-        resolved_request = query_request or effective_request
-        if not active_datasource_ids:
-            response = build_no_active_datasources_response(resolved_request)
-            if conversation is not None:
-                response = add_conversation_to_response(
-                    response,
-                    conversation=conversation,
-                    classification=context_classification,
-                    original_request=effective_request,
-                    effective_request=resolved_request,
-                    mode="sql",
-                    status_value="blocked",
+        def run_query() -> None:
+            try:
+                effective_request, datasource_context = effective_query_request(request, _user)
+                conversation, context_classification, query_request = resolve_request_conversation(
+                    effective_request,
+                    conversation_principal(_user),
                 )
-            yield ndjson_line({"final": response.model_dump(mode="json")})
-            return
+                active_datasource_ids = [
+                    connector.connector_key for connector, _cache in datasource_context
+                ]
+                extra_metadata = (
+                    {"active_datasource_ids": active_datasource_ids}
+                    if active_datasource_ids
+                    else None
+                )
 
-        response = run_sql_request(
-            resolved_request,
-            datasource_context,
-            extra_metadata,
-        )
-        if conversation is not None:
-            response = add_conversation_to_response(
-                response,
-                conversation=conversation,
-                classification=context_classification,
-                original_request=effective_request,
-                effective_request=resolved_request,
-                mode="sql",
-            )
-        yield ndjson_line({"final": response.model_dump(mode="json")})
+                if conversation is not None and query_request is None:
+                    events.put({
+                        "final": ambiguous_context_response(
+                            effective_request,
+                            conversation,
+                            context_classification,
+                        ).model_dump(mode="json")
+                    })
+                    return
+
+                resolved_request = query_request or effective_request
+                if not active_datasource_ids:
+                    response = build_no_active_datasources_response(resolved_request)
+                    if conversation is not None:
+                        response = add_conversation_to_response(
+                            response,
+                            conversation=conversation,
+                            classification=context_classification,
+                            original_request=effective_request,
+                            effective_request=resolved_request,
+                            mode="sql",
+                            status_value="blocked",
+                        )
+                    events.put({"final": response.model_dump(mode="json")})
+                    return
+
+                response = run_sql_request(
+                    resolved_request,
+                    datasource_context,
+                    extra_metadata,
+                    on_stage=lambda stage: events.put({"stage": stage}),
+                )
+                if conversation is not None:
+                    response = add_conversation_to_response(
+                        response,
+                        conversation=conversation,
+                        classification=context_classification,
+                        original_request=effective_request,
+                        effective_request=resolved_request,
+                        mode="sql",
+                    )
+                events.put({"final": response.model_dump(mode="json")})
+            except Exception as exc:
+                events.put({"error": {"code": "QUERY_FAILED", "message": str(exc)}})
+            finally:
+                events.put(None)
+
+        threading.Thread(target=run_query, daemon=True).start()
+        while True:
+            event = events.get()
+            if event is None:
+                return
+            yield ndjson_line(event)
 
     return StreamingResponse(
         single_response(),
