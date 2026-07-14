@@ -1626,6 +1626,64 @@ button.primary {
   margin-bottom: 18px;
 }
 
+.dashboard-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dashboard-edit-mode-button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid #dbe4ed;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #263442;
+  box-shadow: 0 4px 12px rgba(22, 40, 58, 0.04);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dashboard-edit-mode-button:hover,
+.dashboard-edit-mode-button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dashboard-edit-mode-button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.dashboard-edit-mode-button.saving,
+.dashboard-edit-mode-button:disabled {
+  cursor: wait;
+  opacity: 0.92;
+}
+
+.dashboard-edit-mode-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+}
+
+.dashboard-edit-saving-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: dashboard-spin 0.7s linear infinite;
+}
+
 .dashboard-add-widget-button {
   width: 36px;
   min-height: 36px;
@@ -2386,6 +2444,10 @@ button.primary {
   opacity: 0.7;
 }
 
+.dashboard-grid-readonly .ui-resizable-handle {
+  display: none !important;
+}
+
 .dashboard-grid .grid-stack-item:hover > .ui-resizable-handle,
 .dashboard-grid .grid-stack-item.ui-resizable-resizing > .ui-resizable-handle {
   opacity: 1;
@@ -2960,6 +3022,28 @@ button.placeholder-item {
   }
 }
 
+@media (max-width: 700px) {
+  .dashboard-grid {
+    margin-inline: 0;
+  }
+
+  .dashboard-grid .grid-stack-item,
+  .dashboard-user-widget,
+  .dashboard-widget-chart,
+  .dashboard-table-widget {
+    min-width: 0;
+  }
+
+  .grid-stack-item-content.dashboard-card {
+    min-width: 0;
+    padding: 10px;
+  }
+
+  .dashboard-card header {
+    padding: 2px 4px 8px;
+  }
+}
+
 @media (max-width: 580px) {
   .app-shell {
     grid-template-columns: 64px minmax(0, 1fr);
@@ -2976,6 +3060,10 @@ button.placeholder-item {
 
   .dashboard-toolbar {
     display: grid;
+  }
+
+  .dashboard-toolbar-actions {
+    flex-wrap: wrap;
   }
 
   .widget-type-grid {

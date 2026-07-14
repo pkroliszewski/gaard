@@ -73,6 +73,33 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "Save changes" in response.text
     assert "include_result" in response.text
     assert "includeResult: false" in response.text
+    assert "dashboardEditMode" in response.text
+    assert "dashboardLayoutSaving" in response.text
+    assert "dashboardLayoutSavePromise" in response.text
+    assert "dashboardLayoutSaveSequence" in response.text
+    assert "data-toggle-dashboard-edit" in response.text
+    assert "Edit layout" in response.text
+    assert "Finish editing" in response.text
+    assert "Saving dashboard layout" in response.text
+    assert "dashboard-edit-saving-spinner" in response.text
+    assert "toggleDashboardEditMode" in response.text
+    assert "setDashboardLayoutSaving" in response.text
+    assert "flushPendingDashboardLayoutSave" in response.text
+    assert "await state.dashboardLayoutSavePromise" in response.text
+    assert "saveSequence !== state.dashboardLayoutSaveSequence" in response.text
+    assert "updatedWidget.layout" in response.text
+    assert "return updated;" not in response.text
+    assert "columnOpts" in response.text
+    assert "breakpointForWindow: false" in response.text
+    assert "breakpoints" in response.text
+    assert 'layout: "list"' in response.text
+    assert 'layout: "moveScale"' in response.text
+    assert "canPersistDashboardLayout" in response.text
+    assert "getColumn?.()" in response.text
+    assert '"dragstop resizestop"' in response.text
+    assert '"change dragstop resizestop"' not in response.text
+    assert "grid.enable?.()" in response.text
+    assert "grid.disable?.()" in response.text
     assert "resizestop" in response.text
     assert "alwaysShowResizeHandle" in response.text
     assert "/api/datasources/excel" in response.text
@@ -82,6 +109,28 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "user_question" in response.text
     assert "Investigation" not in response.text
     assert "investigation" not in response.text
+
+
+def test_client_dashboard_edit_mode_styles() -> None:
+    client = TestClient(app)
+    response = client.get("/assets/styles.css")
+
+    assert response.status_code == 200
+    assert "dashboard-edit-mode-button" in response.text
+    assert "dashboard-edit-saving-spinner" in response.text
+    assert "dashboard-grid-readonly" in response.text
+    assert "ui-resizable-handle" in response.text
+
+
+def test_client_dashboard_mobile_styles() -> None:
+    client = TestClient(app)
+    response = client.get("/assets/styles.css")
+
+    assert response.status_code == 200
+    assert "@media (max-width: 700px)" in response.text
+    assert ".dashboard-grid" in response.text
+    assert ".dashboard-user-widget" in response.text
+    assert ".dashboard-widget-chart" in response.text
 
 
 def test_client_app_proxies_query(monkeypatch) -> None:
