@@ -2,6 +2,10 @@ import { createIdentityModule } from "./identity.js";
 // src/main.ts
 var app = document.querySelector("#app");
 var licensePackageUpdatePollTimer = null;
+var overviewGridStack = null;
+var overviewGridSaveTimer = null;
+var overviewGridSaveInFlight = false;
+var overviewGridSaveQueued = false;
 var builtInSectionLabels = {
   overview: "Overview",
   widgets: "Widgets",
@@ -53,10 +57,7 @@ var state = {
   overviewEditorWidgetKey: null,
   overviewPlacementSlot: null,
   confirmDialog: null,
-  draggedOverviewWidgetKey: null,
-  overviewResizeState: null,
   overviewExtraSlots: 0,
-  overviewRemovedEmptySlots: [],
   overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
   overviewRefreshing: false,
   overviewTablePages: {},
@@ -117,10 +118,10 @@ var outputClassifications = [
   { value: "unknown", label: "Unknown" }
 ];
 var OVERVIEW_TABLE_PAGE_SIZE = 10;
-var OVERVIEW_GRID_COLUMNS = 4;
-var OVERVIEW_MIN_GRID_SLOTS = 8;
+var OVERVIEW_GRID_COLUMNS = 12;
+var OVERVIEW_MIN_GRID_SLOTS = 0;
 var OVERVIEW_SLOT_INCREMENT = 1;
-var OVERVIEW_MAX_GRID_SLOTS = 40;
+var OVERVIEW_MAX_GRID_SLOTS = 120;
 var ALLOWED_WIDGET_HTML_TAGS = /* @__PURE__ */ new Set(["A", "B", "I", "UL", "LI"]);
 var DROPPED_WIDGET_HTML_TAGS = /* @__PURE__ */ new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE", "SVG", "MATH"]);
 function getMenuGroups() {
@@ -515,6 +516,7 @@ function renderShell() {
     ${renderOverviewWidgetModal()}
     <div id="confirm-dialog-host">${renderConfirmDialog()}</div>`;
   attachShellHandlers();
+  initializeOverviewGridStack();
   resizeExtensionFrames();
 }
 function attachShellHandlers() {
@@ -749,7 +751,7 @@ function renderOverview() {
       </div>
       <button class="primary" type="button" id="overview-refresh" ${isLoading ? "disabled" : ""}>Refresh</button>
     </div>
-    <div class="overview-grid">
+    <div class="overview-grid grid-stack" data-overview-grid>
       ${showInitialLoader ? renderOverviewLoading() : renderOverviewGrid(widgets, slotCount)}
     </div>
     <div class="overview-grid-actions">
@@ -764,62 +766,42 @@ function renderOverviewLoading() {
       <span>Refreshing</span>
     </section>`;
 }
+function getOverviewEmptySlotCount(widgets) {
+  const occupiedSlotCount = buildOverviewLayout(widgets).occupiedSlots.size;
+  const requestedEmptySlots = Math.max(0, Math.floor(Number(state.overviewExtraSlots) || 0));
+  return Math.min(requestedEmptySlots, Math.max(0, OVERVIEW_MAX_GRID_SLOTS - occupiedSlotCount));
+}
 function getOverviewBaseSlotCount(widgets) {
-  const layout = buildOverviewLayout(widgets);
-  const occupiedSlots = Array.from(layout.occupiedSlots);
-  return Math.min(
-    OVERVIEW_MAX_GRID_SLOTS,
-    Math.max(
-      OVERVIEW_MIN_GRID_SLOTS,
-      state.overviewExtraSlots,
-      occupiedSlots.length ? Math.max(...occupiedSlots) + 1 : 0
-    )
-  );
+  const occupiedSlotCount = buildOverviewLayout(widgets).occupiedSlots.size;
+  return Math.min(OVERVIEW_MAX_GRID_SLOTS, occupiedSlotCount + getOverviewEmptySlotCount(widgets));
 }
-function getOverviewRemovedEmptySlots(widgets, baseSlotCount = getOverviewBaseSlotCount(widgets)) {
-  const layout = buildOverviewLayout(widgets);
-  return state.overviewRemovedEmptySlots.filter((slot, index, items) => Number.isInteger(slot) && slot >= 0 && slot < baseSlotCount && !layout.occupiedSlots.has(slot) && items.indexOf(slot) === index).sort((left, right) => left - right);
-}
+
+
 function getOverviewSlotCount(widgets) {
-  const baseSlotCount = getOverviewBaseSlotCount(widgets);
-  return Math.max(OVERVIEW_MIN_GRID_SLOTS, baseSlotCount - getOverviewRemovedEmptySlots(widgets, baseSlotCount).length);
+   return getOverviewBaseSlotCount(widgets);
 }
-function logicalToDisplayOverviewSlot(logicalSlot, removedSlots) {
-  let removedBefore = 0;
-  for (const removedSlot of removedSlots) {
-    if (removedSlot < logicalSlot) {
-      removedBefore += 1;
-      continue;
-    }
-    break;
+function getOverviewExplicitEmptySlots(layout, emptySlotCount) {
+  if (emptySlotCount <= 0) return [];
+  const occupiedSlots = new Set(layout.occupiedSlots);
+  const slots = [];
+  let candidate = occupiedSlots.size ? Math.max(...occupiedSlots) + 1 : 0;
+  while (slots.length < emptySlotCount) {
+    candidate = findAvailableOverviewSlot(candidate, 1, occupiedSlots);
+    slots.push(candidate);
+    occupiedSlots.add(candidate);
+    candidate += 1;
   }
-  return logicalSlot - removedBefore;
+  return slots;
 }
-function displayToLogicalOverviewSlot(displaySlot, removedSlots) {
-  let logicalSlot = displaySlot;
-  for (const removedSlot of removedSlots) {
-    if (removedSlot <= logicalSlot) {
-      logicalSlot += 1;
-    } else {
-      break;
-    }
-  }
-  return logicalSlot;
-}
-function renderOverviewGrid(widgets, slotCount = getOverviewSlotCount(widgets)) {
+function renderOverviewGrid(widgets) {
   const layout = buildOverviewLayout(widgets);
-  const removedSlots = getOverviewRemovedEmptySlots(widgets);
-  return Array.from({ length: slotCount }, (_, displaySlot) => {
-    const logicalSlot = displayToLogicalOverviewSlot(displaySlot, removedSlots);
-    const widget = layout.widgetSlots.get(logicalSlot);
-    if (widget) {
-      return renderOverviewGridWidget(widget, displaySlot);
-    }
-    if (layout.occupiedSlots.has(logicalSlot)) {
-      return "";
-    }
-    return renderOverviewEmptySlot(logicalSlot, displaySlot);
+   const renderedWidgets = Array.from(layout.widgetSlots.entries()).map(([logicalSlot, widget]) => {
+    return renderOverviewGridWidget(widget, logicalSlot);
   }).join("");
+  const emptySlots = getOverviewExplicitEmptySlots(layout, getOverviewEmptySlotCount(widgets)).map((slot) => {
+    return renderOverviewEmptySlot(slot, slot);
+  }).join("");
+  return `${renderedWidgets}${emptySlots}`;
 }
 function buildOverviewLayout(widgets) {
   const widgetSlots = /* @__PURE__ */ new Map();
@@ -831,12 +813,11 @@ function buildOverviewLayout(widgets) {
       slot += 1;
     }
     widgetSlots.set(slot, widget);
-    for (let offset = 0; offset < width; offset += 1) {
-      occupiedSlots.add(slot + offset);
-    }
+     for (let offset = 0; offset < width; offset += 1) occupiedSlots.add(slot + offset);
   });
   return { widgetSlots, occupiedSlots };
 }
+
 function getActiveOverviewWidgets() {
   return (state.overview?.widgets || []).filter((widget) => widget.active !== false);
 }
@@ -848,99 +829,34 @@ function getOverviewOccupiedSlots(widgets) {
   widgets.forEach((widget) => {
     const slot = overviewSlotFromPosition(widget.position);
     const width = getOverviewWidgetGridWidth(widget);
-    for (let offset = 0; offset < width; offset += 1) {
-      occupiedSlots.add(slot + offset);
-    }
+    for (let offset = 0; offset < width; offset += 1) occupiedSlots.add(slot + offset);
   });
   return occupiedSlots;
 }
 function getOverviewLayoutForWidgets(widgets) {
-  return buildOverviewLayout(
-    widgets.map((widget) => ({ ...widget }))
-  );
+  return buildOverviewLayout(widgets.map((widget) => ({ ...widget })));
 }
 function getOverviewLayoutWithoutWidget(widgetKey) {
-  return getOverviewLayoutForWidgets(
-    getActiveOverviewWidgets().filter((widget) => widget.widget_key !== widgetKey)
-  );
+  return getOverviewLayoutForWidgets(getActiveOverviewWidgets().filter((widget) => widget.widget_key !== widgetKey));
 }
-function getOverviewResizeBounds(widgetKey) {
-  const widget = getOverviewWidgetByKey(widgetKey);
-  if (!widget) return null;
-  const slot = overviewSlotFromPosition(widget.position);
-  const width = getOverviewWidgetGridWidth(widget);
-  const rowStart = Math.floor(slot / OVERVIEW_GRID_COLUMNS) * OVERVIEW_GRID_COLUMNS;
-  const rowEnd = rowStart + OVERVIEW_GRID_COLUMNS - 1;
-  const startRight = slot + width - 1;
-  const occupiedSlots = getOverviewLayoutWithoutWidget(widgetKey).occupiedSlots;
-  let freeLeft = 0;
-  for (let candidate = slot - 1; candidate >= rowStart && !occupiedSlots.has(candidate); candidate -= 1) {
-    freeLeft += 1;
-  }
-  let freeRight = 0;
-  for (let candidate = startRight + 1; candidate <= rowEnd && !occupiedSlots.has(candidate); candidate += 1) {
-    freeRight += 1;
-  }
-  return {
-    slot,
-    width,
-    rowStart,
-    rowEnd,
-    startRight,
-    minLeftSlot: slot - freeLeft,
-    maxRightSlot: startRight + freeRight
-  };
-}
-function getOverviewResizeProposal(resizeState, clientX) {
-  if (!resizeState) return null;
-  if (resizeState.edge === "left") {
-    const deltaColumns = Math.round((resizeState.startX - clientX) / resizeState.columnUnit);
-    const proposedLeft = Math.max(
-      resizeState.minLeftSlot,
-      Math.min(resizeState.startRight, resizeState.startSlot - deltaColumns)
-    );
-    return {
-      slot: proposedLeft,
-      width: resizeState.startRight - proposedLeft + 1
-    };
-  }
-  const deltaColumns = Math.round((clientX - resizeState.startX) / resizeState.columnUnit);
-  const proposedRight = Math.max(
-    resizeState.startSlot,
-    Math.min(resizeState.maxRightSlot, resizeState.startRight + deltaColumns)
-  );
-  return {
-    slot: resizeState.startSlot,
-    width: proposedRight - resizeState.startSlot + 1
-  };
-}
+
 function canPlaceOverviewWidget(slot, width, occupiedSlots) {
-  if (slot < 0) {
-    return false;
-  }
+  if (slot < 0) return false;
   const column = slot % OVERVIEW_GRID_COLUMNS;
-  if (column + width > OVERVIEW_GRID_COLUMNS) {
-    return false;
-  }
+  if (column + width > OVERVIEW_GRID_COLUMNS) return false;
   for (let offset = 0; offset < width; offset += 1) {
-    if (occupiedSlots.has(slot + offset)) {
-      return false;
-    }
+    if (occupiedSlots.has(slot + offset)) return false;
   }
   return true;
 }
 function findAvailableOverviewSlot(slot, width, occupiedSlots) {
   let candidate = Math.max(0, slot);
-  while (!canPlaceOverviewWidget(candidate, width, occupiedSlots)) {
-    candidate += 1;
-  }
+  while (!canPlaceOverviewWidget(candidate, width, occupiedSlots)) candidate += 1;
   return candidate;
 }
 function overviewSlotFromPosition(position) {
   const numeric = Number(position);
-  if (!Number.isFinite(numeric) || numeric < 10) {
-    return 0;
-  }
+  if (!Number.isFinite(numeric) || numeric < 10) return 0;
   return Math.max(0, Math.floor(numeric / 10) - 1);
 }
 function overviewPositionFromSlot(slot) {
@@ -951,31 +867,32 @@ function getOverviewWidgetGridWidth(widget) {
   const width = Number(widget.grid_width || fallback);
   return Math.max(1, Math.min(OVERVIEW_GRID_COLUMNS, Number.isFinite(width) ? Math.floor(width) : fallback));
 }
-function getOverviewGridPlacementStyle(slot, width = 1) {
-  const columnStart = slot % OVERVIEW_GRID_COLUMNS + 1;
-  const rowStart = Math.floor(slot / OVERVIEW_GRID_COLUMNS) + 1;
-  return `grid-column: ${columnStart} / span ${width}; grid-row: ${rowStart};`;
+function getOverviewWidgetGridHeight(widget) {
+  return widget.widget_type === "scalar" ? 2 : 4;
+}
+function getOverviewGridCoordinates(slot) {
+  return { x: slot % OVERVIEW_GRID_COLUMNS, y: Math.floor(slot / OVERVIEW_GRID_COLUMNS) };
 }
 function renderOverviewGridWidget(widget, slot) {
   const result = widget.result;
   const width = getOverviewWidgetGridWidth(widget);
+  const height = getOverviewWidgetGridHeight(widget);
+  const { x, y } = getOverviewGridCoordinates(slot);
   return `
-    <section class="widget-card overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}" draggable="true" data-overview-widget-key="${escapeHtml(widget.widget_key)}" data-overview-widget-slot="${escapeHtml(slot)}" style="${escapeHtml(getOverviewGridPlacementStyle(slot, width))}">
-      <div class="widget-card-header">
-        <div>
-          <span>${escapeHtml(widget.datasource_key)}</span>
-          <strong>${escapeHtml(widget.label)}</strong>
+    <div class="grid-stack-item overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}"
+      gs-x="${x}" gs-y="${y}" gs-w="${width}" gs-h="${height}" gs-min-w="1" gs-max-w="${OVERVIEW_GRID_COLUMNS}"
+      data-overview-widget-key="${escapeHtml(widget.widget_key)}">
+      <section class="grid-stack-item-content widget-card">
+        <div class="widget-card-header overview-widget-drag-handle">
+          <div>
+            <span>${escapeHtml(widget.datasource_key)}</span>
+            <strong>${escapeHtml(widget.label)}</strong>
+          </div>
+          <div class="widget-card-actions">${renderEditWidgetButton(widget.widget_key)}</div>
         </div>
-        <div class="widget-card-actions">
-          ${renderEditWidgetButton(widget.widget_key)}
-        </div>
-      </div>
-      <div class="widget-card-main">
-        ${renderOverviewWidgetBody(widget, result)}
-      </div>
-      <button class="overview-resize-handle overview-resize-handle-left" type="button" data-overview-resize-handle="${escapeHtml(widget.widget_key)}" data-edge="left" aria-label="Resize widget from left edge" title="Resize from left edge"></button>
-      <button class="overview-resize-handle overview-resize-handle-right" type="button" data-overview-resize-handle="${escapeHtml(widget.widget_key)}" data-edge="right" aria-label="Resize widget from right edge" title="Resize from right edge"></button>
-    </section>`;
+        <div class="widget-card-main">${renderOverviewWidgetBody(widget, result)}</div>
+      </section>
+    </div>`;
 }
 function renderOverviewWidgetBody(widget, result) {
   if (!result) {
@@ -997,22 +914,19 @@ function renderOverviewWidgetBody(widget, result) {
   return renderTimeSeriesChart(result);
 }
 function renderOverviewEmptySlot(logicalSlot, displaySlot = logicalSlot) {
+  const { x, y } = getOverviewGridCoordinates(displaySlot);
   return `
-    <section class="overview-empty-slot" style="${escapeHtml(getOverviewGridPlacementStyle(displaySlot, 1))}">
-      <div class="overview-empty-slot-actions">
-        <button type="button" data-overview-empty-slot="${escapeHtml(logicalSlot)}" aria-label="Add widget to slot ${escapeHtml(displaySlot + 1)}">+</button>
-        <button type="button" class="icon-button danger" data-overview-remove-slot="${escapeHtml(logicalSlot)}" aria-label="Remove empty slot ${escapeHtml(displaySlot + 1)}" title="Remove empty slot">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M3 6h18" />
-            <path d="M8 6V4h8v2" />
-            <path d="M19 6l-1 14H6L5 6" />
-            <path d="M10 11v5" />
-            <path d="M14 11v5" />
-          </svg>
-        </button>
-      </div>
-      ${state.overviewPlacementSlot === logicalSlot ? renderOverviewPlacementPanel(logicalSlot) : ""}
-    </section>`;
+    <div class="grid-stack-item overview-empty-slot-item" gs-x="${x}" gs-y="${y}" gs-w="1" gs-h="2" gs-no-move="true" gs-no-resize="true">
+      <section class="grid-stack-item-content overview-empty-slot">
+        <div class="overview-empty-slot-actions">
+          <button type="button" data-overview-empty-slot="${escapeHtml(logicalSlot)}" aria-label="Add widget to slot ${escapeHtml(displaySlot + 1)}">+</button>
+          <button type="button" class="icon-button danger" data-overview-remove-slot="${escapeHtml(logicalSlot)}" aria-label="Remove empty slot ${escapeHtml(displaySlot + 1)}" title="Remove empty slot">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v5" /><path d="M14 11v5" /></svg>
+          </button>
+        </div>
+        ${state.overviewPlacementSlot === logicalSlot ? renderOverviewPlacementPanel(logicalSlot) : ""}
+      </section>
+    </div>`;
 }
 function renderOverviewPlacementPanel(slot) {
   const availableWidgets = state.overviewWidgetConfigs.filter((widget) => widget.active === false);
@@ -1933,7 +1847,6 @@ function renderAdminAudit() {
 function attachSectionHandlers() {
   document.querySelector("#overview-refresh")?.addEventListener("click", refreshOverview);
   document.querySelector("#overview-add-slots")?.addEventListener("click", addOverviewSlots);
-  attachOverviewDragAndDropHandlers();
   document.querySelectorAll("[data-overview-empty-slot]").forEach((button) => {
     button.addEventListener("click", async () => {
       const slot = Number(button.dataset.overviewEmptySlot || 0);
@@ -1982,9 +1895,6 @@ function attachSectionHandlers() {
   });
   document.querySelectorAll("[data-overview-widget-delete]").forEach((button) => {
     button.addEventListener("click", deleteOverviewWidget);
-  });
-  document.querySelectorAll("[data-overview-resize-handle]").forEach((button) => {
-    button.addEventListener("mousedown", startOverviewResize);
   });
   document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
   document.querySelectorAll("[data-edit-overview-widget]").forEach((button) => {
@@ -2180,6 +2090,7 @@ async function placeOverviewWidget(event) {
     const layout = buildOverviewLayout(state.overview?.widgets || []);
     const actualSlot = findAvailableOverviewSlot(slot, width, layout.occupiedSlots);
     await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(actualSlot), width);
+    state.overviewExtraSlots = Math.max(0, state.overviewExtraSlots - 1);
     state.overviewPlacementSlot = null;
     setMessage("success", "Widget added to overview.");
     await loadOverview();
@@ -2252,15 +2163,12 @@ async function updateOverviewWidgetState(widgetKey, active, position, gridWidth)
 }
 function addOverviewSlots() {
   const widgets = state.overview?.widgets || [];
-  const currentSlots = getOverviewSlotCount(widgets);
-  const baseSlotCount = getOverviewBaseSlotCount(widgets);
-  if (baseSlotCount >= OVERVIEW_MAX_GRID_SLOTS) {
+  const occupiedSlotCount = buildOverviewLayout(widgets).occupiedSlots.size;
+  const emptySlotCount = getOverviewEmptySlotCount(widgets);
+  if (occupiedSlotCount + emptySlotCount >= OVERVIEW_MAX_GRID_SLOTS) {
     return;
   }
-  state.overviewExtraSlots = Math.min(
-    OVERVIEW_MAX_GRID_SLOTS,
-    Math.max(baseSlotCount, state.overviewExtraSlots) + OVERVIEW_SLOT_INCREMENT
-  );
+  state.overviewExtraSlots = emptySlotCount + OVERVIEW_SLOT_INCREMENT;
   render();
 }
 function removeOverviewSlot(event) {
@@ -2271,9 +2179,8 @@ function removeOverviewSlot(event) {
     return;
   }
   state.overviewPlacementSlot = state.overviewPlacementSlot === slot ? null : state.overviewPlacementSlot;
-  if (!state.overviewRemovedEmptySlots.includes(slot)) {
-    state.overviewRemovedEmptySlots = [...state.overviewRemovedEmptySlots, slot].sort((left, right) => left - right);
-  }
+    const widgets = state.overview?.widgets || [];
+    state.overviewExtraSlots = Math.max(0, getOverviewEmptySlotCount(widgets) - 1);
   render();
 }
 async function moveOverviewWidgetToSlot(widgetKey, requestedSlot) {
@@ -2318,144 +2225,91 @@ async function resizeOverviewWidgetState(widgetKey, nextSlot, nextWidth) {
   }
   await updateOverviewWidgetState(widgetKey, true, overviewPositionFromSlot(nextSlot), nextWidth);
 }
-function startOverviewResize(event) {
-  event.preventDefault();
-  event.stopPropagation();
-  const handle = event.currentTarget;
-  const widgetKey = handle.dataset.overviewResizeHandle || "";
-  const widget = getOverviewWidgetByKey(widgetKey);
-  const card = handle.closest("[data-overview-widget-key]");
-  const grid = handle.closest(".overview-grid");
-  if (!widget || !card || !grid) return;
-  const bounds = getOverviewResizeBounds(widgetKey);
-  if (!bounds) return;
-  const gridRect = grid.getBoundingClientRect();
-  const gridStyle = window.getComputedStyle(grid);
-  const gap = Number.parseFloat(gridStyle.columnGap || gridStyle.gap || "12") || 12;
-  const columnWidth = (gridRect.width - gap * (OVERVIEW_GRID_COLUMNS - 1)) / OVERVIEW_GRID_COLUMNS;
-  state.overviewResizeState = {
-    widgetKey,
-    edge: handle.dataset.edge === "left" ? "left" : "right",
-    startX: event.clientX,
-    startSlot: bounds.slot,
-    startRight: bounds.startRight,
-    startWidth: bounds.width,
-    minLeftSlot: bounds.minLeftSlot,
-    maxRightSlot: bounds.maxRightSlot,
-    columnUnit: Math.max(1, columnWidth + gap),
-    latestClientX: event.clientX
-  };
-  card.classList.add("is-resizing");
-  window.addEventListener("mousemove", handleOverviewResizeMove);
-  window.addEventListener("mouseup", finishOverviewResize, { once: true });
-}
-function handleOverviewResizeMove(event) {
-  const resizeState = state.overviewResizeState;
-  if (!resizeState) return;
-  resizeState.latestClientX = event.clientX;
-  const card = document.querySelector(`[data-overview-widget-key="${CSS.escape(resizeState.widgetKey)}"]`);
-  if (!card) return;
-  const proposal = getOverviewResizeProposal(resizeState, event.clientX);
-  if (!proposal) return;
-  const columnStart = proposal.slot % OVERVIEW_GRID_COLUMNS + 1;
-  card.style.gridColumn = `${columnStart} / span ${proposal.width}`;
-}
-async function finishOverviewResize() {
-  const resizeState = state.overviewResizeState;
-  window.removeEventListener("mousemove", handleOverviewResizeMove);
-  if (!resizeState) return;
-  state.overviewResizeState = null;
-  const card = document.querySelector(`[data-overview-widget-key="${CSS.escape(resizeState.widgetKey)}"]`);
-  if (card) {
-    card.classList.remove("is-resizing");
-    card.style.gridColumn = "";
-  }
-  const proposal = getOverviewResizeProposal(resizeState, resizeState.latestClientX);
-  if (!proposal) {
-    render();
+function initializeOverviewGridStack() {
+  destroyOverviewGridStack();
+  if (state.section !== "overview" || state.overviewLoading || state.overviewRefreshing) return;
+  const gridElement = document.querySelector("[data-overview-grid]");
+  const GridStackClass = globalThis.GridStack;
+  if (!gridElement || !GridStackClass) {
+    if (gridElement) gridElement.classList.add("gridstack-unavailable");
     return;
   }
+  overviewGridStack = GridStackClass.init({
+    column: OVERVIEW_GRID_COLUMNS,
+    cellHeight: 76,
+    margin: 12,
+    float: false,
+    animate: true,
+    columnOpts: {
+      breakpoints: [{ w: 920, c: 1, layout: "list" }]
+    },
+    draggable: { handle: ".overview-widget-drag-handle", cancel: ".widget-card-actions, button, a, input, select, textarea" },
+    resizable: { handles: "e, w" }
+  }, gridElement);
+  overviewGridStack.on("change", (_event, items) => scheduleOverviewGridSave(items || []));
+}
+function destroyOverviewGridStack() {
+  if (!overviewGridStack) return;
+  overviewGridStack.destroy(false);
+  overviewGridStack = null;
+}
+function scheduleOverviewGridSave(items) {
+  const changes = items.map((item) => {
+    const widgetKey = item.el?.dataset.overviewWidgetKey || "";
+    return { widgetKey, x: Number(item.x || 0), y: Number(item.y || 0), width: Number(item.w || 1) };
+  }).filter((item) => item.widgetKey);
+  if (!changes.length) return;
+  clearTimeout(overviewGridSaveTimer);
+  overviewGridSaveTimer = window.setTimeout(() => persistOverviewGridChanges(changes), 220);
+}
+async function persistOverviewGridChanges(changes) {
+  if (overviewGridSaveInFlight) {
+    overviewGridSaveQueued = true;
+    return;
+  }
+  overviewGridSaveInFlight = true;;
   try {
-    await resizeOverviewWidgetState(resizeState.widgetKey, proposal.slot, proposal.width);
-    if (proposal.width !== resizeState.startWidth || proposal.slot !== resizeState.startSlot) {
-      setMessage("success", "Widget size updated.");
-      await loadOverview();
-    } else {
-      render();
+    await Promise.all(changes.map((change) => {
+      const slot = change.y * OVERVIEW_GRID_COLUMNS + change.x;
+      return updateOverviewWidgetState(change.widgetKey, true, overviewPositionFromSlot(slot), change.width);
+    }));
+    applyOverviewGridChangesLocally(changes);
+    setMessage("success", "Overview layout saved.");
+  } catch (error) {
+    setMessage("error", error.message);
+
+    
+    await loadOverview();
+  } finally {
+    overviewGridSaveInFlight = false;
+    if (overviewGridSaveQueued) {
+      overviewGridSaveQueued = false;
+      const latest = collectOverviewGridChanges();
+      if (latest.length) await persistOverviewGridChanges(latest);
     }
-  } catch (error) {
-    setMessage("error", error.message);
-    render();
   }
 }
-function attachOverviewDragAndDropHandlers() {
-  document.querySelectorAll("[data-overview-widget-key]").forEach((element) => {
-    element.addEventListener("dragstart", handleOverviewWidgetDragStart);
-    element.addEventListener("dragend", handleOverviewWidgetDragEnd);
-    element.addEventListener("dragover", handleOverviewDragOver);
-    element.addEventListener("drop", handleOverviewWidgetDrop);
-  });
-  document.querySelectorAll(".overview-empty-slot").forEach((element) => {
-    element.addEventListener("dragover", handleOverviewDragOver);
-    element.addEventListener("drop", handleOverviewEmptySlotDrop);
-  });
+function collectOverviewGridChanges() {
+  if (!overviewGridStack) return [];
+  return overviewGridStack.engine.nodes.map((node) => ({
+    widgetKey: node.el?.dataset.overviewWidgetKey || "",
+    x: Number(node.x || 0),
+    y: Number(node.y || 0),
+    width: Number(node.w || 1)
+  })).filter((item) => item.widgetKey);
 }
-function handleOverviewWidgetDragStart(event) {
-  const element = event.currentTarget;
-  const widgetKey = element.dataset.overviewWidgetKey || "";
-  state.draggedOverviewWidgetKey = widgetKey;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", widgetKey);
-  }
-  element.classList.add("is-dragging");
+function applyOverviewGridChangesLocally(changes) {
+  const byKey = new Map(changes.map((change) => [change.widgetKey, change]));
+  const update = (widget) => {
+    const change = byKey.get(widget.widget_key);
+    if (!change) return widget;
+    const slot = change.y * OVERVIEW_GRID_COLUMNS + change.x;
+    return { ...widget, position: overviewPositionFromSlot(slot), grid_width: change.width };
+  };
+  if (state.overview?.widgets) state.overview.widgets = state.overview.widgets.map(update);
+  state.overviewWidgetConfigs = state.overviewWidgetConfigs.map(update);
 }
-function handleOverviewWidgetDragEnd(event) {
-  state.draggedOverviewWidgetKey = null;
-  event.currentTarget.classList.remove("is-dragging");
-  document.querySelectorAll(".overview-drop-target").forEach((element) => {
-    element.classList.remove("overview-drop-target");
-  });
-}
-function handleOverviewDragOver(event) {
-  if (!state.draggedOverviewWidgetKey) return;
-  event.preventDefault();
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = "move";
-  }
-  event.currentTarget.classList.add("overview-drop-target");
-}
-async function handleOverviewWidgetDrop(event) {
-  event.preventDefault();
-  event.currentTarget.classList.remove("overview-drop-target");
-  const sourceKey = state.draggedOverviewWidgetKey;
-  const targetKey = event.currentTarget.dataset.overviewWidgetKey || "";
-  if (!sourceKey || !targetKey || sourceKey === targetKey) return;
-  try {
-    await swapOverviewWidgets(sourceKey, targetKey);
-    setMessage("success", "Widgets swapped.");
-    await loadOverview();
-  } catch (error) {
-    setMessage("error", error.message);
-    render();
-  }
-}
-async function handleOverviewEmptySlotDrop(event) {
-  if (!state.draggedOverviewWidgetKey) return;
-  event.preventDefault();
-  event.currentTarget.classList.remove("overview-drop-target");
-  const button = event.currentTarget.querySelector("[data-overview-empty-slot]");
-  const slot = Number(button?.dataset.overviewEmptySlot || 0);
-  if (!Number.isFinite(slot)) return;
-  try {
-    await moveOverviewWidgetToSlot(state.draggedOverviewWidgetKey, slot);
-    setMessage("success", "Widget moved.");
-    await loadOverview();
-  } catch (error) {
-    setMessage("error", error.message);
-    render();
-  }
-}
+
 async function saveOverviewWidgetSettings(event) {
   event.preventDefault();
   const formElement = event.currentTarget;
@@ -2465,6 +2319,7 @@ async function saveOverviewWidgetSettings(event) {
   const widgetKey = String(form.get("widget_key") || "").trim();
   if (!widgetKey) return;
   const selectedWidget = getSelectedOverviewWidgetConfig();
+  const placementSlot = creating ? state.overviewPlacementSlot : null;
   const widgetType = String(form.get("widget_type") || "scalar");
   const payload = {
     widget_key: widgetKey,
@@ -2485,6 +2340,9 @@ async function saveOverviewWidgetSettings(event) {
         body: JSON.stringify(payload)
       });
       state.selectedOverviewWidgetKey = widgetKey;
+      if (Number.isInteger(placementSlot) && payload.active) {
+        state.overviewExtraSlots = Math.max(0, state.overviewExtraSlots - 1);
+      }
       state.overviewPlacementSlot = null;
       setMessage("success", "Widget created.");
     } else {
