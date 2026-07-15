@@ -433,9 +433,7 @@ def multi_datasource_access_is_active() -> bool:
     )
 
 
-def selected_datasource_ids(
-    session: Session, principal: AuthenticatedSession
-) -> list[str]:
+def selected_datasource_ids(session: Session, principal: AuthenticatedSession) -> list[str]:
     selection = session.get(UserDatasourceSelection, str(principal.user.id))
     if selection is None:
         return []
@@ -457,6 +455,19 @@ def set_selected_datasource_ids(
         )
         session.add(selection)
     selection.datasource_ids_json = json.dumps(datasource_ids)
+
+
+def remove_datasource_from_selections(session: Session, connector_key: str) -> None:
+    """Remove an unavailable datasource from every saved client selection."""
+    for selection in session.scalars(select(UserDatasourceSelection)):
+        selected_ids = json_loads(selection.datasource_ids_json)
+        if not isinstance(selected_ids, list):
+            continue
+        filtered_ids = [
+            str(source_id) for source_id in selected_ids if str(source_id) != connector_key
+        ]
+        if filtered_ids != selected_ids:
+            selection.datasource_ids_json = json.dumps(filtered_ids)
 
 
 def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
@@ -533,9 +544,7 @@ def serialize_reasoning_config(session: Session) -> dict[str, Any]:
         "query_max_rows": query_config.query_max_rows,
         "query_timeout_seconds": query_config.query_timeout_seconds,
         "analysis_loop_count": query_config.analysis_loop_count,
-        "analysis_auto_enable_business_logic": (
-            query_config.analysis_auto_enable_business_logic
-        ),
+        "analysis_auto_enable_business_logic": (query_config.analysis_auto_enable_business_logic),
         "sources": {
             field: sources[field]
             for field in (
@@ -598,21 +607,25 @@ def normalize_widget_tags(tags: list[str]) -> list[str]:
 
 
 def get_overview_widget_tags(session: Session, widget: OverviewWidget) -> list[str]:
-    return list(session.scalars(
-        select(OverviewWidgetTag.tag_name)
-        .where(OverviewWidgetTag.widget_id == widget.id)
-        .order_by(OverviewWidgetTag.tag_name)
-    ))
+    return list(
+        session.scalars(
+            select(OverviewWidgetTag.tag_name)
+            .where(OverviewWidgetTag.widget_id == widget.id)
+            .order_by(OverviewWidgetTag.tag_name)
+        )
+    )
 
 
 def list_assigned_widget_tags(session: Session) -> list[str]:
     """Return only catalogue tags which are still in use by a widget."""
-    return list(session.scalars(
-        select(WidgetTag.name)
-        .join(OverviewWidgetTag, OverviewWidgetTag.tag_name == WidgetTag.name)
-        .distinct()
-        .order_by(WidgetTag.name)
-    ))
+    return list(
+        session.scalars(
+            select(WidgetTag.name)
+            .join(OverviewWidgetTag, OverviewWidgetTag.tag_name == WidgetTag.name)
+            .distinct()
+            .order_by(WidgetTag.name)
+        )
+    )
 
 
 def set_overview_widget_tags(session: Session, widget: OverviewWidget, tags: list[str]) -> None:
@@ -695,7 +708,9 @@ def fallback_metric_title(question: str) -> str:
     return normalized[0].upper() + normalized[1:80]
 
 
-def suggest_metric_title_with_llm(session: Session, request: OverviewWidgetTitleSuggestionRequest) -> str:
+def suggest_metric_title_with_llm(
+    session: Session, request: OverviewWidgetTitleSuggestionRequest
+) -> str:
     llm_config = get_llm_runtime_config(session)
     if llm_config.provider != "openai-compatible":
         raise ConfigurationError(f"Unsupported GAARD_LLM_PROVIDER: {llm_config.provider}")
@@ -1395,14 +1410,24 @@ def list_identities(
             dashboards_by_owner.setdefault(dashboard.owner_user_id, []).append(
                 serialize_admin_dashboard(dashboard)
             )
-        items = [{
-            "id": f"local:{item.id}", "username": item.username,
-            "name": item.display_name or item.username, "role": "admin",
-            "provider": "Built-in", "provider_id": "local",
-            "editable_name": True, "editable_password": True, "attributes": {},
-        } for item in session.scalars(
-            select(AdminUser).where(AdminUser.auth_provider == "local").order_by(AdminUser.username)
-        ).all()]
+        items = [
+            {
+                "id": f"local:{item.id}",
+                "username": item.username,
+                "name": item.display_name or item.username,
+                "role": "admin",
+                "provider": "Built-in",
+                "provider_id": "local",
+                "editable_name": True,
+                "editable_password": True,
+                "attributes": {},
+            }
+            for item in session.scalars(
+                select(AdminUser)
+                .where(AdminUser.auth_provider == "local")
+                .order_by(AdminUser.username)
+            ).all()
+        ]
         if license_service.identity_management_allowed():
             for provider in get_auth_provider_registry().identity_providers():
                 items.extend(provider.list_users(session, refresh=refresh))
@@ -1444,7 +1469,9 @@ def update_identity(
     user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
     if not identity_id.startswith("local:"):
-        raise HTTPException(status_code=400, detail="External identities are managed by their provider.")
+        raise HTTPException(
+            status_code=400, detail="External identities are managed by their provider."
+        )
     with create_session() as session:
         target = session.get(AdminUser, int(identity_id.removeprefix("local:")))
         if target is None:
@@ -1462,14 +1489,15 @@ def update_identity(
             target.username = username
             if username != previous_username:
                 for assignment in session.scalars(
-                    select(OverviewWidgetTag).where(
-                        OverviewWidgetTag.tag_name == previous_username
-                    )
+                    select(OverviewWidgetTag).where(OverviewWidgetTag.tag_name == previous_username)
                 ):
-                    if session.get(
-                        OverviewWidgetTag,
-                        {"widget_id": assignment.widget_id, "tag_name": username},
-                    ) is not None:
+                    if (
+                        session.get(
+                            OverviewWidgetTag,
+                            {"widget_id": assignment.widget_id, "tag_name": username},
+                        )
+                        is not None
+                    ):
                         session.delete(assignment)
                     else:
                         assignment.tag_name = username
@@ -2239,9 +2267,14 @@ def get_datasources(
     if available_only or principal.session.role != "admin":
         connectors = filter_datasources_for_identity_privileges(session, principal, connectors)
 
+    available_ids = {connector.connector_key for connector in connectors}
     return {
         "items": [serialize_datasource(connector) for connector in connectors],
-        "selected_datasource_ids": selected_datasource_ids(session, principal),
+        "selected_datasource_ids": [
+            source_id
+            for source_id in selected_datasource_ids(session, principal)
+            if source_id in available_ids
+        ],
         "multiple_selection_allowed": multi_datasource_access_is_active(),
         "viewer": principal.session.username or principal.user.username,
     }
@@ -2253,7 +2286,11 @@ def update_datasource_selection(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
-    selected_ids = list(dict.fromkeys(source_id.strip() for source_id in request.datasource_ids if source_id.strip()))
+    selected_ids = list(
+        dict.fromkeys(
+            source_id.strip() for source_id in request.datasource_ids if source_id.strip()
+        )
+    )
     if len(selected_ids) > 1 and not multi_datasource_access_is_active():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2505,6 +2542,7 @@ def update_datasource_state(
     else:
         connector.active = False
         connector.updated_by = user.username
+        remove_datasource_from_selections(session, connector.connector_key)
 
     license_service.ensure_active_source_limit(list_datasource_connectors(session))
     record_admin_audit(
@@ -2563,6 +2601,8 @@ def update_datasource(
 
     if request.active:
         set_active_datasource_connector(session, connector, user.username)
+    else:
+        remove_datasource_from_selections(session, connector.connector_key)
 
     license_service.ensure_active_source_limit(list_datasource_connectors(session))
 
@@ -2608,6 +2648,7 @@ def delete_datasource(
     schema_cache = get_datasource_schema_cache(session, connector.id)
     if schema_cache is not None:
         session.delete(schema_cache)
+    remove_datasource_from_selections(session, connector_key)
     session.delete(connector)
 
     record_admin_audit(
@@ -2867,10 +2908,7 @@ def get_business_logic_suggestions(
     return {
         "datasource": serialize_datasource(connectors[0]),
         "datasources": [serialize_datasource(connector) for connector in connectors],
-        "items": [
-            serialize_business_logic_suggestion(suggestion)
-            for suggestion in suggestions
-        ],
+        "items": [serialize_business_logic_suggestion(suggestion) for suggestion in suggestions],
         "statuses": [BUSINESS_LOGIC_STATUS_PENDING, BUSINESS_LOGIC_STATUS_ACTIVE],
         "viewer": user.username,
     }

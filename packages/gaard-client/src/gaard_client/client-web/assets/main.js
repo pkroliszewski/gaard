@@ -2015,7 +2015,8 @@ async function loadDatasources(options = {}) {
         }
         const items = payload.items || [];
         state.datasources = options.preserveOrder ? mergeDatasourcesPreservingOrder(state.datasources, items) : items;
-        state.selectedDatasourceIds = payload.selected_datasource_ids || [];
+        const availableDatasourceIds = new Set(items.map((item) => item.connector_key));
+        state.selectedDatasourceIds = (payload.selected_datasource_ids || []).filter((id) => availableDatasourceIds.has(id));
         state.multipleDatasourceSelectionAllowed = Boolean(payload.multiple_selection_allowed);
         state.datasourcesLoaded = true;
     } catch (error) {
@@ -2076,9 +2077,11 @@ async function updateSelectedSources(event) {
     const input = event.currentTarget;
     const datasourceId = input.dataset.sourceSelected;
     if (!datasourceId || state.datasourceSelectionPending) return;
+    const availableDatasourceIds = new Set(state.datasources.map((item) => item.connector_key));
+    const currentSelectedIds = state.selectedDatasourceIds.filter((id) => availableDatasourceIds.has(id));
     let selectedIds = input.checked
-      ? [...state.selectedDatasourceIds, datasourceId]
-      : state.selectedDatasourceIds.filter((item) => item !== datasourceId);
+      ? [...currentSelectedIds, datasourceId]
+      : currentSelectedIds.filter((item) => item !== datasourceId);
     selectedIds = [...new Set(selectedIds)];
     if (selectedIds.length > 1 && !state.multipleDatasourceSelectionAllowed) {
       input.checked = false;

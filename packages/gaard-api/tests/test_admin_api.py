@@ -39,6 +39,7 @@ from gaard_api.admin.models import (
     DatasourceSchemaCache,
     OverviewWidget,
     PromptTemplate,
+    UserDatasourceSelection,
     UserSavedMetric,
 )
 from gaard_api.admin.security import hash_password, hash_token
@@ -289,7 +290,9 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "<span>Community edition</span>" not in response.text
     assert 'api("/api/v1/admin/license/status")' in response.text
     assert 'api("/api/v1/admin/license/packages/update"' in response.text
-    assert 'api(`/api/v1/admin/license/packages/update/${encodeURIComponent(jobId)}`)' in response.text
+    assert (
+        "api(`/api/v1/admin/license/packages/update/${encodeURIComponent(jobId)}`)" in response.text
+    )
     assert "package-update-progress" in response.text
     assert 'license.plan && license.plan !== "community"' in response.text
     license_menu_item = '{ key: "license", label: builtInSectionLabels.license }'
@@ -546,8 +549,7 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
     )
     assert deleted_metric_list.status_code == 200
     assert all(
-        item["widget_key"] != "admin_saved_metric"
-        for item in deleted_metric_list.json()["items"]
+        item["widget_key"] != "admin_saved_metric" for item in deleted_metric_list.json()["items"]
     )
 
     widgets_after_metric_delete = admin_client.get(
@@ -595,9 +597,7 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
     ]
     assert admin_list.json()["active_dashboard_id"] == admin_dashboard["id"]
     assert admin_list.json()["active_dashboard"]["id"] == admin_dashboard["id"]
-    assert [item["id"] for item in analyst_list.json()["items"]] == [
-        analyst_dashboard["id"]
-    ]
+    assert [item["id"] for item in analyst_list.json()["items"]] == [analyst_dashboard["id"]]
     assert analyst_list.json()["active_dashboard_id"] == analyst_dashboard["id"]
 
     cross_delete = admin_client.delete(
@@ -719,9 +719,7 @@ def test_investigation_prompts_are_not_seeded(
 
     with create_session() as session:
         investigation_prompts = session.scalars(
-            select(PromptTemplate).where(
-                PromptTemplate.prompt_key.like("investigation_%")
-            )
+            select(PromptTemplate).where(PromptTemplate.prompt_key.like("investigation_%"))
         ).all()
         assert investigation_prompts == []
 
@@ -740,9 +738,7 @@ def test_investigation_prompts_are_not_seeded(
         session.commit()
 
         investigation_prompts = session.scalars(
-            select(PromptTemplate).where(
-                PromptTemplate.prompt_key.like("investigation_%")
-            )
+            select(PromptTemplate).where(PromptTemplate.prompt_key.like("investigation_%"))
         ).all()
         assert investigation_prompts == []
 
@@ -783,9 +779,7 @@ def test_candidate_business_knowledge_can_be_recorded(
 
     with create_session() as session:
         connector = session.scalar(
-            select(DatasourceConnector).where(
-                DatasourceConnector.connector_key == "default"
-            )
+            select(DatasourceConnector).where(DatasourceConnector.connector_key == "default")
         )
         assert connector is not None
         connector_id = connector.id
@@ -900,10 +894,7 @@ def test_prompt_update_creates_admin_audit_event(admin_client: TestClient) -> No
     )
 
     assert audit_response.status_code == 200
-    assert any(
-        item["action"] == "prompt.update"
-        for item in audit_response.json()["items"]
-    )
+    assert any(item["action"] == "prompt.update" for item in audit_response.json()["items"])
 
 
 def test_llm_config_defaults_to_metadata_and_can_be_overridden(
@@ -1347,9 +1338,7 @@ def test_governance_policy_infers_pii_columns_from_metadata_dictionary(
 
     with create_session() as session:
         default_policy = get_governance_policy_for_schema(session, schema_summary)
-        assert default_policy["privacy"]["forbidden_columns"] == {
-            "employees": ["full_name"]
-        }
+        assert default_policy["privacy"]["forbidden_columns"] == {"employees": ["full_name"]}
 
     update_response = admin_client.put(
         "/api/v1/admin/governance-policy",
@@ -1394,10 +1383,7 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
     assert response.status_code == 200
     body = response.json()
 
-    assert any(
-        item["connector_key"] == "metadata-db"
-        for item in body["datasources"]
-    )
+    assert any(item["connector_key"] == "metadata-db" for item in body["datasources"])
     assert [item["widget_key"] for item in body["info_widgets"]] == [
         "prompts_count",
         "audit_retention",
@@ -1427,9 +1413,7 @@ def test_overview_returns_metadata_backed_widgets(admin_client: TestClient) -> N
     )
     assert widgets_response.status_code == 200
     widgets = widgets_response.json()["items"]
-    runtime_widget = next(
-        item for item in widgets if item["widget_key"] == "runtime_daily_queries"
-    )
+    runtime_widget = next(item for item in widgets if item["widget_key"] == "runtime_daily_queries")
     assert runtime_widget["active"] is False
     assert runtime_widget["grid_width"] == 12
 
@@ -1474,9 +1458,7 @@ def test_overview_widget_can_be_updated(admin_client: TestClient) -> None:
     assert overview_response.status_code == 200
     overview = overview_response.json()
     widget = next(
-        item
-        for item in overview["info_widgets"]
-        if item["widget_key"] == "prompts_count"
+        item for item in overview["info_widgets"] if item["widget_key"] == "prompts_count"
     )
     assert widget["label"] == "Prompt templates"
     assert widget["question"] == "Return one value for the prompt template count."
@@ -1589,20 +1571,14 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
         headers=headers,
     )
     assert overview_response.status_code == 200
-    assert all(
-        item["widget_key"] != widget_key
-        for item in overview_response.json()["widgets"]
-    )
+    assert all(item["widget_key"] != widget_key for item in overview_response.json()["widgets"])
 
     widgets_response = admin_client.get(
         "/api/v1/admin/overview/widgets",
         headers=headers,
     )
     assert widgets_response.status_code == 200
-    assert any(
-        item["widget_key"] == widget_key
-        for item in widgets_response.json()["items"]
-    )
+    assert any(item["widget_key"] == widget_key for item in widgets_response.json()["items"])
 
     delete_response = admin_client.delete(
         f"/api/v1/admin/overview/widgets/{widget_key}",
@@ -1616,10 +1592,7 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
         headers=headers,
     )
     assert widgets_after_delete.status_code == 200
-    assert all(
-        item["widget_key"] != widget_key
-        for item in widgets_after_delete.json()["items"]
-    )
+    assert all(item["widget_key"] != widget_key for item in widgets_after_delete.json()["items"])
 
 
 def test_overview_widget_title_suggestion_uses_llm(
@@ -1692,9 +1665,7 @@ def test_overview_widget_from_query_strips_datasource_qualifier(
 
     assert create_response.status_code == 200
     created_item = create_response.json()["item"]
-    assert created_item["sql"] == (
-        'SELECT COUNT(*) AS value FROM "metadata-db".prompt_templates'
-    )
+    assert created_item["sql"] == ('SELECT COUNT(*) AS value FROM "metadata-db".prompt_templates')
 
     state_response = admin_client.patch(
         f"/api/v1/admin/overview/widgets/{created_item['widget_key']}/state",
@@ -1859,9 +1830,7 @@ def test_overview_widget_sql_error_creates_metadata_business_logic_suggestion(
 
     with create_session() as session:
         metadata_connector = session.scalar(
-            select(DatasourceConnector).where(
-                DatasourceConnector.connector_key == "metadata-db"
-            )
+            select(DatasourceConnector).where(DatasourceConnector.connector_key == "metadata-db")
         )
         assert metadata_connector is not None
         suggestions = list_business_logic_suggestions(session, metadata_connector.id)
@@ -1965,6 +1934,46 @@ def test_client_datasource_selection_is_per_user_and_requires_available_sources(
         json={"datasource_ids": ["metadata-db"]},
     )
     assert unavailable_response.status_code == 403
+
+
+def test_deactivating_datasource_removes_it_from_client_selections(
+    admin_client: TestClient,
+) -> None:
+    headers = user_headers("first-user")
+    selection_response = admin_client.put(
+        "/api/v1/admin/datasources/selection",
+        headers=headers,
+        json={"datasource_ids": ["default"]},
+    )
+    assert selection_response.status_code == 200
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    datasource_response = admin_client.get(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    datasource_id = next(
+        item["id"]
+        for item in datasource_response.json()["items"]
+        if item["connector_key"] == "default"
+    )
+    deactivate_response = admin_client.post(
+        f"/api/v1/admin/datasources/{datasource_id}/state",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"active": False},
+    )
+    assert deactivate_response.status_code == 200
+
+    list_response = admin_client.get(
+        "/api/v1/admin/datasources?available_only=true", headers=headers
+    )
+    assert list_response.json()["selected_datasource_ids"] == []
+    with create_session() as session:
+        user_id = session.scalar(select(AdminUser.id).where(AdminUser.username == "first-user"))
+        selection = session.get(UserDatasourceSelection, str(user_id))
+        assert selection is not None
+        assert json.loads(selection.datasource_ids_json) == []
 
 
 def test_datasource_connector_accepts_postgres_sql_dialect(
@@ -2128,11 +2137,7 @@ def test_public_datasource_activation_keeps_single_active_datasource(
     )
 
     assert response.status_code == 200
-    active_keys = [
-        item["connector_key"]
-        for item in response.json()["items"]
-        if item["active"]
-    ]
+    active_keys = [item["connector_key"] for item in response.json()["items"] if item["active"]]
     assert active_keys == ["second_active"]
 
 
@@ -2233,8 +2238,7 @@ def test_datasource_connector_builds_oracle_url_from_connection_fields(
     item = create_response.json()["item"]
     assert item["database_type"] == "oracle"
     assert item["database_url"] == (
-        "oracle+oracledb://reader:secret@oracle.example.test:1522"
-        "?service_name=FREEPDB1"
+        "oracle+oracledb://reader:secret@oracle.example.test:1522?service_name=FREEPDB1"
     )
     assert item["sql_dialect"] == "oracle"
 
@@ -2336,8 +2340,7 @@ def test_datasource_connector_builds_teradata_url_from_connection_fields(
     item = create_response.json()["item"]
     assert item["database_type"] == "teradata"
     assert item["database_url"] == (
-        "teradatasql://reader:secret@td.example.test?"
-        "database=analytics&dbs_port=1026&tmode=ANSI"
+        "teradatasql://reader:secret@td.example.test?database=analytics&dbs_port=1026&tmode=ANSI"
     )
     assert item["sql_dialect"] == "teradata"
 
