@@ -395,6 +395,7 @@ function renderQueryForm() {
   const inputDisabled = state.pending || !state.token;
   return `
     <form id="query-form" class="query-bar">
+      ${state.error ? `<div class="query-error" role="alert">${escapeHtml(state.error)}</div>` : ""}
       <fieldset class="mode-control" ${inputDisabled ? "disabled" : ""}>
         <legend>Work mode</legend>
         <label class="${state.queryMode === "sql" ? "active" : ""}">
@@ -1237,7 +1238,7 @@ function formatApiResponseError(response, message) {
   return detail === "Request failed." ? `${prefix}: Request failed.` : `${prefix}: ${detail}`;
 }
 function maybeLoadDatasourcesForActiveView() {
-    if ((state.activeView === "datasources" || state.activeView === "metrics") && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
+    if (["home", "datasources", "metrics"].includes(state.activeView) && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
         void loadDatasources();
     }
 }
