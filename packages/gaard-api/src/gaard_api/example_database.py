@@ -316,6 +316,10 @@ def seed_medical_poc_dashboard(
 
             values = dict(item)
             values["updated_by"] = actor
+            values.setdefault(
+                "grid_height",
+                2 if values.get("widget_type") == "scalar" else 4,
+            )
 
             if widget is None:
                 session.add(OverviewWidget(**values))

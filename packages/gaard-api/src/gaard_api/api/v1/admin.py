@@ -236,6 +236,7 @@ class OverviewWidgetUpdateRequest(BaseModel):
     )
     position: int | None = Field(default=None, ge=10)
     grid_width: int | None = Field(default=None, ge=1, le=12)
+    grid_height: int | None = Field(default=None, ge=2, le=24)
     active: bool | None = None
     tags: list[str] | None = None
 
@@ -244,6 +245,7 @@ class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
     widget_key: str = Field(min_length=1, max_length=255, pattern=r"^[a-zA-Z0-9_-]+$")
     position: int = Field(default=100, ge=10)
     grid_width: int | None = Field(default=None, ge=1, le=12)
+    grid_height: int | None = Field(default=None, ge=2, le=24)
     active: bool = True
 
 
@@ -251,6 +253,7 @@ class OverviewWidgetStateRequest(BaseModel):
     active: bool
     position: int | None = Field(default=None, ge=10)
     grid_width: int | None = Field(default=None, ge=1, le=12)
+    grid_height: int | None = Field(default=None, ge=2, le=24)
 
 
 class OverviewWidgetFromQueryRequest(BaseModel):
@@ -579,6 +582,10 @@ def serialize_overview_widget_config(session: Session, widget: OverviewWidget) -
             widget.widget_type,
             widget.grid_width,
         ),
+        "grid_height": normalize_overview_widget_grid_height(
+            widget.widget_type,
+            widget.grid_height,
+        ),
         "active": widget.active,
         "updated_by": widget.updated_by,
         "updated_at": serialize_datetime(widget.updated_at),
@@ -625,6 +632,16 @@ def normalize_overview_widget_grid_width(
         return 12 if widget_type in {OVERVIEW_WIDGET_TABLE, OVERVIEW_WIDGET_TIMESERIES} else 1
 
     return max(1, min(12, int(grid_width)))
+
+
+def normalize_overview_widget_grid_height(
+    widget_type: str,
+    grid_height: int | None,
+) -> int:
+    if grid_height is None:
+        return 2 if widget_type == OVERVIEW_WIDGET_SCALAR else 4
+
+    return max(2, min(24, int(grid_height)))
 
 
 def normalize_overview_widget_result_mode(value: str | None) -> str:
@@ -1581,6 +1598,10 @@ def create_overview_widget(
         request.widget_type,
         request.grid_width,
     )
+    next_grid_height = normalize_overview_widget_grid_height(
+        request.widget_type,
+        request.grid_height,
+    )
     next_result_mode = normalize_overview_widget_result_mode(request.result_mode)
 
     try:
@@ -1600,6 +1621,7 @@ def create_overview_widget(
             result_mode=next_result_mode,
             position=request.position,
             grid_width=next_grid_width,
+            grid_height=next_grid_height,
             active=request.active,
             updated_by=user.username,
         )
@@ -1651,6 +1673,7 @@ def create_overview_widget(
             "result_mode": widget.result_mode,
             "position": widget.position,
             "grid_width": widget.grid_width,
+            "grid_height": widget.grid_height,
             "active": widget.active,
         },
     )
@@ -1686,6 +1709,10 @@ def create_overview_widget_from_query(
         request.widget_type,
         None,
     )
+    grid_height = normalize_overview_widget_grid_height(
+        request.widget_type,
+        None,
+    )
     result_mode = normalize_overview_widget_result_mode(request.result_mode)
     widget = OverviewWidget(
         widget_key=widget_key,
@@ -1697,6 +1724,7 @@ def create_overview_widget_from_query(
         result_mode=result_mode,
         position=100,
         grid_width=grid_width,
+        grid_height=grid_height,
         active=False,
         updated_by="client",
     )
@@ -1821,6 +1849,10 @@ def update_overview_widget(
         request.widget_type,
         request.grid_width if request.grid_width is not None else widget.grid_width,
     )
+    next_grid_height = normalize_overview_widget_grid_height(
+        request.widget_type,
+        request.grid_height if request.grid_height is not None else widget.grid_height,
+    )
     next_result_mode = normalize_overview_widget_result_mode(request.result_mode)
     next_active = request.active if request.active is not None else widget.active
 
@@ -1841,6 +1873,7 @@ def update_overview_widget(
             result_mode=next_result_mode,
             position=next_position,
             grid_width=next_grid_width,
+            grid_height=next_grid_height,
             active=next_active,
         )
         validate_overview_widget_result(
@@ -1883,6 +1916,7 @@ def update_overview_widget(
     widget.result_mode = next_result_mode
     widget.position = next_position
     widget.grid_width = next_grid_width
+    widget.grid_height = next_grid_height
     widget.active = next_active
     widget.updated_by = user.username
     if request.tags is not None:
@@ -1901,6 +1935,7 @@ def update_overview_widget(
             "result_mode": widget.result_mode,
             "position": widget.position,
             "grid_width": widget.grid_width,
+            "grid_height": widget.grid_height,
             "active": widget.active,
         },
     )
@@ -1943,6 +1978,12 @@ def update_overview_widget_state(
             request.grid_width,
         )
 
+    if request.grid_height is not None:
+        widget.grid_height = normalize_overview_widget_grid_height(
+            widget.widget_type,
+            request.grid_height,
+        )
+
     widget.updated_by = user.username
     record_admin_audit(
         session=session,
@@ -1953,6 +1994,7 @@ def update_overview_widget_state(
         details={
             "position": widget.position,
             "grid_width": widget.grid_width,
+            "grid_height": widget.grid_height,
             "active": widget.active,
         },
     )

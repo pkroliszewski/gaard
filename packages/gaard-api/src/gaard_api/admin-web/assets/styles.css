@@ -573,6 +573,28 @@ label {
   justify-content: flex-end;
 }
 
+.overview-edit-mode-button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.overview-edit-mode-button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.overview-edit-mode-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .refresh-status {
   min-height: 20px;
   display: inline-flex;
@@ -761,7 +783,6 @@ label {
   background: var(--ok);
 }
 
-.overview-grid,
 .widget-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -805,18 +826,29 @@ label {
 }
 
 .overview-loading {
-  grid-column: 1 / -1;
-  min-height: 180px;
+  min-height: clamp(360px, calc(100vh - 260px), 720px);
   border: 1px dashed var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.58);
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+  text-align: center;
+}
+
+.overview-loading strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.overview-loading p {
+  margin: 4px 0 0;
+  font-weight: 500;
 }
 
 .overview-widget-table,
@@ -948,12 +980,12 @@ label {
 }
 
 .overview-placement-panel {
-  width: min(100%, 320px);
+  width: 100%;
   max-width: 100%;
   min-width: 0;
-  justify-self: center;
   display: grid;
   gap: 10px;
+  padding: 16px;
   box-sizing: border-box;
 }
 
@@ -1064,44 +1096,6 @@ label {
 .widget-card-actions button,
 .panel-actions button {
   white-space: nowrap;
-}
-
-.overview-resize-handle {
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  width: 12px;
-  min-width: 12px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  cursor: ew-resize;
-}
-
-.overview-resize-handle-left {
-  left: -6px;
-}
-
-.overview-resize-handle-right {
-  right: -6px;
-}
-
-.overview-resize-handle::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 4px;
-  height: 48px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.8);
-}
-
-.overview-widget-slot:hover .overview-resize-handle::before,
-.overview-widget-slot.is-resizing .overview-resize-handle::before {
-  background: var(--accent);
 }
 
 .modal-backdrop {
@@ -1553,4 +1547,140 @@ code {
 
 .main-section > .content {
   min-height: 100%;
+}
+
+/* Keep GridStack's absolute positioning isolated from the regular admin grids. */
+.overview-grid.grid-stack {
+  width: 100%;
+  min-height: 660px;
+}
+
+.overview-grid.grid-stack > .grid-stack-item {
+  min-width: 0;
+  min-height: 0;
+}
+
+.overview-grid.grid-stack > .grid-stack-item > .grid-stack-item-content.widget-card {
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  margin: 12px;
+}
+
+.overview-grid.grid-stack .widget-card-main {
+  min-height: 0;
+  overflow: auto;
+}
+
+.overview-grid.grid-stack .overview-widget-drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.overview-grid.grid-stack .overview-widget-drag-handle:active {
+  cursor: grabbing;
+}
+
+.overview-grid.grid-stack.overview-grid-readonly .overview-widget-drag-handle,
+.overview-grid.grid-stack.overview-grid-readonly .overview-widget-drag-handle:active {
+  cursor: default;
+  user-select: auto;
+  touch-action: auto;
+}
+
+.overview-grid.grid-stack .grid-stack-item > .ui-resizable-handle {
+  z-index: 25;
+  opacity: 0.7;
+}
+
+.overview-grid.grid-stack .grid-stack-item:hover > .ui-resizable-handle,
+.overview-grid.grid-stack .grid-stack-item.ui-resizable-resizing > .ui-resizable-handle {
+  opacity: 1;
+}
+
+.overview-grid.grid-stack .grid-stack-item > .ui-resizable-e,
+.overview-grid.grid-stack .grid-stack-item > .ui-resizable-w {
+  width: 14px;
+}
+
+.overview-grid.grid-stack .grid-stack-item > .ui-resizable-s {
+  height: 14px;
+}
+
+.overview-grid.grid-stack .grid-stack-item > .ui-resizable-se,
+.overview-grid.grid-stack .grid-stack-item > .ui-resizable-sw {
+  width: 22px;
+  height: 22px;
+}
+
+.overview-grid.grid-stack .grid-stack-item.ui-draggable-dragging > .grid-stack-item-content,
+.overview-grid.grid-stack .grid-stack-item.ui-resizable-resizing > .grid-stack-item-content {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(23, 107, 135, 0.18), var(--shadow);
+}
+
+.overview-grid.grid-stack .grid-stack-placeholder > .placeholder-content {
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: rgba(23, 107, 135, 0.08);
+}
+
+.overview-grid.grid-stack .overview-empty-slot-item > .grid-stack-item-content {
+  overflow: visible;
+}
+
+.overview-grid.grid-stack .overview-empty-slot {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  min-height: 0;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable > .grid-stack-item {
+  position: relative;
+  width: auto;
+  height: auto;
+  left: auto;
+  top: auto;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable > .grid-stack-item > .grid-stack-item-content {
+  position: relative;
+  inset: auto;
+  min-height: 150px;
+}
+
+@media (max-width: 1100px) {
+  .overview-grid.grid-stack {
+    min-height: 900px;
+  }
+}
+
+@media (max-width: 700px) {
+  .overview-grid.grid-stack {
+    min-height: 0;
+  }
+
+  .overview-grid.grid-stack .grid-stack-item,
+  .overview-grid.grid-stack .widget-card,
+  .overview-grid.grid-stack .widget-card-main {
+    min-width: 0;
+  }
+
+  .overview-grid.grid-stack > .grid-stack-item > .grid-stack-item-content.widget-card {
+    padding: 10px;
+  }
+
+  .overview-grid.grid-stack.gridstack-unavailable {
+    grid-template-columns: 1fr;
+  }
 }

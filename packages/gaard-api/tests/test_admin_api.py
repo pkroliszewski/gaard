@@ -302,6 +302,11 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "extension-frame" in response.text
     assert "plugin unavailable" in response.text
     assert "renderDatabaseTypeOptions" not in response.text
+    assert "Loading dashboard overview" in response.text
+    assert "overview-page-loading" in response.text
+    assert "data-toggle-overview-edit" in response.text
+    assert "Finish editing" in response.text
+    assert "data-remove-overview-widget" in response.text
 
     styles_response = admin_client.get("/admin/assets/styles.css")
     assert styles_response.status_code == 200
@@ -309,6 +314,9 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert ".nav button" in styles_response.text
     assert "font-weight: 800" not in styles_response.text
     assert "font-weight: 650" not in styles_response.text
+    assert "calc(100vh - 260px)" in styles_response.text
+    assert "overview-edit-mode-button" in styles_response.text
+    assert "overview-grid-readonly" in styles_response.text
 
     logo_response = admin_client.get("/admin/assets/getgaard.svg")
     assert logo_response.status_code == 200
@@ -1514,6 +1522,35 @@ def test_overview_widget_can_use_table_type(admin_client: TestClient) -> None:
     assert item["result"]["status"] == "ok"
     assert item["result"]["columns"] == ["value"]
     assert item["result"]["rows"] == [{"value": 1}]
+
+
+def test_overview_widget_grid_height_is_persisted(admin_client: TestClient) -> None:
+    headers = auth_headers(admin_client)
+
+    response = admin_client.patch(
+        "/api/v1/admin/overview/widgets/prompts_count/state",
+        headers=headers,
+        json={
+            "active": True,
+            "position": 70,
+            "grid_width": 6,
+            "grid_height": 7,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["grid_height"] == 7
+
+    overview_response = admin_client.get("/api/v1/admin/overview", headers=headers)
+    assert overview_response.status_code == 200
+    widget = next(
+        item
+        for item in overview_response.json()["widgets"]
+        if item["widget_key"] == "prompts_count"
+    )
+    assert widget["position"] == 70
+    assert widget["grid_width"] == 6
+    assert widget["grid_height"] == 7
 
 
 def test_overview_widget_can_be_saved_from_query_and_deleted(

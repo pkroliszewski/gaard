@@ -60,6 +60,7 @@ var state = {
   overviewExtraSlots: 0,
   overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
   overviewRefreshing: false,
+  overviewEditMode: true,
   overviewTablePages: {},
   dataAudit: [],
   dataAuditType: "",
@@ -514,6 +515,7 @@ function renderShell() {
       </main>
     </div>
     ${renderOverviewWidgetModal()}
+    ${renderOverviewPlacementModal()}
     <div id="confirm-dialog-host">${renderConfirmDialog()}</div>`;
   attachShellHandlers();
   initializeOverviewGridStack();
@@ -741,29 +743,38 @@ function renderOverview() {
   const overview = state.overview;
   const widgets = overview?.widgets || [];
   const isLoading = state.overviewLoading || state.overviewRefreshing;
-  const showInitialLoader = isLoading && !overview;
-  const slotCount = showInitialLoader ? OVERVIEW_MIN_GRID_SLOTS : getOverviewSlotCount(widgets);
+  const slotCount = isLoading ? 0 : getOverviewSlotCount(widgets);
   const canAddSlots = slotCount < OVERVIEW_MAX_GRID_SLOTS;
   return `
     <div class="toolbar overview-toolbar">
       <div class="refresh-status" aria-live="polite">
-        ${isLoading ? `<span class="spinner" aria-hidden="true"></span><span>Refreshing</span>` : ""}
+        ${isLoading ? `<span class="spinner" aria-hidden="true"></span><span>Loading overview</span>` : ""}
       </div>
       <button class="primary" type="button" id="overview-refresh" ${isLoading ? "disabled" : ""}>Refresh</button>
+      <button
+        class="overview-edit-mode-button ${state.overviewEditMode ? "active" : ""}"
+        type="button"
+        data-toggle-overview-edit
+        aria-pressed="${state.overviewEditMode ? "true" : "false"}"
+        aria-label="${state.overviewEditMode ? "Finish editing dashboard layout" : "Edit dashboard layout"}"
+        title="${state.overviewEditMode ? "Finish editing" : "Edit layout"}"
+        ${isLoading ? "disabled" : ""}
+      >${state.overviewEditMode ? "Finish editing" : "Edit layout"}</button>
     </div>
-    <div class="overview-grid grid-stack" data-overview-grid>
-      ${showInitialLoader ? renderOverviewLoading() : renderOverviewGrid(widgets, slotCount)}
-    </div>
+    ${isLoading ? renderOverviewLoading() : `<div class="overview-grid grid-stack ${state.overviewEditMode ? "overview-grid-editing" : "overview-grid-readonly"}" data-overview-grid>${renderOverviewGrid(widgets, slotCount)}</div>`}
     <div class="overview-grid-actions">
-      <button type="button" id="overview-add-slots" ${showInitialLoader || !canAddSlots ? "disabled" : ""}>Add empty slots</button>
+      ${state.overviewEditMode ? `<button type="button" id="overview-add-slots" ${isLoading || !canAddSlots ? "disabled" : ""}>Add empty slots</button>` : ""}
       <span>${escapeHtml(`${slotCount}/${OVERVIEW_MAX_GRID_SLOTS} slots`)}</span>
     </div>`;
 }
 function renderOverviewLoading() {
   return `
-    <section class="overview-loading" aria-live="polite">
+    <section class="overview-loading overview-page-loading" aria-live="polite" aria-busy="true">
       <span class="spinner" aria-hidden="true"></span>
-      <span>Refreshing</span>
+      <div>
+        <strong>Loading dashboard overview</strong>
+        <p>Fetching the latest widget data. This may take a moment.</p>
+      </div>
     </section>`;
 }
 function getOverviewEmptySlotCount(widgets) {
@@ -868,7 +879,9 @@ function getOverviewWidgetGridWidth(widget) {
   return Math.max(1, Math.min(OVERVIEW_GRID_COLUMNS, Number.isFinite(width) ? Math.floor(width) : fallback));
 }
 function getOverviewWidgetGridHeight(widget) {
-  return widget.widget_type === "scalar" ? 2 : 4;
+  const fallback = widget.widget_type === "scalar" ? 2 : 4;
+  const height = Number(widget.grid_height || fallback);
+  return Math.max(2, Math.min(24, Number.isFinite(height) ? Math.floor(height) : fallback));
 }
 function getOverviewGridCoordinates(slot) {
   return { x: slot % OVERVIEW_GRID_COLUMNS, y: Math.floor(slot / OVERVIEW_GRID_COLUMNS) };
@@ -880,7 +893,7 @@ function renderOverviewGridWidget(widget, slot) {
   const { x, y } = getOverviewGridCoordinates(slot);
   return `
     <div class="grid-stack-item overview-widget-slot overview-widget-${escapeHtml(widget.widget_type)}"
-      gs-x="${x}" gs-y="${y}" gs-w="${width}" gs-h="${height}" gs-min-w="1" gs-max-w="${OVERVIEW_GRID_COLUMNS}"
+      gs-x="${x}" gs-y="${y}" gs-w="${width}" gs-h="${height}" gs-min-w="1" gs-max-w="${OVERVIEW_GRID_COLUMNS}" gs-min-h="2" gs-max-h="24"
       data-overview-widget-key="${escapeHtml(widget.widget_key)}">
       <section class="grid-stack-item-content widget-card">
         <div class="widget-card-header overview-widget-drag-handle">
@@ -888,7 +901,7 @@ function renderOverviewGridWidget(widget, slot) {
             <span>${escapeHtml(widget.datasource_key)}</span>
             <strong>${escapeHtml(widget.label)}</strong>
           </div>
-          <div class="widget-card-actions">${renderEditWidgetButton(widget.widget_key)}</div>
+          <div class="widget-card-actions">${renderOverviewWidgetActions(widget.widget_key)}</div>
         </div>
         <div class="widget-card-main">${renderOverviewWidgetBody(widget, result)}</div>
       </section>
@@ -915,41 +928,59 @@ function renderOverviewWidgetBody(widget, result) {
 }
 function renderOverviewEmptySlot(logicalSlot, displaySlot = logicalSlot) {
   const { x, y } = getOverviewGridCoordinates(displaySlot);
+  const disabled = state.overviewEditMode ? "" : "disabled";
   return `
     <div class="grid-stack-item overview-empty-slot-item" gs-x="${x}" gs-y="${y}" gs-w="1" gs-h="2" gs-no-move="true" gs-no-resize="true">
       <section class="grid-stack-item-content overview-empty-slot">
         <div class="overview-empty-slot-actions">
-          <button type="button" data-overview-empty-slot="${escapeHtml(logicalSlot)}" aria-label="Add widget to slot ${escapeHtml(displaySlot + 1)}">+</button>
-          <button type="button" class="icon-button danger" data-overview-remove-slot="${escapeHtml(logicalSlot)}" aria-label="Remove empty slot ${escapeHtml(displaySlot + 1)}" title="Remove empty slot">
+          <button type="button" data-overview-empty-slot="${escapeHtml(logicalSlot)}" aria-label="Add widget to slot ${escapeHtml(displaySlot + 1)}" ${disabled}>+</button>
+          <button type="button" class="icon-button danger" data-overview-remove-slot="${escapeHtml(logicalSlot)}" aria-label="Remove empty slot ${escapeHtml(displaySlot + 1)}" title="Remove empty slot" ${disabled}>
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v5" /><path d="M14 11v5" /></svg>
           </button>
         </div>
-        ${state.overviewPlacementSlot === logicalSlot ? renderOverviewPlacementPanel(logicalSlot) : ""}
       </section>
     </div>`;
 }
-function renderOverviewPlacementPanel(slot) {
+function renderOverviewPlacementModal() {
+  const slot = state.overviewPlacementSlot;
+  if (!Number.isInteger(slot)) return "";
   const availableWidgets = state.overviewWidgetConfigs.filter((widget) => widget.active === false);
   return `
-    <div class="overview-placement-panel">
-      <label>Widget
-        <select data-overview-placement-select="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>
-          ${availableWidgets.length ? availableWidgets.map((widget) => `<option value="${escapeHtml(widget.widget_key)}">${escapeHtml(widget.label)} (${escapeHtml(widget.widget_key)}, ${escapeHtml(getOverviewWidgetGridWidth(widget))} cols)</option>`).join("") : `<option>No inactive widgets</option>`}
-        </select>
-      </label>
-      <div class="button-row">
-        <button type="button" data-overview-place-widget="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>Add selected</button>
-        <button type="button" class="primary" data-overview-new-widget="${escapeHtml(slot)}">New widget</button>
-      </div>
+    <div class="modal-backdrop" data-overview-placement-backdrop>
+      <section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="overview-placement-modal-title">
+        <div class="modal-header">
+          <div>
+            <h2 id="overview-placement-modal-title">Add widget</h2>
+            <p>Choose an inactive widget to add to this dashboard slot, or create a new one.</p>
+          </div>
+          <button type="button" data-close-overview-placement>Close</button>
+        </div>
+        <div class="overview-placement-panel">
+          <label>Widget
+            <select data-overview-placement-select="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>
+              ${availableWidgets.length ? availableWidgets.map((widget) => `<option value="${escapeHtml(widget.widget_key)}">${escapeHtml(widget.label)} (${escapeHtml(widget.widget_key)}, ${escapeHtml(getOverviewWidgetGridWidth(widget))} cols)</option>`).join("") : `<option>No inactive widgets</option>`}
+            </select>
+          </label>
+          <div class="button-row">
+            <button type="button" data-close-overview-placement>Cancel</button>
+            <button type="button" data-overview-place-widget="${escapeHtml(slot)}" ${availableWidgets.length ? "" : "disabled"}>Add selected</button>
+            <button type="button" class="primary" data-overview-new-widget="${escapeHtml(slot)}">New widget</button>
+          </div>
+        </div>
+      </section>
     </div>`;
 }
-function renderEditWidgetButton(widgetKey) {
+function renderOverviewWidgetActions(widgetKey) {
+  if (!state.overviewEditMode) return "";
   return `
     <button class="icon-button" type="button" data-edit-overview-widget="${escapeHtml(widgetKey)}" aria-label="Edit widget source" title="Edit source">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 20h9" />
         <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
       </svg>
+    </button>
+    <button class="icon-button danger" type="button" data-remove-overview-widget="${escapeHtml(widgetKey)}" aria-label="Remove widget from dashboard" title="Remove widget">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v5" /><path d="M14 11v5" /></svg>
     </button>`;
 }
 function renderOverviewWidgetModal() {
@@ -1846,6 +1877,7 @@ function renderAdminAudit() {
 }
 function attachSectionHandlers() {
   document.querySelector("#overview-refresh")?.addEventListener("click", refreshOverview);
+  document.querySelector("[data-toggle-overview-edit]")?.addEventListener("click", toggleOverviewEditMode);
   document.querySelector("#overview-add-slots")?.addEventListener("click", addOverviewSlots);
   document.querySelectorAll("[data-overview-empty-slot]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -1862,6 +1894,18 @@ function attachSectionHandlers() {
   });
   document.querySelectorAll("[data-overview-place-widget]").forEach((button) => {
     button.addEventListener("click", placeOverviewWidget);
+  });
+  document.querySelectorAll("[data-close-overview-placement]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.overviewPlacementSlot = null;
+      render();
+    });
+  });
+  document.querySelector("[data-overview-placement-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      state.overviewPlacementSlot = null;
+      render();
+    }
   });
   document.querySelectorAll("[data-overview-new-widget]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1895,6 +1939,9 @@ function attachSectionHandlers() {
   });
   document.querySelectorAll("[data-overview-widget-delete]").forEach((button) => {
     button.addEventListener("click", deleteOverviewWidget);
+  });
+  document.querySelectorAll("[data-remove-overview-widget]").forEach((button) => {
+    button.addEventListener("click", removeOverviewWidgetFromDashboard);
   });
   document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
   document.querySelectorAll("[data-edit-overview-widget]").forEach((button) => {
@@ -2068,6 +2115,7 @@ async function saveOverviewWidget(event) {
         result_mode: form.get("result_mode") || "data",
         position: widget.position,
         grid_width: getOverviewWidgetGridWidth(widget),
+        grid_height: getOverviewWidgetGridHeight(widget),
         active: form.get("active") !== "false"
       })
     });
@@ -2151,13 +2199,40 @@ async function deleteOverviewWidget(event) {
     render();
   }
 }
-async function updateOverviewWidgetState(widgetKey, active, position, gridWidth) {
+async function removeOverviewWidgetFromDashboard(event) {
+  if (!state.overviewEditMode) return;
+  const widgetKey = event.currentTarget.dataset.removeOverviewWidget || "";
+  const widget = getOverviewWidgetByKey(widgetKey);
+  if (!widget) return;
+  if (!await requestConfirmation({
+    title: "Remove widget",
+    message: `Remove widget "${widget.label}" from this dashboard?`,
+    confirmLabel: "Remove"
+  })) return;
+  try {
+    await updateOverviewWidgetState(
+      widgetKey,
+      false,
+      widget.position,
+      getOverviewWidgetGridWidth(widget),
+      getOverviewWidgetGridHeight(widget),
+    );
+    state.overviewPlacementSlot = null;
+    setMessage("success", "Widget removed from dashboard.");
+    await Promise.all([loadOverview(), loadOverviewWidgetConfigs(false)]);
+  } catch (error) {
+    setMessage("error", error.message);
+    render();
+  }
+}
+async function updateOverviewWidgetState(widgetKey, active, position, gridWidth, gridHeight) {
   await api(`/api/v1/admin/overview/widgets/${encodeURIComponent(widgetKey)}/state`, {
     method: "PATCH",
     body: JSON.stringify({
       active,
       position,
-      grid_width: gridWidth
+      grid_width: gridWidth,
+      grid_height: gridHeight
     })
   });
 }
@@ -2236,17 +2311,28 @@ function initializeOverviewGridStack() {
   }
   overviewGridStack = GridStackClass.init({
     column: OVERVIEW_GRID_COLUMNS,
-    cellHeight: 76,
-    margin: 12,
-    float: false,
-    animate: true,
+    cellHeight: 94,
     columnOpts: {
-      breakpoints: [{ w: 920, c: 1, layout: "list" }]
+      breakpointForWindow: false,
+      breakpoints: [
+        { w: 700, c: 1, layout: "list" },
+        { w: 1100, c: 6, layout: "moveScale" }
+      ]
     },
+    float: false,
+    margin: 12,
+    alwaysShowResizeHandle: state.overviewEditMode,
     draggable: { handle: ".overview-widget-drag-handle", cancel: ".widget-card-actions, button, a, input, select, textarea" },
-    resizable: { handles: "e, w" }
+    resizable: { handles: "e,se,s,sw,w" }
   }, gridElement);
-  overviewGridStack.on("change", (_event, items) => scheduleOverviewGridSave(items || []));
+  if (state.overviewEditMode) {
+    overviewGridStack.enable?.();
+  } else {
+    overviewGridStack.disable?.();
+  }
+  overviewGridStack.on("change", (_event, items) => {
+    if (state.overviewEditMode) scheduleOverviewGridSave(items || []);
+  });
 }
 function destroyOverviewGridStack() {
   if (!overviewGridStack) return;
@@ -2256,22 +2342,46 @@ function destroyOverviewGridStack() {
 function scheduleOverviewGridSave(items) {
   const changes = items.map((item) => {
     const widgetKey = item.el?.dataset.overviewWidgetKey || "";
-    return { widgetKey, x: Number(item.x || 0), y: Number(item.y || 0), width: Number(item.w || 1) };
+    return {
+      widgetKey,
+      x: Number(item.x || 0),
+      y: Number(item.y || 0),
+      width: Number(item.w || 1),
+      height: Number(item.h || 2)
+    };
   }).filter((item) => item.widgetKey);
   if (!changes.length) return;
   clearTimeout(overviewGridSaveTimer);
   overviewGridSaveTimer = window.setTimeout(() => persistOverviewGridChanges(changes), 220);
+}
+async function toggleOverviewEditMode() {
+  if (state.overviewLoading || state.overviewRefreshing) return;
+  if (state.overviewEditMode && overviewGridSaveTimer) {
+    clearTimeout(overviewGridSaveTimer);
+    overviewGridSaveTimer = null;
+    const changes = collectOverviewGridChanges();
+    if (changes.length) await persistOverviewGridChanges(changes);
+  }
+  state.overviewEditMode = !state.overviewEditMode;
+  state.overviewPlacementSlot = null;
+  render();
 }
 async function persistOverviewGridChanges(changes) {
   if (overviewGridSaveInFlight) {
     overviewGridSaveQueued = true;
     return;
   }
-  overviewGridSaveInFlight = true;;
+  overviewGridSaveInFlight = true;
   try {
     await Promise.all(changes.map((change) => {
       const slot = change.y * OVERVIEW_GRID_COLUMNS + change.x;
-      return updateOverviewWidgetState(change.widgetKey, true, overviewPositionFromSlot(slot), change.width);
+      return updateOverviewWidgetState(
+        change.widgetKey,
+        true,
+        overviewPositionFromSlot(slot),
+        change.width,
+        change.height,
+      );
     }));
     applyOverviewGridChangesLocally(changes);
     setMessage("success", "Overview layout saved.");
@@ -2295,7 +2405,8 @@ function collectOverviewGridChanges() {
     widgetKey: node.el?.dataset.overviewWidgetKey || "",
     x: Number(node.x || 0),
     y: Number(node.y || 0),
-    width: Number(node.w || 1)
+    width: Number(node.w || 1),
+    height: Number(node.h || 2)
   })).filter((item) => item.widgetKey);
 }
 function applyOverviewGridChangesLocally(changes) {
@@ -2304,7 +2415,12 @@ function applyOverviewGridChangesLocally(changes) {
     const change = byKey.get(widget.widget_key);
     if (!change) return widget;
     const slot = change.y * OVERVIEW_GRID_COLUMNS + change.x;
-    return { ...widget, position: overviewPositionFromSlot(slot), grid_width: change.width };
+    return {
+      ...widget,
+      position: overviewPositionFromSlot(slot),
+      grid_width: change.width,
+      grid_height: change.height,
+    };
   };
   if (state.overview?.widgets) state.overview.widgets = state.overview.widgets.map(update);
   state.overviewWidgetConfigs = state.overviewWidgetConfigs.map(update);

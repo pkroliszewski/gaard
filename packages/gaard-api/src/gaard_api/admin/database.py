@@ -304,6 +304,7 @@ def seed_overview_widgets(session: Session) -> None:
             "result_mode": "data",
             "position": 10,
             "grid_width": 1,
+            "grid_height": 2,
         },
         {
             "widget_key": "audit_retention",
@@ -322,6 +323,7 @@ def seed_overview_widgets(session: Session) -> None:
             "result_mode": "data",
             "position": 20,
             "grid_width": 1,
+            "grid_height": 2,
         },
         {
             "widget_key": "schema_cache_ttl",
@@ -340,6 +342,7 @@ def seed_overview_widgets(session: Session) -> None:
             "result_mode": "data",
             "position": 30,
             "grid_width": 1,
+            "grid_height": 2,
         },
         {
             "widget_key": "license_edition",
@@ -354,6 +357,7 @@ def seed_overview_widgets(session: Session) -> None:
             "result_mode": "data",
             "position": 40,
             "grid_width": 1,
+            "grid_height": 2,
         },
         {
             "widget_key": "runtime_daily_queries",
@@ -369,6 +373,7 @@ def seed_overview_widgets(session: Session) -> None:
             "result_mode": "data",
             "position": 250,
             "grid_width": 12,
+            "grid_height": 4,
             "active": False,
         },
         {
@@ -388,6 +393,7 @@ def seed_overview_widgets(session: Session) -> None:
             "result_mode": "data",
             "position": 130,
             "grid_width": 12,
+            "grid_height": 4,
         },
     ]
 
@@ -540,6 +546,18 @@ def ensure_overview_widget_schema(engine: Engine) -> None:
         with engine.begin() as connection:
             connection.execute(
                 text("ALTER TABLE overview_widgets ADD COLUMN grid_width INTEGER DEFAULT 1")
+            )
+
+    if "grid_height" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE overview_widgets ADD COLUMN grid_height INTEGER DEFAULT 2")
+            )
+            connection.execute(
+                text(
+                    "UPDATE overview_widgets SET grid_height = 4 "
+                    "WHERE widget_type <> 'scalar'"
+                )
             )
 
     if "result_mode" not in columns:
