@@ -677,7 +677,12 @@ label {
   background: var(--ok);
 }
 
-.overview-grid,
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .widget-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -967,44 +972,6 @@ label {
 .widget-card-actions button,
 .panel-actions button {
   white-space: nowrap;
-}
-
-.overview-resize-handle {
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  width: 12px;
-  min-width: 12px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  cursor: ew-resize;
-}
-
-.overview-resize-handle-left {
-  left: -6px;
-}
-
-.overview-resize-handle-right {
-  right: -6px;
-}
-
-.overview-resize-handle::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 4px;
-  height: 48px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.8);
-}
-
-.overview-widget-slot:hover .overview-resize-handle::before,
-.overview-widget-slot.is-resizing .overview-resize-handle::before {
-  background: var(--accent);
 }
 
 .modal-backdrop {
@@ -1401,20 +1368,115 @@ code {
     grid-template-columns: 1fr;
   }
 }
-.identities-page { position:relative; min-height:0; overflow:visible; }
-.identity-table-row { cursor:pointer; }
-.identity-table-row:hover td, .identity-table-row.selected td { background:#f3f7fa; }
-.identity-pane { position:absolute; top:0; right:0; height:calc(100vh - 108px); z-index:2; box-sizing:border-box; background:#fff; border-left:1px solid var(--line); padding:22px; overflow:hidden; }
-.identity-pane header { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:18px; }
-.identity-pane header button { border:0; background:transparent; font-size:24px; line-height:1; cursor:pointer; }
-.identity-pane-content { height:calc(100% - 77px); overflow:auto; padding-right:4px; }
-.identity-resizer { position:absolute; left:-5px; top:0; bottom:0; width:10px; cursor:ew-resize; touch-action:none; }
-.identity-pane dt { color:var(--muted); font-size:12px; margin-top:12px; }.identity-pane dd { margin:3px 0; overflow-wrap:anywhere; }
-.identity-basics { margin:0; }
-.identity-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:22px 0; }
-.identity-actions button:disabled { color:var(--muted); background:var(--panel-strong); border-color:var(--line); cursor:not-allowed; opacity:.7; }
-.identity-pane h3 { margin:22px 0 8px; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-.identity-provider-table { width:100%; border-collapse:collapse; font-size:12px; }
-.identity-provider-table th, .identity-provider-table td { padding:7px 8px; border:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
-.identity-provider-table th { width:40%; color:var(--muted); font-weight:600; background:#fafbfc; }
-.identity-warning { cursor:help; font-size:13px; }
+
+/* --------------------------------------------------------------------------
+ * Overview / Gridstack integration
+ *
+ * Load gridstack.min.css BEFORE this file. Keep all application overrides
+ * scoped to .overview-grid so Gridstack's positioning rules remain intact.
+ * -------------------------------------------------------------------------- */
+
+.overview-grid.grid-stack {
+  display: block;
+  width: 100%;
+  min-height: 152px;
+  background: transparent;
+}
+
+.overview-grid.grid-stack > .grid-stack-item {
+  min-width: 0;
+  min-height: 0;
+}
+
+.overview-grid.grid-stack > .grid-stack-item > .grid-stack-item-content {
+  inset: 0;
+  overflow: auto;
+}
+
+.overview-grid.grid-stack .overview-widget-slot {
+  position: absolute;
+  min-height: 0;
+  transition: none;
+}
+
+.overview-grid.grid-stack .widget-card {
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+
+.overview-grid.grid-stack .overview-widget-drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.overview-grid.grid-stack .overview-widget-drag-handle:active {
+  cursor: grabbing;
+}
+
+.overview-grid.grid-stack .widget-card-actions,
+.overview-grid.grid-stack .widget-card-actions * {
+  cursor: default;
+  user-select: auto;
+  touch-action: auto;
+}
+
+.overview-grid.grid-stack .grid-stack-item.ui-draggable-dragging > .grid-stack-item-content,
+.overview-grid.grid-stack .grid-stack-item.ui-resizable-resizing > .grid-stack-item-content {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(23, 107, 135, 0.18), var(--shadow);
+}
+
+.overview-grid.grid-stack .grid-stack-placeholder > .placeholder-content {
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: rgba(23, 107, 135, 0.08);
+}
+
+.overview-grid.grid-stack .overview-empty-slot-item > .grid-stack-item-content {
+  overflow: visible;
+}
+
+.overview-grid.grid-stack .overview-empty-slot {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.overview-grid.grid-stack .overview-placement-panel {
+  position: relative;
+  z-index: 3;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.overview-grid.grid-stack.gridstack-unavailable {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable > .grid-stack-item {
+  position: relative;
+  width: auto;
+  height: auto;
+  left: auto;
+  top: auto;
+}
+
+.overview-grid.grid-stack.gridstack-unavailable > .grid-stack-item > .grid-stack-item-content {
+  position: relative;
+  inset: auto;
+  min-height: 150px;
+}
+
+@media (max-width: 920px) {
+  .overview-grid.grid-stack.gridstack-unavailable {
+    grid-template-columns: 1fr;
+  }
+}
