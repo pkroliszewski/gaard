@@ -4,11 +4,13 @@ var params = new URLSearchParams(window.location.search);
 var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || window.GAARD_CLIENT_CONFIG?.backendUrl || "http://localhost:8000").replace(/\/+$/, "");
 var storedToken = localStorage.getItem("gaard_client_token") || "";
 var storedUsername = localStorage.getItem("gaard_client_username") || "";
+var storedRole = localStorage.getItem("gaard_client_role") || "";
 var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
 var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
   username: storedUsername,
+  role: storedRole,
   activeView: normalizeView(params.get("view") || storedActiveView),
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
@@ -25,8 +27,9 @@ var state = {
   datasourcesLoading: false,
   datasourceError: "",
   datasourceUploadPending: false,
-  datasourceStatePendingId: null,
-  newDatasourceActive: false,
+  datasourceSelectionPending: false,
+  selectedDatasourceIds: [],
+  multipleDatasourceSelectionAllowed: false,
   dashboards: [],
   dashboardsLoaded: false,
   dashboardsLoading: false,
@@ -250,11 +253,6 @@ function renderSourcesPanel() {
         <button class="source-add" type="button" data-add-source aria-label="Add Excel file" title="Add Excel file" ${state.datasourceUploadPending || !state.token ? "disabled" : ""}>
           <span aria-hidden="true">+</span>
         </button>
-        <label class="new-source-state">
-          <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
-          <span>Add as active source</span>
-        </label>
-        
       </div>
       <div class="sources-list" aria-live="polite">
         ${state.datasourcesLoading ? `<div class="source-muted">Loading...</div>` : ""}
@@ -262,10 +260,10 @@ function renderSourcesPanel() {
         ${visibleSources.map((source) => `
           <div class="source-row" title="${escapeHtml(source.name)}">
             <label class="source-state">
-              <input type="checkbox" data-source-active="${source.id}" ${source.active ? "checked" : ""} ${state.datasourceStatePendingId === source.id ? "disabled" : ""} />
+              <input type="checkbox" data-source-selected="${escapeHtml(source.connector_key)}" ${state.selectedDatasourceIds.includes(source.connector_key) ? "checked" : ""} ${state.datasourceSelectionPending ? "disabled" : ""} />
               <span>${escapeHtml(source.name)}</span>
             </label>
-            <small>${source.active ? "Active" : "Inactive"}</small>
+            <small>${state.selectedDatasourceIds.includes(source.connector_key) ? "Selected" : "Available"}</small>
           </div>`).join("")}
       </div>
       
@@ -1015,13 +1013,6 @@ function renderDatasourcesView() {
           ${renderIcon("plus")}
           <span><strong>Excel workbooks</strong><small>${escapeHtml(uploadLabel)}</small></span>
         </button>
-        <label class="datasource-active-toggle">
-          <input type="checkbox" data-new-source-active ${state.newDatasourceActive ? "checked" : ""} ${state.datasourceUploadPending || !state.token ? "disabled" : ""} />
-          <span>
-            <strong>Add uploads as active</strong>
-            <small>New workbooks become available to the chat immediately.</small>
-          </span>
-        </label>
         <div class="placeholder-item muted">
           ${renderIcon("plus")}
           <span><strong>CSV uploads</strong><small>Coming soon</small></span>
@@ -1053,19 +1044,18 @@ function renderDatasourcesView() {
     </section>`;
 }
 function renderDatasourceRow(source) {
-  const sourceId = Number(source.id);
-  const disabled = state.datasourceStatePendingId === sourceId;
+  const selected = state.selectedDatasourceIds.includes(source.connector_key);
   const typeLabel = source.database_type || source.connector_key || "datasource";
   return `
     <article class="datasource-row">
       <label class="datasource-row-main">
-        <input type="checkbox" data-source-active="${sourceId}" ${source.active ? "checked" : ""} ${disabled ? "disabled" : ""} />
+        <input type="checkbox" data-source-selected="${escapeHtml(source.connector_key)}" ${selected ? "checked" : ""} ${state.datasourceSelectionPending ? "disabled" : ""} />
         <span>
           <strong>${escapeHtml(source.name || source.connector_key || "Untitled source")}</strong>
           <small>${escapeHtml(typeLabel)}</small>
         </span>
       </label>
-      <span class="datasource-status ${source.active ? "active" : ""}">${source.active ? "Active" : "Inactive"}</span>
+      <span class="datasource-status ${selected ? "active" : ""}">${selected ? "Selected" : "Available"}</span>
     </article>`;
 }
 function renderPlaceholderView({ title, description, items }) {
@@ -1121,9 +1111,8 @@ function render(options = {}) {
   document.querySelector("[data-toggle-sources]")?.addEventListener("click", toggleSources);
   document.querySelector("[data-add-source]")?.addEventListener("click", openSourcePicker);
   document.querySelector("[data-refresh-sources]")?.addEventListener("click", () => loadDatasources());
-  document.querySelector("[data-new-source-active]")?.addEventListener("change", toggleNewSourceActive);
-  document.querySelectorAll("[data-source-active]").forEach((input2) => {
-    input2.addEventListener("change", updateSourceActive);
+  document.querySelectorAll("[data-source-selected]").forEach((input2) => {
+    input2.addEventListener("change", updateSelectedSources);
   });
   document.querySelector("[data-toggle-dashboard-menu]")?.addEventListener("click", toggleDashboardMenu);
   document.querySelectorAll("[data-toggle-dashboard-create]").forEach((button) => {
@@ -1992,9 +1981,6 @@ function openSourcePicker() {
     input.value = "";
     input.click();
 }
-function toggleNewSourceActive(event) {
-    state.newDatasourceActive = event.currentTarget.checked;
-}
 function mergeDatasourcesPreservingOrder(currentItems, nextItems) {
     const nextById = new Map(nextItems.map((item) => [String(item.id), item]));
     const seen = new Set();
@@ -2028,6 +2014,8 @@ async function loadDatasources(options = {}) {
         }
         const items = payload.items || [];
         state.datasources = options.preserveOrder ? mergeDatasourcesPreservingOrder(state.datasources, items) : items;
+        state.selectedDatasourceIds = payload.selected_datasource_ids || [];
+        state.multipleDatasourceSelectionAllowed = Boolean(payload.multiple_selection_allowed);
         state.datasourcesLoaded = true;
     } catch (error) {
         state.datasourceError = error.message || "Could not load data sources.";
@@ -2055,7 +2043,7 @@ async function uploadSelectedSource(event) {
     try {
         const params = new URLSearchParams({
             backend_url: state.backendUrl,
-            active: state.newDatasourceActive ? "true" : "false"
+            active: "false"
         });
         const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
             method: "POST",
@@ -2083,23 +2071,32 @@ async function uploadSelectedSource(event) {
         render();
     }
 }
-async function updateSourceActive(event) {
+async function updateSelectedSources(event) {
     const input = event.currentTarget;
-    const sourceId = Number(input.dataset.sourceActive);
-    const active = input.checked;
-    if (!sourceId || state.datasourceStatePendingId) return;
-    state.datasourceStatePendingId = sourceId;
+    const datasourceId = input.dataset.sourceSelected;
+    if (!datasourceId || state.datasourceSelectionPending) return;
+    let selectedIds = input.checked
+      ? [...state.selectedDatasourceIds, datasourceId]
+      : state.selectedDatasourceIds.filter((item) => item !== datasourceId);
+    selectedIds = [...new Set(selectedIds)];
+    if (selectedIds.length > 1 && !state.multipleDatasourceSelectionAllowed) {
+      input.checked = false;
+      state.datasourceError = "Select one datasource unless multi-datasource access is enabled.";
+      render();
+      return;
+    }
+    state.datasourceSelectionPending = true;
     state.datasourceError = "";
     render();
     try {
-        const response = await fetch(`/api/datasources/${sourceId}/state`, {
+        const response = await fetch("/api/datasources/selection", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 ...authHeaders()
             },
             body: JSON.stringify({
-                active,
+                datasource_ids: selectedIds,
                 backend_url: state.backendUrl
             })
         });
@@ -2107,12 +2104,13 @@ async function updateSourceActive(event) {
         if (!response.ok) {
             throw new Error(friendlyDatasourceError(formatApiResponseError(response, extractErrorMessage(payload))));
         }
-        await loadDatasources({ preserveOrder: true });
+        state.selectedDatasourceIds = payload.selected_datasource_ids || selectedIds;
+        state.multipleDatasourceSelectionAllowed = Boolean(payload.multiple_selection_allowed);
     } catch (error) {
-        state.datasourceError = error.message || "Could not update the source state.";
-        reportApiError(error, "Could not update the source state.");
+        state.datasourceError = error.message || "Could not update selected sources.";
+        reportApiError(error, "Could not update selected sources.");
     } finally {
-        state.datasourceStatePendingId = null;
+        state.datasourceSelectionPending = false;
         render();
     }
 }
@@ -2823,6 +2821,7 @@ async function login(event) {
     }
     state.token = payload.token || "";
     state.username = payload.username || "";
+    state.role = payload.role || "";
     state.loginOpen = false;
     state.dashboards = [];
     state.dashboardsLoaded = false;
@@ -2830,6 +2829,7 @@ async function login(event) {
     state.dashboardEditMode = false;
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
+    localStorage.setItem("gaard_client_role", state.role);
     render();
   } catch (error) {
     state.error = error.message || "Login failed.";
@@ -2843,11 +2843,14 @@ async function logout() {
   }
   state.token = "";
   state.username = "";
+  state.role = "";
   state.messages = [];
   state.conversationId = "";
   state.datasources = [];
   state.datasourcesLoaded = false;
   state.datasourceError = "";
+  state.selectedDatasourceIds = [];
+  state.multipleDatasourceSelectionAllowed = false;
   state.dashboards = [];
   state.dashboardsLoaded = false;
   state.dashboardsError = "";
@@ -2875,6 +2878,7 @@ async function logout() {
   state.loginOpen = false;
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
+  localStorage.removeItem("gaard_client_role");
   render();
 }
 function buildWidgetLabel(question) {
@@ -2966,6 +2970,11 @@ async function submitQuestion(event) {
     render();
     return;
   }
+  if (!state.selectedDatasourceIds.length) {
+    state.error = "Select at least one available datasource before asking a question.";
+    render();
+    return;
+  }
   const form = event.currentTarget;
   const input = form.elements.namedItem("question");
   const question = String(input?.value || "").trim();
@@ -3006,6 +3015,7 @@ async function submitQuestion(event) {
         body: JSON.stringify({
           question,
           mode,
+          datasource_ids: state.selectedDatasourceIds,
           ...conversationPayload(),
           backend_url: state.backendUrl
         })
@@ -3083,6 +3093,7 @@ async function submitAnalysisQuestion(message, question) {
     },
     body: JSON.stringify({
       question,
+      datasource_ids: state.selectedDatasourceIds,
       ...conversationPayload(),
       backend_url: state.backendUrl
     })

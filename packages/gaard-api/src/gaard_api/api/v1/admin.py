@@ -41,8 +41,11 @@ from gaard_api.admin.models import (
     DatasourceConnector,
     DatasourceSchemaCache,
     OverviewWidget,
+    OverviewWidgetTag,
     PromptTemplate,
+    UserDatasourceSelection,
     UserSavedMetric,
+    WidgetTag,
 )
 from gaard_api.admin.security import (
     create_session_token,
@@ -234,6 +237,7 @@ class OverviewWidgetUpdateRequest(BaseModel):
     position: int | None = Field(default=None, ge=10)
     grid_width: int | None = Field(default=None, ge=1, le=12)
     active: bool | None = None
+    tags: list[str] | None = None
 
 
 class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
@@ -298,6 +302,10 @@ class DatasourceStateRequest(BaseModel):
     active: bool
 
 
+class DatasourceSelectionRequest(BaseModel):
+    datasource_ids: list[str] = Field(default_factory=list)
+
+
 class DatasourceSchemaTableSettingsRequest(BaseModel):
     tables: dict[str, dict[str, Any]]
 
@@ -354,6 +362,98 @@ def serialize_datasource(connector: DatasourceConnector) -> dict[str, Any]:
         "updated_by": connector.updated_by,
         "updated_at": serialize_datetime(connector.updated_at),
     }
+
+
+def identity_privileges_are_active() -> bool:
+    """Whether the optional identity-privileges extension is active in this process."""
+    return license_service.identity_management_allowed() and any(
+        record.manifest is not None
+        and record.manifest.id == "identity-privileges"
+        and "api" in record.active_capabilities
+        for record in get_extension_manager().records
+    )
+
+
+def principal_identity_id(principal: AuthenticatedSession) -> str:
+    return f"{principal.session.auth_provider}:{principal.session.username}"
+
+
+def filter_datasources_for_identity_privileges(
+    session: Session,
+    principal: AuthenticatedSession,
+    connectors: list[DatasourceConnector],
+) -> list[DatasourceConnector]:
+    """Return only datasources granted to a non-admin identity when enabled."""
+    if not identity_privileges_are_active():
+        return connectors
+
+    from gaard_identity_privileges.models import DatasourceIdentityPermission
+
+    allowed_ids = set(
+        session.scalars(
+            select(DatasourceIdentityPermission.connector_id).where(
+                DatasourceIdentityPermission.identity_id == principal_identity_id(principal),
+                DatasourceIdentityPermission.allowed.is_(True),
+            )
+        )
+    )
+    return [connector for connector in connectors if connector.id in allowed_ids]
+
+
+def grant_client_excel_datasource_permission(
+    session: Session,
+    connector_id: int,
+    principal: AuthenticatedSession,
+) -> None:
+    """Make a client-uploaded workbook private to its uploader when enabled."""
+    if not identity_privileges_are_active():
+        return
+
+    from gaard_identity_privileges.models import DatasourceIdentityPermission
+
+    session.add(
+        DatasourceIdentityPermission(
+            connector_id=connector_id,
+            identity_id=principal_identity_id(principal),
+            allowed=True,
+        )
+    )
+
+
+def multi_datasource_access_is_active() -> bool:
+    return any(
+        record.manifest is not None
+        and record.manifest.id == "datasource-access"
+        and "query" in record.manifest.contributions
+        and "api" in record.active_capabilities
+        for record in get_extension_manager().records
+    )
+
+
+def selected_datasource_ids(
+    session: Session, principal: AuthenticatedSession
+) -> list[str]:
+    selection = session.get(UserDatasourceSelection, str(principal.user.id))
+    if selection is None:
+        return []
+    value = json_loads(selection.datasource_ids_json)
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def set_selected_datasource_ids(
+    session: Session,
+    principal: AuthenticatedSession,
+    datasource_ids: list[str],
+) -> None:
+    owner_user_id = str(principal.user.id)
+    selection = session.get(UserDatasourceSelection, owner_user_id)
+    if selection is None:
+        selection = UserDatasourceSelection(
+            owner_user_id=owner_user_id,
+            owner_username=principal.session.username or principal.user.username,
+        )
+        session.add(selection)
+    selection.datasource_ids_json = json.dumps(datasource_ids)
 
 
 def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
@@ -465,7 +565,7 @@ def serialize_governance_policy(session: Session) -> dict[str, Any]:
     }
 
 
-def serialize_overview_widget_config(widget: OverviewWidget) -> dict[str, Any]:
+def serialize_overview_widget_config(session: Session, widget: OverviewWidget) -> dict[str, Any]:
     return {
         "widget_key": widget.widget_key,
         "label": widget.label,
@@ -482,7 +582,39 @@ def serialize_overview_widget_config(widget: OverviewWidget) -> dict[str, Any]:
         "active": widget.active,
         "updated_by": widget.updated_by,
         "updated_at": serialize_datetime(widget.updated_at),
+        "tags": get_overview_widget_tags(session, widget),
     }
+
+
+def normalize_widget_tags(tags: list[str]) -> list[str]:
+    return sorted({tag.strip() for tag in tags if tag and tag.strip()})
+
+
+def get_overview_widget_tags(session: Session, widget: OverviewWidget) -> list[str]:
+    return list(session.scalars(
+        select(OverviewWidgetTag.tag_name)
+        .where(OverviewWidgetTag.widget_id == widget.id)
+        .order_by(OverviewWidgetTag.tag_name)
+    ))
+
+
+def list_assigned_widget_tags(session: Session) -> list[str]:
+    """Return only catalogue tags which are still in use by a widget."""
+    return list(session.scalars(
+        select(WidgetTag.name)
+        .join(OverviewWidgetTag, OverviewWidgetTag.tag_name == WidgetTag.name)
+        .distinct()
+        .order_by(WidgetTag.name)
+    ))
+
+
+def set_overview_widget_tags(session: Session, widget: OverviewWidget, tags: list[str]) -> None:
+    normalized = normalize_widget_tags(tags)
+    session.execute(delete(OverviewWidgetTag).where(OverviewWidgetTag.widget_id == widget.id))
+    for tag in normalized:
+        if session.get(WidgetTag, tag) is None:
+            session.add(WidgetTag(name=tag))
+        session.add(OverviewWidgetTag(widget_id=widget.id, tag_name=tag))
 
 
 def normalize_overview_widget_grid_width(
@@ -660,7 +792,7 @@ def serialize_overview_widget(
     widget: OverviewWidget,
 ) -> dict[str, Any]:
     return {
-        **serialize_overview_widget_config(widget),
+        **serialize_overview_widget_config(session, widget),
         "result": execute_overview_widget(session, widget),
     }
 
@@ -1233,6 +1365,19 @@ def list_identities(
     user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
     with create_session() as session:
+        external_user_ids = {
+            item.username: str(item.id)
+            for item in session.scalars(
+                select(AdminUser).where(AdminUser.auth_provider != "local")
+            ).all()
+        }
+        dashboards_by_owner: dict[str, list[dict[str, Any]]] = {}
+        for dashboard in session.scalars(
+            select(Dashboard).order_by(Dashboard.updated_at.desc(), Dashboard.id.desc())
+        ).all():
+            dashboards_by_owner.setdefault(dashboard.owner_user_id, []).append(
+                serialize_admin_dashboard(dashboard)
+            )
         items = [{
             "id": f"local:{item.id}", "username": item.username,
             "name": item.display_name or item.username, "role": "admin",
@@ -1244,6 +1389,13 @@ def list_identities(
         if license_service.identity_management_allowed():
             for provider in get_auth_provider_registry().identity_providers():
                 items.extend(provider.list_users(session, refresh=refresh))
+        for item in items:
+            owner_user_id = (
+                item["id"].removeprefix("local:")
+                if item.get("provider_id") == "local"
+                else external_user_ids.get(str(item.get("id") or ""))
+            )
+            item["dashboards"] = dashboards_by_owner.get(owner_user_id or "", [])
         mark_overshadowed_identities(items)
         return {"items": items}
 
@@ -1283,6 +1435,7 @@ def update_identity(
         if request.display_name is not None:
             target.display_name = request.display_name.strip()
         if request.username is not None:
+            previous_username = target.username
             username = request.username.strip()
             if not username:
                 raise HTTPException(status_code=400, detail="Username must not be empty.")
@@ -1290,6 +1443,21 @@ def update_identity(
             if existing is not None and existing.id != target.id:
                 raise HTTPException(status_code=400, detail="Username is already in use.")
             target.username = username
+            if username != previous_username:
+                for assignment in session.scalars(
+                    select(OverviewWidgetTag).where(
+                        OverviewWidgetTag.tag_name == previous_username
+                    )
+                ):
+                    if session.get(
+                        OverviewWidgetTag,
+                        {"widget_id": assignment.widget_id, "tag_name": username},
+                    ) is not None:
+                        session.delete(assignment)
+                    else:
+                        assignment.tag_name = username
+                if session.get(WidgetTag, username) is None:
+                    session.add(WidgetTag(name=username))
         if request.new_password:
             target.password_hash = hash_password(request.new_password)
             target.must_change_password = False
@@ -1329,6 +1497,7 @@ def get_overview(
             }
             for connector in list_datasource_connectors(session)
         ],
+        "tags": list_assigned_widget_tags(session),
         "widgets": widgets,
         "info_widgets": [
             widget for widget in widgets if widget["widget_type"] == OVERVIEW_WIDGET_SCALAR
@@ -1365,7 +1534,7 @@ def get_overview_widget_configs(
 ) -> dict[str, Any]:
     return {
         "items": [
-            serialize_overview_widget_config(widget)
+            serialize_overview_widget_config(session, widget)
             for widget in list_all_overview_widgets(session)
         ],
         "datasources": [
@@ -1378,6 +1547,7 @@ def get_overview_widget_configs(
             }
             for connector in list_datasource_connectors(session)
         ],
+        "tags": list_assigned_widget_tags(session),
     }
 
 
@@ -1466,6 +1636,8 @@ def create_overview_widget(
         ) from exc
 
     session.add(widget)
+    session.flush()
+    set_overview_widget_tags(session, widget, ["public", user.username, *(request.tags or [])])
     record_admin_audit(
         session=session,
         actor=user.username,
@@ -1561,6 +1733,12 @@ def create_overview_widget_from_query(
         ) from exc
 
     session.add(widget)
+    session.flush()
+    set_overview_widget_tags(
+        session,
+        widget,
+        ["public", principal.session.username or principal.user.username],
+    )
     session.add(
         UserSavedMetric(
             owner_user_id=str(principal.user.id),
@@ -1586,7 +1764,7 @@ def create_overview_widget_from_query(
 
     return {
         "item": {
-            **serialize_overview_widget_config(widget),
+            **serialize_overview_widget_config(session, widget),
             "result": result_payload,
         },
     }
@@ -1707,6 +1885,8 @@ def update_overview_widget(
     widget.grid_width = next_grid_width
     widget.active = next_active
     widget.updated_by = user.username
+    if request.tags is not None:
+        set_overview_widget_tags(session, widget, request.tags)
 
     record_admin_audit(
         session=session,
@@ -1779,7 +1959,7 @@ def update_overview_widget_state(
     session.commit()
 
     return {
-        "item": serialize_overview_widget_config(widget),
+        "item": serialize_overview_widget_config(session, widget),
     }
 
 
@@ -2003,14 +2183,62 @@ def update_prompt(
 
 @router.get("/datasources")
 def get_datasources(
-    user: AdminUser = Depends(get_current_admin),
+    available_only: bool = False,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    connectors = list_datasource_connectors(session)
+    if available_only or principal.session.role != "admin":
+        connectors = [
+            connector
+            for connector in connectors
+            if connector.active and not is_system_datasource_connector(connector)
+        ]
+    if available_only or principal.session.role != "admin":
+        connectors = filter_datasources_for_identity_privileges(session, principal, connectors)
+
     return {
-        "items": [
-            serialize_datasource(connector) for connector in list_datasource_connectors(session)
-        ],
-        "viewer": user.username,
+        "items": [serialize_datasource(connector) for connector in connectors],
+        "selected_datasource_ids": selected_datasource_ids(session, principal),
+        "multiple_selection_allowed": multi_datasource_access_is_active(),
+        "viewer": principal.session.username or principal.user.username,
+    }
+
+
+@router.api_route("/datasources/selection", methods=["PUT", "POST"])
+def update_datasource_selection(
+    request: DatasourceSelectionRequest,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    selected_ids = list(dict.fromkeys(source_id.strip() for source_id in request.datasource_ids if source_id.strip()))
+    if len(selected_ids) > 1 and not multi_datasource_access_is_active():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Selecting multiple datasources requires the multi-datasource access extension.",
+        )
+
+    connectors = list_datasource_connectors(session)
+    available = [
+        connector
+        for connector in connectors
+        if connector.active and not is_system_datasource_connector(connector)
+    ]
+    if identity_privileges_are_active():
+        available = filter_datasources_for_identity_privileges(session, principal, available)
+    available_ids = {connector.connector_key for connector in available}
+    unknown_ids = [source_id for source_id in selected_ids if source_id not in available_ids]
+    if unknown_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="One or more selected datasources are unavailable to this user.",
+        )
+
+    set_selected_datasource_ids(session, principal, selected_ids)
+    session.commit()
+    return {
+        "selected_datasource_ids": selected_ids,
+        "multiple_selection_allowed": multi_datasource_access_is_active(),
     }
 
 
@@ -2032,6 +2260,13 @@ def get_extensions(
         "items": [serialize_extension_record(record) for record in get_extension_manager().records],
         "admin_sections": [
             section.serialize() for section in get_api_registry().list_admin_sections()
+        ],
+        "admin_frontend_modules": [
+            {
+                "extension_id": module.extension_id,
+                "module_path": module.module_path,
+            }
+            for module in get_api_registry().list_admin_frontend_modules()
         ],
         "viewer": user.username,
     }
@@ -2108,9 +2343,15 @@ def create_datasource(
 async def upload_excel_datasource(
     file: UploadFile = File(...),
     active: bool = False,
-    user: AdminUser = Depends(get_current_admin),
+    principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    if principal.session.role != "admin" and active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can activate datasources.",
+        )
+
     filename = file.filename or ""
     if Path(filename).suffix.lower() != ".xlsx":
         raise HTTPException(
@@ -2163,19 +2404,23 @@ async def upload_excel_datasource(
         database_url=normalized_config.database_url,
         sql_dialect=normalized_config.sql_dialect,
         active=active,
-        updated_by=user.username,
+        updated_by=principal.session.username or principal.user.username,
     )
     session.add(connector)
     session.flush()
 
+    grant_client_excel_datasource_permission(session, connector.id, principal)
+
     if active:
-        set_active_datasource_connector(session, connector, user.username)
+        set_active_datasource_connector(
+            session, connector, principal.session.username or principal.user.username
+        )
 
     license_service.ensure_active_source_limit(list_datasource_connectors(session))
 
     record_admin_audit(
         session=session,
-        actor=user.username,
+        actor=principal.session.username or principal.user.username,
         action="datasource.excel_upload",
         resource_type="datasource_connector",
         resource_id=connector.connector_key,

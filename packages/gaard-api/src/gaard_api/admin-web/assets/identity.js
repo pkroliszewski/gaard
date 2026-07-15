@@ -16,6 +16,12 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
     return `<button type="button" data-identity-action="${action}" ${enabled ? "" : "disabled"}>${label}</button>`;
   }
 
+  function userDashboards(user) {
+    const dashboards = user.dashboards || [];
+    if (!dashboards.length) return `<h3>Dashboards</h3><p class="identity-empty">No dashboards created.</p>`;
+    return `<h3>Dashboards</h3><table class="identity-provider-table"><thead><tr><th>Name</th><th>Last updated</th></tr></thead><tbody>${dashboards.map((dashboard) => `<tr><td><strong>${escapeHtml(dashboard.name || "Untitled dashboard")}</strong>${dashboard.description ? `<br><span class="identity-dashboard-description">${escapeHtml(dashboard.description)}</span>` : ""}</td><td>${escapeHtml(dashboard.updated_at || "-")}</td></tr>`).join("")}</tbody></table>`;
+  }
+
   function renderPane(user) {
     const editable = Boolean(user.editable_name || user.editable_password);
     return `<aside class="identity-pane" style="width:${paneWidth}px">
@@ -24,6 +30,7 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
       <div class="identity-pane-content">
         <dl class="identity-basics"><dt>Name</dt><dd>${escapeHtml(user.name || user.username)}</dd><dt>Username</dt><dd>${escapeHtml(user.username)}${user.overshadowed ? ` <span class="identity-warning" title="Overshadowed by ${escapeHtml(user.overshadowed_by?.username || "another user")} from ${escapeHtml(user.overshadowed_by?.provider || "another provider")}">⚠️</span>` : ""}</dd></dl>
         <div class="identity-actions">${actionButton("username", "Change username", editable)}${actionButton("password", "Change password", Boolean(user.editable_password))}</div>
+        ${userDashboards(user)}
         ${providerSpecific(user)}
       </div>
     </aside>`;
@@ -59,8 +66,14 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
     pageResizeObserver.observe(page);
   }
 
-  async function load(refresh = false) {
-    try { state.identities = (await api(`/api/v1/admin/identities${refresh ? "?refresh=true" : ""}`)).items || []; if (selected) selected = state.identities.find((item) => item.id === selected.id) || null; loaded = true; render(); } catch (error) { setMessage("error", error.message); }
+  async function load(refresh = false, refreshAfterLoad = false) {
+    try {
+      state.identities = (await api(`/api/v1/admin/identities${refresh ? "?refresh=true" : ""}`)).items || [];
+      if (selected) selected = state.identities.find((item) => item.id === selected.id) || null;
+      loaded = true;
+      render();
+      if (refreshAfterLoad) void load(true);
+    } catch (error) { setMessage("error", error.message); }
   }
 
   function attachResize() {
@@ -85,7 +98,11 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
     document.querySelector("#identity-close")?.addEventListener("click", () => { selected = null; render(); });
     document.querySelectorAll("[data-identity-action]").forEach((button) => button.addEventListener("click", () => { editAction = button.dataset.identityAction; render(); }));
     attachResize(); attachModal();
-    if (!loaded || refreshOnAttach) { refreshOnAttach = false; void load(true); }
+    if (!loaded || refreshOnAttach) {
+      const loadFromCacheFirst = (state.identities || []).length === 0;
+      refreshOnAttach = false;
+      void load(!loadFromCacheFirst, loadFromCacheFirst);
+    }
   }
   function activate() { refreshOnAttach = true; }
   return { render: renderIdentity, attach, activate };

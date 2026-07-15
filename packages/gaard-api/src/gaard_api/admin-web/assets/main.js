@@ -46,6 +46,8 @@ var state = {
   success: "",
   overview: null,
   overviewWidgetConfigs: [],
+  overviewWidgetTags: [],
+  selectedOverviewWidgetTag: "",
   overviewWidgetDatasources: [],
   selectedOverviewWidgetKey: "",
   overviewEditorWidgetKey: null,
@@ -83,12 +85,10 @@ var state = {
   datasourceSchemaSelectedObjectName: "",
   datasourceSchemaShowEnabledOnly: false,
   datasourceSchemaDraftTables: null,
-  datasourcePermissions: null,
-  datasourcePermissionUsers: [],
-  datasourcePermissionSearch: "",
-  datasourcePermissionsTab: "config",
+  datasourceDetailTab: "config",
   datasourceSchemaContentTab: "details",
   datasourceSchemaEditorTab: "tables",
+  datasourceExtensions: [],
   extensionSections: [],
   extensionsLoaded: false,
   license: null,
@@ -728,6 +728,9 @@ function allowedRequestsForExtension(extensionId) {
       "GET /api/v1/extensions/siem-forwarder/siem/config",
       "PUT /api/v1/extensions/siem-forwarder/siem/config",
       "POST /api/v1/extensions/siem-forwarder/siem/test"
+    ]),
+    "identity-privileges": new Set([
+      "GET /api/v1/extensions/identity-privileges/license-status"
     ])
   };
   return allowedRequestsByExtension[extensionId] || new Set();
@@ -1278,15 +1281,25 @@ function renderOutputClassificationOptions() {
 function renderWidgets() {
   const selectedWidget = getSelectedOverviewWidgetConfig();
   const creating = state.selectedOverviewWidgetKey === "__new__";
+  const visibleWidgets = state.selectedOverviewWidgetTag
+    ? state.overviewWidgetConfigs.filter((widget) => (widget.tags || []).includes(state.selectedOverviewWidgetTag))
+    : state.overviewWidgetConfigs;
   return `
-    <div class="split widgets-editor">
+    <div class="split3 widgets-editor">
+      <section class="panel widget-tags-panel">
+        <div class="panel-header"><h2>Tags</h2></div>
+        <div class="panel-body list widget-tag-list">
+          <button type="button" class="${state.selectedOverviewWidgetTag ? "" : "active"}" data-overview-widget-tag="">All tags <span>${state.overviewWidgetConfigs.length}</span></button>
+          ${state.overviewWidgetTags.map((tag) => `<button type="button" class="${state.selectedOverviewWidgetTag === tag ? "active" : ""}" data-overview-widget-tag="${escapeHtml(tag)}">${escapeHtml(tag)} <span>${state.overviewWidgetConfigs.filter((widget) => (widget.tags || []).includes(tag)).length}</span></button>`).join("")}
+        </div>
+      </section>
       <section class="panel">
         <div class="panel-header">
           <h2>Widgets</h2>
           <button type="button" id="new-overview-widget">New</button>
         </div>
         <div class="panel-body list widget-config-list">
-          ${state.overviewWidgetConfigs.length ? state.overviewWidgetConfigs.map((widget) => renderWidgetConfigListItem(widget, selectedWidget?.widget_key === widget.widget_key && !creating)).join("") : `<p class="muted">No widgets defined.</p>`}
+          ${visibleWidgets.length ? visibleWidgets.map((widget) => renderWidgetConfigListItem(widget, selectedWidget?.widget_key === widget.widget_key && !creating)).join("") : `<p class="muted">No widgets match this tag.</p>`}
         </div>
       </section>
       <section class="panel">
@@ -1305,7 +1318,7 @@ function renderWidgetConfigListItem(widget, active) {
       <input type="checkbox" data-overview-widget-active="${escapeHtml(widget.widget_key)}" aria-label="Enable ${escapeHtml(widget.label)}" ${widget.active ? "checked" : ""} />
       <button class="widget-config-select" type="button" data-overview-widget-select="${escapeHtml(widget.widget_key)}">
         <strong>${escapeHtml(widget.label)}</strong>
-        <span>${escapeHtml(widget.widget_key)} \xB7 ${escapeHtml(widget.widget_type)} \xB7 ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))}</span>
+        <span>${escapeHtml(widget.widget_key)} \xB7 ${escapeHtml(widget.widget_type)} \xB7 ${escapeHtml(formatOverviewWidgetResultMode(widget.result_mode))}${widget.tags?.length ? ` \xB7 ${escapeHtml(widget.tags.join(", "))}` : ""}</span>
       </button>
       <button class="icon-button danger widget-config-delete" type="button" data-overview-widget-delete="${escapeHtml(widget.widget_key)}" aria-label="Delete ${escapeHtml(widget.label)}" title="Delete widget">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1355,6 +1368,7 @@ function renderOverviewWidgetSettingsForm(widget) {
         <label>Datasource<select name="datasource_key">${renderOverviewDatasourceOptions(widget?.datasource_key || "metadata-db")}</select></label>
       </div>
       <label>Result mode<select name="result_mode">${renderOverviewWidgetResultModeOptions(resultMode)}</select></label>
+      <label>Tags<input name="tags" value="${escapeHtml((widget?.tags || ["public"]).join(", "))}" placeholder="public, finance" /><span class="muted">Comma-separated tags</span></label>
       <label class="inline-check"><input name="active" type="checkbox" ${widget?.active || creating ? "checked" : ""} /> Enabled</label>
       <label>Question<textarea name="question">${escapeHtml(widget?.question || "")}</textarea></label>
       <label>Generated SQL<textarea class="textarea-small" readonly>${escapeHtml(widget?.sql || "")}</textarea></label>
@@ -1399,7 +1413,7 @@ function renderDatasources() {
       </section>
       <section class="panel">
         <div class="panel-header"><h2>${selected ? escapeHtml(selected.name) : "New datasource"}</h2></div>
-        <div class="panel-body datasource-detail-grid">${renderDatasourceForm(selected, selected ? renderDatasourcePermissions(selected) : "")}</div>
+        <div class="panel-body datasource-detail-grid">${renderDatasourceForm(selected)}</div>
       </section>
     </div>
     ${selected ? renderDatasourceSchema() : ""}`;
@@ -1408,7 +1422,7 @@ function getSelectedDatasource() {
   if (state.selectedDatasourceId === "new") return null;
   return state.datasources.find((item) => item.id === state.selectedDatasourceId) || state.datasources[0] || null;
 }
-function renderDatasourceForm(connector, permissions = "") {
+function renderDatasourceForm(connector) {
   const systemManaged = connector?.system_managed === true;
   const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
   const selectedType = getDatasourceType(selectedTypeKey);
@@ -1417,25 +1431,27 @@ function renderDatasourceForm(connector, permissions = "") {
   const disabled = systemManaged || unavailableType || !selectedType ? "disabled" : "";
   const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
   const connectionValues = datasourceConnectionConfigDefaults(selectedType, connector);
+  const extensionPanels = connector ? getDatasourceExtensionPanels("detail", { datasource: connector }) : [];
+  const activeTab = getDatasourceExtensionTab("detail", extensionPanels);
   return `
-    <form id="datasource-form" class="form-grid datasource-form-with-permissions">
-      ${connector ? `<div class="datasource-mobile-tabs"><button type="button" data-datasource-permissions-tab="config" class="${state.datasourcePermissionsTab === "config" ? "active" : ""}">Configuration</button><button type="button" data-datasource-permissions-tab="permissions" class="${state.datasourcePermissionsTab === "permissions" ? "active" : ""}">Permissions</button></div>` : ""}
-      <div class="datasource-form-fields ${state.datasourcePermissionsTab === "config" ? "mobile-active" : ""}">
-      <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
-      ${systemManaged ? `<div class="badge">System managed</div>` : ""}
-      <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
-      <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
-      <div class="subgrid">
-        <label>Connector type<select id="datasource-type" name="database_type" ${disabled}>${renderDatasourceTypeOptions(selectedTypeKey)}</select></label>
-        <label>SQL dialect<input id="datasource-sql-dialect" readonly ${disabled} value="${escapeHtml(selectedSqlDialect)}" /></label>
+    <form id="datasource-form" class="form-grid datasource-form-with-extensions">
+      ${extensionPanels.length ? `<div class="datasource-extension-tabs"><button type="button" data-datasource-detail-tab="config" class="${activeTab === "config" ? "active" : ""}">Configuration</button>${extensionPanels.map((panel) => `<button type="button" data-datasource-detail-tab="${escapeHtml(panel.id)}" class="${activeTab === panel.id ? "active" : ""}">${escapeHtml(panel.label)}</button>`).join("")}</div>` : ""}
+      <div class="datasource-form-fields ${activeTab === "config" ? "mobile-active" : ""}">
+          <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
+          ${systemManaged ? `<div class="badge">System managed</div>` : ""}
+          <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
+          <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
+          <div class="subgrid">
+            <label>Connector type<select id="datasource-type" name="database_type" ${disabled}>${renderDatasourceTypeOptions(selectedTypeKey)}</select></label>
+            <label>SQL dialect<input id="datasource-sql-dialect" readonly ${disabled} value="${escapeHtml(selectedSqlDialect)}" /></label>
+          </div>
+          <p id="datasource-type-description" class="muted">${escapeHtml(connectorDescription)}</p>
+          <div id="datasource-connection-fields" class="subgrid">
+            ${renderDatasourceConnectionFields(selectedType, connectionValues, disabled)}
+          </div>
+          <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
       </div>
-      <p id="datasource-type-description" class="muted">${escapeHtml(connectorDescription)}</p>
-      <div id="datasource-connection-fields" class="subgrid">
-        ${renderDatasourceConnectionFields(selectedType, connectionValues, disabled)}
-      </div>
-      <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
-      </div>
-      <div class="datasource-form-permissions ${state.datasourcePermissionsTab === "permissions" ? "mobile-active" : ""}">${permissions}</div>
+      ${extensionPanels.length ? `<div class="datasource-extension-detail-panels">${extensionPanels.map((panel) => `<section class="datasource-extension-panel ${activeTab === panel.id ? "mobile-active" : ""}">${panel.content}</section>`).join("")}</div>` : ""}
       <div class="button-row datasource-form-actions">
         <button type="button" id="test-datasource" ${disabled}>Test</button>
         <button type="button" id="introspect-datasource" ${connector ? "" : "disabled"}>Schema introspection</button>
@@ -1567,6 +1583,8 @@ function renderDatasourceSchema() {
   const visibleTables = state.datasourceSchemaShowEnabledOnly ? displayTables.filter((table) => draftTables[table.name]?.selected !== false) : displayTables;
   const selectedTable = schema ? getSelectedDatasourceSchemaObject(displayTables, visibleTables) : null;
   const selectedSettings = selectedTable ? draftTables[selectedTable.name] || {} : {};
+  const extensionPanels = selectedTable ? getDatasourceExtensionPanels("schema", { datasource: getSelectedDatasource(), table: selectedTable }) : [];
+  const activeContentTab = getDatasourceExtensionTab("schema", extensionPanels);
   return `
     <section class="panel">
       <div class="panel-header"><h2>Schema introspection</h2><span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span></div>
@@ -1583,28 +1601,39 @@ function renderDatasourceSchema() {
               </div>
             </section>
             <div class="schema-object-content ${state.datasourceSchemaEditorTab === "details" ? "mobile-active" : ""}">
-              <div class="schema-object-content-tabs"><button type="button" data-datasource-schema-content-tab="details" class="${state.datasourceSchemaContentTab === "details" ? "active" : ""}">Table settings</button><button type="button" data-datasource-schema-content-tab="permissions" class="${state.datasourceSchemaContentTab === "permissions" ? "active" : ""}">Permissions</button></div>
+              ${extensionPanels.length ? `<div class="datasource-extension-tabs"><button type="button" data-datasource-schema-content-tab="details" class="${activeContentTab === "details" ? "active" : ""}">Table settings</button>${extensionPanels.map((panel) => `<button type="button" data-datasource-schema-content-tab="${escapeHtml(panel.id)}" class="${activeContentTab === panel.id ? "active" : ""}">${escapeHtml(panel.label)}</button>`).join("")}</div>` : ""}
               <div class="schema-object-content2">
-              <section class="schema-object-details ${state.datasourceSchemaContentTab === "details" ? "active" : ""}">
-                ${selectedTable ? renderDatasourceObjectDetails(selectedTable, selectedSettings) : `<p class="muted">Select a table or view to edit its guidance.</p>`}
-              </section>
-              <div class="datasource-schema-permission-pane ${state.datasourceSchemaContentTab === "permissions" ? "active" : ""}">${renderDatasourcePermissions(getSelectedDatasource(), selectedTable)}</div>
+                <section class="schema-object-details ${activeContentTab === "details" ? "mobile-active" : ""}">
+                  ${selectedTable ? renderDatasourceObjectDetails(selectedTable, selectedSettings) : `<p class="muted">Select a table or view to edit its guidance.</p>`}
+                </section>
+                ${extensionPanels.length ? `<div class="datasource-extension-schema-panels">${extensionPanels.map((panel) => `<section class="datasource-extension-panel ${activeContentTab === panel.id ? "mobile-active" : ""}">${panel.content}</section>`).join("")}</div>` : ""}
               </div>
               <div class="form-actions"><button class="primary" type="submit">Save schema settings</button></div>
             </div></form>` : `<p class="muted">Run schema introspection to cache tables, views, keys and relationships.</p>`}
       </div>
     </section>`;
 }
-function renderDatasourcePermissions(connector, table = null) {
-  if (!connector || !state.datasourcePermissions) return "";
-  const query = state.datasourcePermissionSearch.trim().toLowerCase();
-  const users = state.datasourcePermissionUsers.filter((user) => !query || [user.name, user.username, user.provider].some((value) => String(value || "").toLowerCase().includes(query)));
-  const assigned = new Set(table
-    ? (state.datasourcePermissions.table_denials?.[table.name] || [])
-    : (state.datasourcePermissions.datasource_user_ids || []));
-  const title = table ? `Permissions · ${table.name}` : "Datasource permissions";
-  const action = table ? "Disallow" : "Allow";
-  return `<aside class="datasource-permissions"><h3>${escapeHtml(title)}</h3><input id="datasource-permission-search" type="search" placeholder="Search users" value="${escapeHtml(state.datasourcePermissionSearch)}" /><p class="muted">${table ? "Checked users cannot use this table or view." : "Checked users can access this datasource."}</p><div class="permission-user-list">${users.length ? users.map((user) => `<label class="permission-user"><input type="checkbox" data-datasource-permission-user="${escapeHtml(user.id)}" data-datasource-permission-table="${escapeHtml(table?.name || "")}" ${assigned.has(user.id) ? "checked" : ""} /><span><strong>${escapeHtml(user.name || user.username)}</strong><small>${escapeHtml(user.username)} · ${escapeHtml(user.provider)}</small></span><em>${action}</em></label>`).join("") : `<p class="muted">No matching users.</p>`}</div></aside>`;
+function getDatasourceExtensionPanels(slot, arguments_) {
+  const renderer = slot === "detail" ? "renderDetail" : "renderSchema";
+  const label = slot === "detail" ? "detailLabel" : "schemaLabel";
+  return state.datasourceExtensions.flatMap((extension, index) => {
+    const content = extension[renderer]?.(arguments_);
+    if (!content) return [];
+    const extensionId = extension.id || extension.modulePath || `extension-${index}`;
+    return [{
+      id: `${slot}:${extensionId}`,
+      label: extension[label] || extension.label || "Extension",
+      content
+    }];
+  });
+}
+function getDatasourceExtensionTab(slot, panels) {
+  const stateKey = slot === "detail" ? "datasourceDetailTab" : "datasourceSchemaContentTab";
+  const defaultTab = slot === "detail" ? "config" : "details";
+  if (state[stateKey] !== defaultTab && !panels.some((panel) => panel.id === state[stateKey])) {
+    state[stateKey] = defaultTab;
+  }
+  return state[stateKey];
 }
 function getDatasourceSchemaDraftTables(rawTables, tableSettings) {
   if (!state.datasourceSchemaDraftTables) {
@@ -1935,6 +1964,12 @@ function attachSectionHandlers() {
     state.overviewPlacementSlot = null;
     render();
   });
+  document.querySelectorAll("[data-overview-widget-tag]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedOverviewWidgetTag = button.dataset.overviewWidgetTag || "";
+      render();
+    });
+  });
   document.querySelectorAll("[data-overview-widget-select]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedOverviewWidgetKey = button.dataset.overviewWidgetSelect || "";
@@ -2000,11 +2035,16 @@ function attachSectionHandlers() {
   document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
   document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
   document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
-  document.querySelectorAll("[data-datasource-permissions-tab]").forEach((button) => button.addEventListener("click", () => { state.datasourcePermissionsTab = button.dataset.datasourcePermissionsTab; render(); }));
+  document.querySelectorAll("[data-datasource-detail-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.datasourceDetailTab = button.dataset.datasourceDetailTab || "config";
+    render();
+  }));
   document.querySelectorAll("[data-schema-editor-tab]").forEach((button) => button.addEventListener("click", () => { syncDatasourceSchemaDraftFromForm(); state.datasourceSchemaEditorTab = button.dataset.schemaEditorTab; render(); }));
-  document.querySelectorAll("[data-datasource-schema-content-tab]").forEach((button) => button.addEventListener("click", () => { syncDatasourceSchemaDraftFromForm(); state.datasourceSchemaContentTab = button.dataset.datasourceSchemaContentTab; render(); }));
-  document.querySelector("#datasource-permission-search")?.addEventListener("input", (event) => { state.datasourcePermissionSearch = event.currentTarget.value; render(); });
-  document.querySelectorAll("[data-datasource-permission-user]").forEach((input) => input.addEventListener("change", saveDatasourcePermission));
+  document.querySelectorAll("[data-datasource-schema-content-tab]").forEach((button) => button.addEventListener("click", () => {
+    syncDatasourceSchemaDraftFromForm();
+    state.datasourceSchemaContentTab = button.dataset.datasourceSchemaContentTab || "details";
+    render();
+  }));
   document.querySelector("#schema-show-enabled-only")?.addEventListener("change", (event) => {
     syncDatasourceSchemaDraftFromForm();
     state.datasourceSchemaShowEnabledOnly = event.currentTarget.checked;
@@ -2022,6 +2062,7 @@ function attachSectionHandlers() {
       syncDatasourceSchemaDraftFromForm();
       state.datasourceSchemaSelectedObjectName = button.dataset.schemaObject || "";
       state.datasourceSchemaEditorTab = "details";
+      state.datasourceSchemaContentTab = "details";
       render();
     });
   });
@@ -2030,6 +2071,9 @@ function attachSectionHandlers() {
   document.querySelector("#introspect-datasource")?.addEventListener("click", introspectDatasource);
   document.querySelector("#activate-datasource")?.addEventListener("click", activateDatasource);
   document.querySelector("#delete-datasource")?.addEventListener("click", deleteDatasource);
+  for (const extension of state.datasourceExtensions) {
+    extension.attach?.({ datasource: getSelectedDatasource(), document, render });
+  }
   document.querySelectorAll("[data-open-business-logic]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.section = "business-logic";
@@ -2083,6 +2127,7 @@ function attachSectionHandlers() {
   document.querySelectorAll("[data-datasource]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.selectedDatasourceId = Number(button.dataset.datasource);
+      await loadDatasourceExtensions();
       await loadDatasourceSchema();
     });
   });
@@ -2430,7 +2475,8 @@ async function saveOverviewWidgetSettings(event) {
     result_mode: form.get("result_mode") || "data",
     position: creating ? getOverviewWidgetFormPosition(null) : selectedWidget?.position || 100,
     grid_width: creating ? getDefaultOverviewWidgetGridWidth(widgetType) : getOverviewWidgetGridWidth(selectedWidget || { widget_type: widgetType, grid_width: getDefaultOverviewWidgetGridWidth(widgetType) }),
-    active: form.get("active") === "on"
+    active: form.get("active") === "on",
+    tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean)
   };
   try {
     if (mode === "create") {
@@ -2766,6 +2812,7 @@ async function saveDatasource(event) {
       method: id ? "PUT" : "POST",
       body: JSON.stringify(id ? { ...payload, connector_key: void 0 } : payload)
     });
+    await commitDatasourceExtensions(result.item);
     state.selectedDatasourceId = result.item.id;
     setMessage("success", "Datasource saved.");
     await loadDatasources();
@@ -2895,6 +2942,7 @@ async function saveDatasourceSchema(event) {
       method: "PUT",
       body: JSON.stringify({ tables })
     });
+    await commitDatasourceExtensions(selected);
     setMessage("success", "Schema settings saved.");
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
@@ -2954,6 +3002,7 @@ async function loadExtensions(shouldRender = true) {
     if (left.order !== right.order) return left.order - right.order;
     return left.label.localeCompare(right.label);
   });
+  await loadAdminFrontendModules(result.admin_frontend_modules || []);
   state.extensionsLoaded = true;
   if (isExtensionSection(state.section) && !getExtensionSection(state.section)) {
     state.section = "overview";
@@ -2961,6 +3010,27 @@ async function loadExtensions(shouldRender = true) {
   }
   if (shouldRender) {
     render();
+  }
+}
+async function loadAdminFrontendModules(modules) {
+  for (const descriptor of modules) {
+    if (state.datasourceExtensions.some((extension) => extension.modulePath === descriptor.module_path)) continue;
+    try {
+      const module = await import(descriptor.module_path);
+      if (typeof module.default !== "function") continue;
+      const extension = module.default({
+        api,
+        escapeHtml,
+        render,
+        setMessage,
+        registerDatasourceExtension(candidate) {
+          state.datasourceExtensions.push({ ...candidate, modulePath: descriptor.module_path });
+        }
+      });
+      if (extension) state.datasourceExtensions.push({ ...extension, modulePath: descriptor.module_path });
+    } catch (error) {
+      console.error(`Unable to load admin frontend module ${descriptor.extension_id}`, error);
+    }
   }
 }
 async function loadOverview() {
@@ -2976,6 +3046,7 @@ async function loadOverview() {
     state.overview = overview;
     state.overviewWidgetConfigs = widgetConfig.items || [];
     state.overviewWidgetDatasources = widgetConfig.datasources || [];
+    state.overviewWidgetTags = widgetConfig.tags || [];
   } finally {
     state.overviewLoading = false;
     if (state.section === "overview") {
@@ -2987,6 +3058,7 @@ async function loadOverviewWidgetConfigs(shouldRender = true) {
   const payload = await api("/api/v1/admin/overview/widgets");
   state.overviewWidgetConfigs = payload.items || [];
   state.overviewWidgetDatasources = payload.datasources || [];
+  state.overviewWidgetTags = payload.tags || [];
   if (state.selectedOverviewWidgetKey !== "__new__" && !state.overviewWidgetConfigs.some((widget) => widget.widget_key === state.selectedOverviewWidgetKey)) {
     state.selectedOverviewWidgetKey = state.overviewWidgetConfigs[0]?.widget_key || "";
   }
@@ -3039,42 +3111,23 @@ async function loadDatasources() {
   if (!state.selectedDatasourceId || state.selectedDatasourceId === "new") {
     state.selectedDatasourceId = state.datasources[0]?.id || null;
   }
+  await loadDatasourceExtensions();
   render();
   void loadDatasourceSchema();
-  void loadDatasourcePermissions();
 }
-async function loadDatasourcePermissions() {
-  const selected = getSelectedDatasource();
-  if (!selected) { state.datasourcePermissions = null; return; }
-  try {
-    const [permissions, identities] = await Promise.all([
-      api(`/api/v1/extensions/identity-privileges/datasources/${selected.id}/permissions`),
-      api("/api/v1/admin/identities")
-    ]);
-    state.datasourcePermissions = permissions;
-    state.datasourcePermissionUsers = identities.items || [];
-  } catch (_error) {
-    state.datasourcePermissions = null;
-    state.datasourcePermissionUsers = [];
-  }
-  render();
-}
-async function saveDatasourcePermission(event) {
-  const input = event.currentTarget;
+async function loadDatasourceExtensions() {
   const selected = getSelectedDatasource();
   if (!selected) return;
-  const identityId = input.dataset.datasourcePermissionUser;
-  const tableName = input.dataset.datasourcePermissionTable;
-  const url = tableName
-    ? `/api/v1/extensions/identity-privileges/datasources/${selected.id}/tables/${encodeURIComponent(tableName)}/permissions`
-    : `/api/v1/extensions/identity-privileges/datasources/${selected.id}/permissions`;
-  const body = tableName
-    ? { identity_id: identityId, denied: input.checked }
-    : { identity_id: identityId, allowed: input.checked };
-  try {
-    await api(url, { method: "PUT", body: JSON.stringify(body) });
-    await loadDatasourcePermissions();
-  } catch (error) { setMessage("error", error.message); await loadDatasourcePermissions(); }
+  await Promise.all(state.datasourceExtensions.map(async (extension) => {
+    try {
+      await extension.load?.({ datasource: selected });
+    } catch (error) {
+      console.error("Unable to load datasource extension", error);
+    }
+  }));
+}
+async function commitDatasourceExtensions(datasource) {
+  await Promise.all(state.datasourceExtensions.map((extension) => extension.commit?.({ datasource })));
 }
 async function loadDatasourceSchema() {
   const selected = getSelectedDatasource();

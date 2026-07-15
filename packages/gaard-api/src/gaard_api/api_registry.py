@@ -65,6 +65,18 @@ class _AdminPageRegistration:
     path: str
 
 
+@dataclass(frozen=True, slots=True)
+class AdminFrontendModule:
+    """An ES module that augments a built-in admin view.
+
+    Modules are served from an installed, trusted extension's own asset mount;
+    they are not evaluated from strings or embedded in the host page.
+    """
+
+    extension_id: str
+    module_path: str
+
+
 class ApiRegistry:
     """Registry for trusted API/Admin contributions supplied by extensions."""
 
@@ -73,6 +85,7 @@ class ApiRegistry:
         self._admin_sections: dict[str, AdminExtensionSection] = {}
         self._static_assets: list[_StaticAssetsRegistration] = []
         self._admin_pages: list[_AdminPageRegistration] = []
+        self._admin_frontend_modules: list[AdminFrontendModule] = []
         self._initializers: list[Callable[[], None]] = []
         self._dependencies = tuple(dependencies or ())
         self._applied = False
@@ -180,6 +193,20 @@ class ApiRegistry:
             )
         )
 
+    def register_admin_frontend_module(
+        self, *, extension_id: str, module_path: str
+    ) -> None:
+        """Expose a trusted extension ES module to the main admin application."""
+        extension_id = self._validate_extension_id(extension_id)
+        expected_prefix = f"/admin/extensions/{extension_id}/assets/"
+        if not module_path.startswith(expected_prefix) or not module_path.endswith(".js"):
+            raise ValueError(
+                "Admin frontend modules must be JavaScript assets below the extension namespace."
+            )
+        self._admin_frontend_modules.append(
+            AdminFrontendModule(extension_id=extension_id, module_path=module_path)
+        )
+
     def register_initializer(self, initializer: Callable[[], None]) -> None:
         self._initializers.append(initializer)
 
@@ -188,6 +215,9 @@ class ApiRegistry:
             self._admin_sections.values(),
             key=lambda section: (section.order, section.label.casefold(), section.section_id),
         )
+
+    def list_admin_frontend_modules(self) -> list[AdminFrontendModule]:
+        return list(self._admin_frontend_modules)
 
     def apply_to(self, app: FastAPI) -> None:
         if self._applied:

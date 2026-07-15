@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     Enum as SAEnum,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -182,6 +183,22 @@ class DashboardUserState(Base):
     )
 
 
+class UserDatasourceSelection(Base):
+    """Client datasource selections, scoped to one authenticated user."""
+
+    __tablename__ = "user_datasource_selections"
+
+    owner_user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    owner_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    datasource_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class UserSavedMetric(Base):
     __tablename__ = "user_saved_metrics"
     __table_args__ = (
@@ -313,6 +330,26 @@ class OverviewWidget(Base):
         onupdate=utc_now,
     )
     updated_by: Mapped[str] = mapped_column(String(255), default="system")
+
+
+class WidgetTag(Base):
+    """Permanent catalogue of every tag that has been used on a widget."""
+
+    __tablename__ = "widget_tags"
+
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class OverviewWidgetTag(Base):
+    __tablename__ = "overview_widget_tags"
+
+    widget_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("overview_widgets.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_name: Mapped[str] = mapped_column(
+        String(255), ForeignKey("widget_tags.name"), primary_key=True
+    )
 
 
 class BusinessLogicSuggestion(Base):

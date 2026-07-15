@@ -108,7 +108,7 @@ def serialize_saved_metric(
     metric: OverviewWidget,
     include_result: bool = True,
 ) -> dict[str, Any]:
-    payload = serialize_overview_widget_config(metric)
+    payload = serialize_overview_widget_config(session, metric)
     if include_result:
         payload["result"] = execute_overview_widget(session, metric)
     return payload

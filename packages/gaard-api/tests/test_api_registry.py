@@ -72,6 +72,21 @@ def test_api_registry_rejects_admin_paths_outside_extension_namespace() -> None:
         )
 
 
+def test_api_registry_accepts_extension_frontend_modules_only_from_its_assets() -> None:
+    registry = ApiRegistry()
+
+    registry.register_admin_frontend_module(
+        extension_id="acme-tools",
+        module_path="/admin/extensions/acme-tools/assets/admin.js",
+    )
+
+    assert registry.list_admin_frontend_modules()[0].module_path.endswith("/admin.js")
+    with pytest.raises(ValueError, match="frontend modules"):
+        registry.register_admin_frontend_module(
+            extension_id="acme-tools", module_path="/admin/assets/admin.js"
+        )
+
+
 def test_api_registry_applies_inherited_dependencies_to_extension_routes() -> None:
     def require_token(authorization: str | None = Header(default=None)) -> None:
         if authorization != "Bearer test-token":

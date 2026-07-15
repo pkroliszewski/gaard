@@ -1302,7 +1302,7 @@ def analysis_stream(
     request: QueryRequest,
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> StreamingResponse:
-    effective_request, datasource_context = effective_query_request(request)
+    effective_request, datasource_context = effective_query_request(request, _user)
     conversation, context_classification, analysis_request = resolve_request_conversation(
         effective_request,
         conversation_principal(_user),

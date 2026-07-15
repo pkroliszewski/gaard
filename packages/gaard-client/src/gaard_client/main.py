@@ -41,6 +41,7 @@ class ClientQueryRequest(BaseModel):
     mode: str = "sql"
     conversation_id: str | None = None
     context_mode: str = "auto"
+    datasource_ids: list[str] = Field(default_factory=list)
 
 
 class ClientLoginRequest(BaseModel):
@@ -73,6 +74,11 @@ class ClientWidgetTitleSuggestionRequest(BaseModel):
 
 class ClientDatasourceStateRequest(BaseModel):
     active: bool
+    backend_url: str | None = None
+
+
+class ClientDatasourceSelectionRequest(BaseModel):
+    datasource_ids: list[str] = Field(default_factory=list)
     backend_url: str | None = None
 
 
@@ -160,6 +166,8 @@ def query_payload(request: ClientQueryRequest) -> dict[str, Any]:
         payload["conversation_id"] = request.conversation_id
     if request.context_mode != "auto":
         payload["context_mode"] = request.context_mode
+    if request.datasource_ids:
+        payload["datasource_ids"] = request.datasource_ids
     return payload
 
 
@@ -172,6 +180,8 @@ def analysis_payload(request: ClientQueryRequest) -> dict[str, Any]:
         payload["conversation_id"] = request.conversation_id
     if request.context_mode != "auto":
         payload["context_mode"] = request.context_mode
+    if request.datasource_ids:
+        payload["datasource_ids"] = request.datasource_ids
     return payload
 
 
@@ -331,7 +341,7 @@ async def list_datasources(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
-    datasources_url = f"{backend_url}/api/v1/admin/datasources"
+    datasources_url = f"{backend_url}/api/v1/admin/datasources?available_only=true"
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -344,6 +354,36 @@ async def list_datasources(
             status_code=502,
             detail=f"Backend request failed: {exc}",
         ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.api_route("/api/datasources/selection", methods=["PUT", "POST"])
+async def update_datasource_selection(
+    request: ClientDatasourceSelectionRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    selection_url = f"{backend_url}/api/v1/admin/datasources/selection"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                selection_url,
+                **backend_request_kwargs(
+                    authorization, {"datasource_ids": request.datasource_ids}
+                ),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Backend request failed: {exc}") from exc
 
     if response.status_code >= 400:
         raise HTTPException(

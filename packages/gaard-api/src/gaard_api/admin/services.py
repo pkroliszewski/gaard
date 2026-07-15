@@ -2367,6 +2367,7 @@ def get_datasource_schema_contexts_safe(
                 for datasource_id in datasource_ids
                 if (connector := get_datasource_connector_by_key(session, datasource_id))
                 is not None
+                and connector.active
                 and not is_system_datasource_connector(connector)
             ]
         else:

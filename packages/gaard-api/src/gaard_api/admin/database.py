@@ -17,7 +17,9 @@ from gaard_api.admin.models import (
     DataQueryAuditType,
     DatasourceConnector,
     OverviewWidget,
+    OverviewWidgetTag,
     PromptTemplate,
+    WidgetTag,
 )
 from gaard_api.admin.security import hash_password
 from gaard_api.core.settings import settings
@@ -89,6 +91,7 @@ def init_metadata_store() -> None:
             seed_prompts(session)
             seed_datasource_connectors(session)
             seed_overview_widgets(session)
+            backfill_overview_widget_tags(session)
             backfill_data_query_audit_types(session)
             session.commit()
 
@@ -547,6 +550,17 @@ def ensure_overview_widget_schema(engine: Engine) -> None:
                     "ADD COLUMN result_mode VARCHAR(50) DEFAULT 'data'"
                 )
             )
+
+
+def backfill_overview_widget_tags(session: Session) -> None:
+    """Give legacy and freshly seeded widgets their initial public tag."""
+    if session.scalar(select(WidgetTag).where(WidgetTag.name == "public")) is None:
+        session.add(WidgetTag(name="public"))
+        session.flush()
+    widget_ids_with_tags = set(session.scalars(select(OverviewWidgetTag.widget_id)))
+    for widget_id in session.scalars(select(OverviewWidget.id)):
+        if widget_id not in widget_ids_with_tags:
+            session.add(OverviewWidgetTag(widget_id=widget_id, tag_name="public"))
 
 
 def reset_metadata_store_for_tests() -> None:

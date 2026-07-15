@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar, cast
@@ -36,11 +38,22 @@ class QueryExecutor(Protocol):
 
 
 class QueryBehaviorHook(Protocol):
-    def filter_datasource_contexts(
+    def is_enabled(self) -> bool:
+        return True
+
+    def filter_datasource_keys(
         self,
-        principal: Any | None,
-        datasource_contexts: DatasourceContexts,
-    ) -> DatasourceContexts | None:
+        identity_id: str | None,
+        datasource_keys: list[str],
+    ) -> list[str] | None:
+        return None
+
+    def filter_table_names(
+        self,
+        identity_id: str | None,
+        datasource_key: str,
+        table_names: list[str],
+    ) -> list[str] | None:
         return None
 
     def resolve_effective_query_context(
@@ -110,15 +123,51 @@ class QueryHookRegistry:
         principal: Any | None,
         datasource_contexts: DatasourceContexts,
     ) -> DatasourceContexts:
+        identity_id = principal_identity_id(principal)
         contexts = datasource_contexts
         for hook in self._hooks:
-            method = getattr(hook, "filter_datasource_contexts", None)
+            if not self._is_enabled(hook):
+                continue
+            method = getattr(hook, "filter_datasource_keys", None)
             if method is None:
                 continue
-            result = method(principal, contexts)
+            keys = [connector.connector_key for connector, _cache in contexts]
+            result = method(identity_id, keys)
             if result is not None:
-                contexts = result
-        return contexts
+                allowed = set(result)
+                contexts = [
+                    context for context in contexts if context[0].connector_key in allowed
+                ]
+
+        filtered: DatasourceContexts = []
+        for connector, cache in contexts:
+            allowed_tables = selected_table_names(cache)
+            for hook in self._hooks:
+                if not self._is_enabled(hook):
+                    continue
+                method = getattr(hook, "filter_table_names", None)
+                if method is None:
+                    continue
+                result = method(identity_id, connector.connector_key, allowed_tables)
+                if result is not None:
+                    allowed_tables = result
+
+            selected_tables = set(selected_table_names(cache))
+            allowed_set = set(allowed_tables)
+            denied_tables = selected_tables - allowed_set
+            if not denied_tables:
+                filtered.append((connector, cache))
+                continue
+            safe_cache = copy.copy(cache)
+            raw_schema = json.loads(cache.schema_json)
+            raw_schema["tables"] = [
+                table for table in raw_schema.get("tables", []) if table.get("name") in allowed_set
+            ]
+            safe_cache.schema_json = json.dumps(raw_schema)
+            safe_cache.formatted_schema = ""
+            safe_cache.access_denied_table_names = denied_tables
+            filtered.append((connector, safe_cache))
+        return filtered
 
     def format_datasource_schemas(self, datasource_contexts: DatasourceContexts) -> str:
         return self._first_result(
@@ -195,6 +244,8 @@ class QueryHookRegistry:
         default: Callable[[], HookResultT],
     ) -> HookResultT:
         for hook in self._hooks:
+            if not self._is_enabled(hook):
+                continue
             method = getattr(hook, method_name, None)
             if method is None:
                 continue
@@ -203,6 +254,11 @@ class QueryHookRegistry:
                 return cast(HookResultT, result)
 
         return default()
+
+    @staticmethod
+    def _is_enabled(hook: QueryBehaviorHook) -> bool:
+        method = getattr(hook, "is_enabled", None)
+        return method is None or bool(method())
 
 
 def normalize_datasource_contexts(
@@ -215,6 +271,18 @@ def normalize_datasource_contexts(
         return [datasource_context]
 
     return list(datasource_context)
+
+
+def principal_identity_id(principal: Any | None) -> str | None:
+    if principal is None:
+        return None
+    return f"{principal.session.auth_provider}:{principal.session.username}"
+
+
+def selected_table_names(cache: DatasourceSchemaCache) -> list[str]:
+    from gaard_api.admin.services import selected_schema_from_cache
+
+    return [table.name for table in selected_schema_from_cache(cache).tables]
 
 
 def default_effective_query_context(request: QueryRequest) -> EffectiveQueryContext:

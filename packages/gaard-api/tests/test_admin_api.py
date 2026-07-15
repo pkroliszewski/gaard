@@ -26,6 +26,7 @@ from gaard_api.admin.database import (
 )
 from gaard_api.admin.models import (
     AdminSetting,
+    AdminSession,
     AdminUser,
     BusinessKnowledgeClaim,
     BusinessLogicSuggestion,
@@ -40,7 +41,7 @@ from gaard_api.admin.models import (
     PromptTemplate,
     UserSavedMetric,
 )
-from gaard_api.admin.security import hash_password
+from gaard_api.admin.security import hash_password, hash_token
 from gaard_api.admin.services import (
     get_active_business_logic_prompt_safe,
     get_governance_policy_for_schema,
@@ -170,6 +171,29 @@ def login_as(client: TestClient, username: str, password: str) -> dict[str, str]
     return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
+def user_headers(username: str = "client-user") -> dict[str, str]:
+    token = f"{username}-token"
+    with create_session() as session:
+        user = AdminUser(
+            username=username,
+            password_hash=hash_password("not-used"),
+            must_change_password=False,
+        )
+        session.add(user)
+        session.flush()
+        session.add(
+            AdminSession(
+                token_hash=hash_token(token),
+                user_id=user.id,
+                username=username,
+                role="user",
+                auth_provider="local",
+            )
+        )
+        session.commit()
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_admin_lists_datasource_types_from_connector_registry(admin_client: TestClient) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -239,6 +263,7 @@ def test_admin_lists_extensions_inventory(admin_client: TestClient) -> None:
     payload = response.json()
     assert "items" in payload
     assert "admin_sections" in payload
+    assert "admin_frontend_modules" in payload
     assert payload["viewer"] == "admin"
 
 
@@ -247,6 +272,10 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
 
     assert response.status_code == 200
     assert 'api("/api/v1/admin/datasource-types")' in response.text
+    assert "loadAdminFrontendModules" in response.text
+    assert "registerDatasourceExtension" in response.text
+    assert "await loadDatasourceExtensions();" in response.text
+    assert "await commitDatasourceExtensions(result.item);" in response.text
     assert 'api("/api/v1/admin/extensions")' in response.text
     assert "data-menu-group" in response.text
     assert "Dashboards" in response.text
@@ -602,6 +631,17 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
         admin_dashboard["id"],
         admin_second_dashboard["id"],
         analyst_dashboard["id"],
+        MEDICAL_POC_DASHBOARD_ID,
+    }
+
+    identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
+    assert identities.status_code == 200
+    admin_identity = next(
+        item for item in identities.json()["items"] if item["username"] == "admin"
+    )
+    assert {dashboard["id"] for dashboard in admin_identity["dashboards"]} == {
+        admin_dashboard["id"],
+        admin_second_dashboard["id"],
         MEDICAL_POC_DASHBOARD_ID,
     }
 
@@ -1834,6 +1874,62 @@ def test_default_datasource_can_be_tested_and_introspected(admin_client: TestCli
     }
 
 
+def test_user_can_list_datasources_but_cannot_create_them(admin_client: TestClient) -> None:
+    headers = user_headers()
+
+    list_response = admin_client.get("/api/v1/admin/datasources", headers=headers)
+
+    assert list_response.status_code == 200
+    assert list_response.json()["viewer"] == "client-user"
+    assert list_response.json()["items"]
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers=headers,
+        json={
+            "connector_key": "not-allowed",
+            "name": "Not allowed",
+            "database_type": "sqlite",
+            "database_url": "sqlite:///not-allowed.db",
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 403
+    assert create_response.json()["detail"] == "Admin role is required."
+
+
+def test_client_datasource_selection_is_per_user_and_requires_available_sources(
+    admin_client: TestClient,
+) -> None:
+    first_user_headers = user_headers("first-user")
+    second_user_headers = user_headers("second-user")
+
+    first_response = admin_client.put(
+        "/api/v1/admin/datasources/selection",
+        headers=first_user_headers,
+        json={"datasource_ids": ["default"]},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["selected_datasource_ids"] == ["default"]
+
+    first_list_response = admin_client.get(
+        "/api/v1/admin/datasources?available_only=true", headers=first_user_headers
+    )
+    second_list_response = admin_client.get(
+        "/api/v1/admin/datasources?available_only=true", headers=second_user_headers
+    )
+    assert first_list_response.json()["selected_datasource_ids"] == ["default"]
+    assert second_list_response.json()["selected_datasource_ids"] == []
+
+    unavailable_response = admin_client.put(
+        "/api/v1/admin/datasources/selection",
+        headers=first_user_headers,
+        json={"datasource_ids": ["metadata-db"]},
+    )
+    assert unavailable_response.status_code == 403
+
+
 def test_datasource_connector_accepts_postgres_sql_dialect(
     admin_client: TestClient,
 ) -> None:
@@ -1915,6 +2011,44 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     assert response.status_code == 400
     assert "duckdb-excel datasource connector" in response.json()["detail"]
     assert not upload_dir.exists()
+
+
+def test_user_may_upload_excel_but_cannot_activate_it(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(admin_api, "get_connector_registry", create_builtin_connector_registry)
+    headers = user_headers()
+
+    upload_response = admin_client.post(
+        "/api/v1/admin/datasources/excel-upload",
+        headers=headers,
+        files={
+            "file": (
+                "cases.xlsx",
+                io.BytesIO(b"not a real workbook"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert upload_response.status_code == 400
+    assert "duckdb-excel datasource connector" in upload_response.json()["detail"]
+
+    activate_response = admin_client.post(
+        "/api/v1/admin/datasources/excel-upload?active=true",
+        headers=headers,
+        files={
+            "file": (
+                "cases.xlsx",
+                io.BytesIO(b"not a real workbook"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert activate_response.status_code == 403
+    assert activate_response.json()["detail"] == "Only administrators can activate datasources."
 
 
 def test_public_datasource_activation_keeps_single_active_datasource(
