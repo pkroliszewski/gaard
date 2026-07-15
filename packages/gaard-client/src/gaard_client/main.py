@@ -157,7 +157,7 @@ def backend_request_kwargs(
 
 
 def query_payload(request: ClientQueryRequest) -> dict[str, Any]:
-    payload = {
+    payload: dict[str, Any] = {
         "question": request.question,
         "user_id": "client",
         "mode": request.mode,
@@ -172,7 +172,7 @@ def query_payload(request: ClientQueryRequest) -> dict[str, Any]:
 
 
 def analysis_payload(request: ClientQueryRequest) -> dict[str, Any]:
-    payload = {
+    payload: dict[str, Any] = {
         "question": request.question,
         "user_id": "client",
     }

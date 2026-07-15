@@ -10,7 +10,7 @@ from gaard_api.admin.models import (
     DashboardWidget,
     DatasourceConnector,
     OverviewWidget,
-    UserSavedMetric,
+    OverviewWidgetTag,
 )
 from gaard_api.core.settings import settings
 from gaard_api.example_database import (
@@ -154,9 +154,13 @@ def test_install_medical_poc_example_database_registers_active_datasource(
         metrics = session.scalars(
             select(OverviewWidget).where(OverviewWidget.widget_key.like("medical_%"))
         ).all()
-        saved_metrics = session.scalars(
-            select(UserSavedMetric).where(UserSavedMetric.owner_user_id == "1")
-        ).all()
+        saved_metric_keys = set(
+            session.scalars(
+                select(OverviewWidget.widget_key)
+                .join(OverviewWidgetTag, OverviewWidgetTag.widget_id == OverviewWidget.id)
+                .where(OverviewWidgetTag.tag_name == "admin")
+            )
+        )
         dashboard_widgets = session.scalars(select(DashboardWidget)).all()
         dashboard_state = session.get(DashboardUserState, "1")
 
@@ -186,7 +190,7 @@ def test_install_medical_poc_example_database_registers_active_datasource(
         "Total Doctors",
         "Total Patients Served This Year",
     }
-    assert {metric.widget_key for metric in saved_metrics} >= {
+    assert saved_metric_keys >= {
         metric.widget_key for metric in metrics
     }
     assert {

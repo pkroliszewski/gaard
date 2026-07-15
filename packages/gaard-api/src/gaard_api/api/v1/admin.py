@@ -26,7 +26,7 @@ from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import Boolean, Integer, String, column, delete, insert, select, table
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import sqlglot
@@ -123,6 +123,16 @@ from gaard_api.package_updates import package_update_jobs, package_update_servic
 from gaard_api.query_hooks import sqlglot_read_dialect
 
 router = APIRouter()
+
+# This table is owned and created by the optional identity-privileges extension.
+# A lightweight table expression lets the API query it when that extension is active
+# without importing the extension package or registering a duplicate ORM model.
+IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS = table(
+    "identity_privilege_datasource_permissions",
+    column("connector_id", Integer),
+    column("identity_id", String(512)),
+    column("allowed", Boolean),
+)
 
 
 class LoginRequest(BaseModel):
@@ -239,6 +249,7 @@ class OverviewWidgetUpdateRequest(BaseModel):
     grid_height: int | None = Field(default=None, ge=2, le=24)
     active: bool | None = None
     tags: list[str] | None = None
+    assigned_usernames: list[str] | None = None
 
 
 class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
@@ -390,13 +401,12 @@ def filter_datasources_for_identity_privileges(
     if not identity_privileges_are_active():
         return connectors
 
-    from gaard_identity_privileges.models import DatasourceIdentityPermission
-
     allowed_ids = set(
         session.scalars(
-            select(DatasourceIdentityPermission.connector_id).where(
-                DatasourceIdentityPermission.identity_id == principal_identity_id(principal),
-                DatasourceIdentityPermission.allowed.is_(True),
+            select(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.connector_id).where(
+                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id
+                == principal_identity_id(principal),
+                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.allowed.is_(True),
             )
         )
     )
@@ -412,10 +422,8 @@ def grant_client_excel_datasource_permission(
     if not identity_privileges_are_active():
         return
 
-    from gaard_identity_privileges.models import DatasourceIdentityPermission
-
-    session.add(
-        DatasourceIdentityPermission(
+    session.execute(
+        insert(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS).values(
             connector_id=connector_id,
             identity_id=principal_identity_id(principal),
             allowed=True,
@@ -598,6 +606,7 @@ def serialize_overview_widget_config(session: Session, widget: OverviewWidget) -
         "active": widget.active,
         "updated_by": widget.updated_by,
         "updated_at": serialize_datetime(widget.updated_at),
+        "assigned_usernames": get_overview_widget_user_assignments(session, widget),
         "tags": get_overview_widget_tags(session, widget),
     }
 
@@ -614,6 +623,65 @@ def get_overview_widget_tags(session: Session, widget: OverviewWidget) -> list[s
             .order_by(OverviewWidgetTag.tag_name)
         )
     )
+
+
+def get_overview_widget_user_assignments(
+    session: Session,
+    widget: OverviewWidget,
+) -> list[str]:
+    return list(session.scalars(
+        select(UserSavedMetric.owner_username)
+        .where(UserSavedMetric.widget_key == widget.widget_key)
+        .order_by(UserSavedMetric.owner_username)
+    ))
+
+
+def sync_overview_widget_user_assignments(
+    session: Session,
+    widget: OverviewWidget,
+    usernames: list[str],
+) -> list[str]:
+    requested = {username.strip() for username in usernames if username.strip()}
+    users = list(session.scalars(select(AdminUser).where(AdminUser.username.in_(requested))))
+    resolved = {user.username: user for user in users}
+    assignments = list(session.scalars(
+        select(UserSavedMetric).where(UserSavedMetric.widget_key == widget.widget_key)
+    ))
+    for assignment in assignments:
+        if assignment.owner_username not in resolved:
+            session.delete(assignment)
+    existing_usernames = {assignment.owner_username for assignment in assignments}
+    for username, user in resolved.items():
+        if username not in existing_usernames:
+            session.add(UserSavedMetric(
+                owner_user_id=str(user.id),
+                owner_username=username,
+                widget_key=widget.widget_key,
+            ))
+    return sorted(resolved)
+
+
+def resolve_overview_widget_tags_and_assignments(
+    session: Session,
+    widget: OverviewWidget,
+    tags: list[str],
+    assigned_usernames: list[str],
+) -> list[str]:
+    requested_usernames = list(assigned_usernames)
+    direct_tags: list[str] = []
+    for tag in tags:
+        if tag.lower().startswith("user:") and tag[5:].strip():
+            username = tag[5:].strip()
+            print(username)
+            if session.scalar(select(AdminUser.id).where(AdminUser.username == username)):
+                requested_usernames.append(username)
+                continue
+        direct_tags.append(tag)
+    print(requested_usernames)
+    return [
+        *direct_tags,
+        *sync_overview_widget_user_assignments(session, widget, requested_usernames),
+    ]
 
 
 def list_assigned_widget_tags(session: Session) -> list[str]:
@@ -919,11 +987,17 @@ def prepare_overview_sql_for_connector(
     except Exception:
         return sql
 
-    for table in expression.find_all(exp.Table):
-        if table.args.get("db") and table.args["db"].name == connector.connector_key:
-            table.set("db", None)
-        if table.args.get("catalog") and table.args["catalog"].name == connector.connector_key:
-            table.set("catalog", None)
+    for table_expression in expression.find_all(exp.Table):
+        if (
+            table_expression.args.get("db")
+            and table_expression.args["db"].name == connector.connector_key
+        ):
+            table_expression.set("db", None)
+        if (
+            table_expression.args.get("catalog")
+            and table_expression.args["catalog"].name == connector.connector_key
+        ):
+            table_expression.set("catalog", None)
 
     if read_dialect:
         return expression.sql(dialect=read_dialect)
@@ -1330,10 +1404,9 @@ def get_or_create_external_auth_user(
     provider_id: str,
     username: str,
 ) -> AdminUser:
-    local_username = f"{provider_id}:{username}"
     user = session.scalar(
         select(AdminUser).where(
-            AdminUser.username == local_username,
+            AdminUser.username == username,
             AdminUser.auth_provider == provider_id,
         )
     )
@@ -1342,7 +1415,7 @@ def get_or_create_external_auth_user(
         return user
 
     user = AdminUser(
-        username=local_username,
+        username=username,
         password_hash="external$disabled",
         must_change_password=False,
         auth_provider=provider_id,
@@ -1398,7 +1471,7 @@ def list_identities(
 ) -> dict[str, Any]:
     with create_session() as session:
         external_user_ids = {
-            item.username: str(item.id)
+            f"{item.auth_provider}:{item.username}": str(item.id)
             for item in session.scalars(
                 select(AdminUser).where(AdminUser.auth_provider != "local")
             ).all()
@@ -1433,7 +1506,7 @@ def list_identities(
                 items.extend(provider.list_users(session, refresh=refresh))
         for item in items:
             owner_user_id = (
-                item["id"].removeprefix("local:")
+                str(item["id"]).removeprefix("local:")
                 if item.get("provider_id") == "local"
                 else external_user_ids.get(str(item.get("id") or ""))
             )
@@ -1687,7 +1760,16 @@ def create_overview_widget(
 
     session.add(widget)
     session.flush()
-    set_overview_widget_tags(session, widget, ["public", user.username, *(request.tags or [])])
+    set_overview_widget_tags(
+        session,
+        widget,
+        resolve_overview_widget_tags_and_assignments(
+            session,
+            widget,
+            ["public", *(request.tags or [])],
+            [user.username, *(request.assigned_usernames or [])],
+        ),
+    )
     record_admin_audit(
         session=session,
         actor=user.username,
@@ -1947,8 +2029,20 @@ def update_overview_widget(
     widget.grid_height = next_grid_height
     widget.active = next_active
     widget.updated_by = user.username
-    if request.tags is not None:
-        set_overview_widget_tags(session, widget, request.tags)
+    if request.tags is not None or request.assigned_usernames is not None:
+        current_assignments = get_overview_widget_user_assignments(session, widget)
+        set_overview_widget_tags(
+            session,
+            widget,
+            resolve_overview_widget_tags_and_assignments(
+                session,
+                widget,
+                request.tags if request.tags is not None else get_overview_widget_tags(session, widget),
+                request.assigned_usernames
+                if request.assigned_usernames is not None
+                else current_assignments,
+            ),
+        )
 
     record_admin_audit(
         session=session,
