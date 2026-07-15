@@ -181,6 +181,56 @@ label {
   width: auto;
 }
 
+.widget-tags-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.widget-tags-input input {
+  min-width: 0;
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+}
+
+.widget-tags-input input:focus {
+  outline: 0;
+}
+
+.widget-user-tag {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.widget-user-tag button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.widget-user-tag input {
+  display: none;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;

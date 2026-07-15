@@ -19,6 +19,7 @@ from gaard_api.admin.models import (
     OverviewWidget,
     OverviewWidgetTag,
     PromptTemplate,
+    UserSavedMetric,
     WidgetTag,
 )
 from gaard_api.admin.security import hash_password
@@ -121,16 +122,128 @@ def ensure_admin_user_schema(engine: Engine) -> None:
         for name, sql in additions.items():
             if name not in columns:
                 connection.execute(text(sql))
-        if engine.dialect.name == "sqlite":
-            connection.execute(
-                text("UPDATE admin_users SET auth_provider = substr(username, 1, instr(username, ':') - 1) "
-                     "WHERE auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0")
-            )
-        elif engine.dialect.name == "postgresql":
-            connection.execute(
-                text("UPDATE admin_users SET auth_provider = substring(username from 1 for position(':' in username) - 1) "
-                     "WHERE auth_provider = 'local' AND password_hash = 'external$disabled' AND position(':' in username) > 0")
-            )
+        if engine.dialect.name == "sqlite" and (
+            admin_user_has_global_username_constraint(engine)
+            or not admin_user_has_provider_username_constraint(engine)
+        ):
+            rebuild_sqlite_admin_users(connection)
+        else:
+            drop_global_admin_username_constraint(connection, engine)
+            normalize_external_admin_usernames(connection, engine.dialect.name)
+            ensure_admin_user_provider_username_constraint(connection, engine)
+
+
+def admin_user_has_global_username_constraint(engine: Engine) -> bool:
+    return ["username"] in admin_user_unique_column_sets(engine)
+
+
+def admin_user_has_provider_username_constraint(engine: Engine) -> bool:
+    return ["auth_provider", "username"] in admin_user_unique_column_sets(engine)
+
+
+def admin_user_unique_column_sets(engine: Engine) -> list[list[str]]:
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as connection:
+            return [
+                [row[2] for row in connection.execute(text(f"PRAGMA index_info({index_name!r})"))]
+                for _sequence, index_name, is_unique, *_rest in connection.execute(
+                    text("PRAGMA index_list('admin_users')")
+                )
+                if is_unique
+            ]
+
+    inspector = inspect(engine)
+    return [
+        cast(list[str], constraint_column_names)
+        for constraint in inspector.get_unique_constraints("admin_users")
+        if isinstance((constraint_column_names := constraint.get("column_names")), list)
+        and all(isinstance(column_name, str) for column_name in constraint_column_names)
+    ] + [
+        cast(list[str], index_column_names)
+        for index in inspector.get_indexes("admin_users")
+        if index.get("unique")
+        and isinstance((index_column_names := index.get("column_names")), list)
+        and all(isinstance(column_name, str) for column_name in index_column_names)
+    ]
+
+
+def rebuild_sqlite_admin_users(connection) -> None:
+    connection.execute(text("""
+        CREATE TABLE admin_users__migrated (
+            id INTEGER NOT NULL PRIMARY KEY,
+            username VARCHAR(255) NOT NULL,
+            display_name VARCHAR(255) NOT NULL DEFAULT '',
+            auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
+            password_hash TEXT NOT NULL,
+            must_change_password BOOLEAN NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_admin_users_auth_provider_username UNIQUE (auth_provider, username)
+        )
+    """))
+    connection.execute(text("""
+        INSERT INTO admin_users__migrated
+            (id, username, display_name, auth_provider, password_hash, must_change_password, created_at, updated_at)
+        SELECT
+            id,
+            CASE WHEN password_hash = 'external$disabled' AND instr(username, ':') > 0
+                    AND (auth_provider = 'local' OR substr(username, 1, instr(username, ':') - 1) = auth_provider)
+                THEN substr(username, instr(username, ':') + 1) ELSE username END,
+            display_name,
+            CASE WHEN auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0
+                THEN substr(username, 1, instr(username, ':') - 1) ELSE auth_provider END,
+            password_hash, must_change_password, created_at, updated_at
+        FROM admin_users
+    """))
+    connection.execute(text("DROP TABLE admin_users"))
+    connection.execute(text("ALTER TABLE admin_users__migrated RENAME TO admin_users"))
+    connection.execute(text("CREATE INDEX ix_admin_users_username ON admin_users (username)"))
+    connection.execute(text("CREATE INDEX ix_admin_users_auth_provider ON admin_users (auth_provider)"))
+
+
+def drop_global_admin_username_constraint(connection, engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    inspector = inspect(engine)
+    quote = connection.dialect.identifier_preparer.quote
+    for constraint in inspector.get_unique_constraints("admin_users"):
+        if constraint.get("column_names") == ["username"]:
+            connection.execute(text(f"ALTER TABLE admin_users DROP CONSTRAINT {quote(constraint['name'])}"))
+
+
+def normalize_external_admin_usernames(connection, dialect_name: str) -> None:
+    if dialect_name == "sqlite":
+        username = "substr(username, instr(username, ':') + 1)"
+        provider = "substr(username, 1, instr(username, ':') - 1)"
+        has_prefix = "instr(username, ':') > 0"
+        prefix_matches_provider = "substr(username, 1, instr(username, ':') - 1) = auth_provider"
+    elif dialect_name == "postgresql":
+        username = "substring(username from position(':' in username) + 1)"
+        provider = "substring(username from 1 for position(':' in username) - 1)"
+        has_prefix = "position(':' in username) > 0"
+        prefix_matches_provider = "substring(username from 1 for position(':' in username) - 1) = auth_provider"
+    else:
+        return
+    connection.execute(text(
+        "UPDATE admin_users "
+        f"SET username = {username}, auth_provider = CASE WHEN auth_provider = 'local' THEN {provider} ELSE auth_provider END "
+        "WHERE password_hash = 'external$disabled' "
+        f"AND {has_prefix} AND (auth_provider = 'local' OR {prefix_matches_provider})"
+    ))
+
+
+def ensure_admin_user_provider_username_constraint(connection, engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    constraints = inspect(engine).get_unique_constraints("admin_users")
+    if not any(
+        constraint.get("column_names") == ["auth_provider", "username"]
+        for constraint in constraints
+    ):
+        connection.execute(text(
+            "ALTER TABLE admin_users ADD CONSTRAINT uq_admin_users_auth_provider_username "
+            "UNIQUE (auth_provider, username)"
+        ))
 
 
 def seed_settings(session: Session) -> None:
@@ -569,9 +682,8 @@ def ensure_overview_widget_schema(engine: Engine) -> None:
                 )
             )
 
-
 def backfill_overview_widget_tags(session: Session) -> None:
-    """Give legacy and freshly seeded widgets their initial public tag."""
+    """Give legacy widgets public and saved-metric owner tags."""
     if session.scalar(select(WidgetTag).where(WidgetTag.name == "public")) is None:
         session.add(WidgetTag(name="public"))
         session.flush()
@@ -579,6 +691,23 @@ def backfill_overview_widget_tags(session: Session) -> None:
     for widget_id in session.scalars(select(OverviewWidget.id)):
         if widget_id not in widget_ids_with_tags:
             session.add(OverviewWidgetTag(widget_id=widget_id, tag_name="public"))
+
+    existing_assignments = set(
+        session.execute(select(OverviewWidgetTag.widget_id, OverviewWidgetTag.tag_name))
+    )
+    for widget_id, owner_username in session.execute(
+        select(OverviewWidget.id, UserSavedMetric.owner_username).join(
+            UserSavedMetric,
+            UserSavedMetric.widget_key == OverviewWidget.widget_key,
+        )
+    ):
+        if not owner_username:
+            continue
+        if session.get(WidgetTag, owner_username) is None:
+            session.add(WidgetTag(name=owner_username))
+            session.flush()
+        if (widget_id, owner_username) not in existing_assignments:
+            session.add(OverviewWidgetTag(widget_id=widget_id, tag_name=owner_username))
 
 
 def reset_metadata_store_for_tests() -> None:

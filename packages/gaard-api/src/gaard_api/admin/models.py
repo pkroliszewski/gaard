@@ -27,9 +27,12 @@ class Base(DeclarativeBase):
 
 class AdminUser(Base):
     __tablename__ = "admin_users"
+    __table_args__ = (
+        UniqueConstraint("auth_provider", "username", name="uq_admin_users_auth_provider_username"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(255), index=True)
     display_name: Mapped[str] = mapped_column(String(255), default="")
     auth_provider: Mapped[str] = mapped_column(String(255), index=True, default="local")
     password_hash: Mapped[str] = mapped_column(Text)

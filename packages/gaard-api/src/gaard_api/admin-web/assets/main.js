@@ -1304,6 +1304,10 @@ function formatOverviewWidgetResultMode(value = "data") {
 function renderOverviewWidgetSettingsForm(widget) {
   const creating = widget === null;
   const resultMode = widget?.result_mode || "data";
+  const assignedUsers = widget?.assigned_usernames || [];
+  const editableTags = (widget?.tags || ["public"])
+    .filter((tag) => !assignedUsers.includes(tag))
+    .join(", ");
   return `
     <form class="form-grid" id="overview-widget-settings-form" data-widget-mode="${creating ? "create" : "update"}" data-widget-key="${escapeHtml(widget?.widget_key || "")}">
       ${creating ? `<label>Widget key<input name="widget_key" value="" placeholder="custom_widget_key" /></label>` : `<input type="hidden" name="widget_key" value="${escapeHtml(widget?.widget_key || "")}" />`}
@@ -1313,7 +1317,7 @@ function renderOverviewWidgetSettingsForm(widget) {
         <label>Datasource<select name="datasource_key">${renderOverviewDatasourceOptions(widget?.datasource_key || "metadata-db")}</select></label>
       </div>
       <label>Result mode<select name="result_mode">${renderOverviewWidgetResultModeOptions(resultMode)}</select></label>
-      <label>Tags<input name="tags" value="${escapeHtml((widget?.tags || ["public"]).join(", "))}" placeholder="public, finance" /><span class="muted">Comma-separated tags</span></label>
+      <label>Tags<div class="widget-tags-input">${assignedUsers.map((username) => `<span class="widget-user-tag" data-widget-user-assignment="${escapeHtml(username)}">User: ${escapeHtml(username)}<button type="button" data-remove-widget-user="${escapeHtml(username)}" aria-label="Remove ${escapeHtml(username)}" title="Remove user assignment">×</button><input type="hidden" name="assigned_usernames" value="${escapeHtml(username)}" /></span>`).join("")}<input name="tags" value="${escapeHtml(editableTags)}" placeholder="public, finance, user:username" /></div><span class="muted">Use <code>user:username</code> to assign a known user; otherwise it remains a regular tag.</span></label>
       <label class="inline-check"><input name="active" type="checkbox" ${widget?.active || creating ? "checked" : ""} /> Enabled</label>
       <label>Question<textarea name="question">${escapeHtml(widget?.question || "")}</textarea></label>
       <label>Generated SQL<textarea class="textarea-small" readonly>${escapeHtml(widget?.sql || "")}</textarea></label>
@@ -1944,6 +1948,11 @@ function attachSectionHandlers() {
     button.addEventListener("click", removeOverviewWidgetFromDashboard);
   });
   document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
+  document.querySelectorAll("[data-remove-widget-user]").forEach((button) => {
+    button.addEventListener("click", () => {
+      button.closest("[data-widget-user-assignment]")?.remove();
+    });
+  });
   document.querySelectorAll("[data-edit-overview-widget]").forEach((button) => {
     button.addEventListener("click", () => {
       state.overviewEditorWidgetKey = button.dataset.editOverviewWidget || null;
@@ -2447,6 +2456,7 @@ async function saveOverviewWidgetSettings(event) {
     position: creating ? getOverviewWidgetFormPosition(null) : selectedWidget?.position || 100,
     grid_width: creating ? getDefaultOverviewWidgetGridWidth(widgetType) : getOverviewWidgetGridWidth(selectedWidget || { widget_type: widgetType, grid_width: getDefaultOverviewWidgetGridWidth(widgetType) }),
     active: form.get("active") === "on",
+    assigned_usernames: form.getAll("assigned_usernames").map((username) => String(username).trim()).filter(Boolean),
     tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean)
   };
   try {
@@ -3033,6 +3043,16 @@ async function loadOverviewWidgetConfigs(shouldRender = true) {
   state.overviewWidgetConfigs = payload.items || [];
   state.overviewWidgetDatasources = payload.datasources || [];
   state.overviewWidgetTags = payload.tags || [];
+  const selectedWidget = state.overviewWidgetConfigs.find(
+    (widget) => widget.widget_key === state.selectedOverviewWidgetKey
+  );
+  if (
+    state.selectedOverviewWidgetTag
+    && selectedWidget
+    && !(selectedWidget.tags || []).includes(state.selectedOverviewWidgetTag)
+  ) {
+    state.selectedOverviewWidgetTag = "";
+  }
   if (state.selectedOverviewWidgetKey !== "__new__" && !state.overviewWidgetConfigs.some((widget) => widget.widget_key === state.selectedOverviewWidgetKey)) {
     state.selectedOverviewWidgetKey = state.overviewWidgetConfigs[0]?.widget_key || "";
   }

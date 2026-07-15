@@ -61,6 +61,7 @@ from gaard_api.admin.services import (
 )
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 from gaard_api.conversations import (
+    Conversation,
     ConversationPrincipal,
     ambiguous_context_response,
     build_compact_conversation_context,
@@ -613,7 +614,12 @@ def run_sql_request(
         return response
     pipeline = create_pipeline(datasource_context, interpret=effective_request.interpret)
     try:
-        response = pipeline.handle(effective_request, on_stage=on_stage)
+        # Keep the regular endpoint compatible with pipelines that do not
+        # implement streaming progress callbacks (including integrations).
+        if on_stage is None:
+            response = pipeline.handle(effective_request)
+        else:
+            response = pipeline.handle(effective_request, on_stage=on_stage)
     except QueryExecutionError as exc:
         detected_datasource_ids = detect_datasource_ids_from_sql(
             exc.sql,
@@ -769,7 +775,7 @@ def conversation_principal(user: AuthenticatedSession) -> ConversationPrincipal:
 def resolve_request_conversation(
     request: QueryRequest,
     principal: ConversationPrincipal,
-) -> tuple[object | None, ConversationContextClassification, QueryRequest | None]:
+) -> tuple[Conversation | None, ConversationContextClassification, QueryRequest | None]:
     if request.context_mode == ContextMode.OFF:
         return None, new_topic_classification(request.question), request
 
@@ -1583,7 +1589,9 @@ def query_stream(
     _user: AuthenticatedSession = Depends(get_current_api_user),
 ) -> StreamingResponse:
     def single_response() -> Iterator[str]:
-        yield ndjson_line({"stage": "processing_query"})
+        # Every stream event has a ``final`` key so consumers can safely
+        # distinguish progress events from the terminal response.
+        yield ndjson_line({"stage": "processing_query", "final": None})
         events: queue.Queue[dict[str, Any] | None] = queue.Queue()
 
         def run_query() -> None:
@@ -1632,7 +1640,7 @@ def query_stream(
                     resolved_request,
                     datasource_context,
                     extra_metadata,
-                    on_stage=lambda stage: events.put({"stage": stage}),
+                    on_stage=lambda stage: events.put({"stage": stage, "final": None}),
                 )
                 if conversation is not None:
                     response = add_conversation_to_response(

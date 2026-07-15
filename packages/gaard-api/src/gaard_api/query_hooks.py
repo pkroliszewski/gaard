@@ -158,7 +158,7 @@ class QueryHookRegistry:
             if not denied_tables:
                 filtered.append((connector, cache))
                 continue
-            safe_cache = copy.copy(cache)
+            safe_cache = cast(Any, copy.copy(cache))
             raw_schema = json.loads(cache.schema_json)
             raw_schema["tables"] = [
                 table for table in raw_schema.get("tables", []) if table.get("name") in allowed_set

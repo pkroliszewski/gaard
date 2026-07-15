@@ -1267,7 +1267,7 @@ async function toggleSources() {
     state.datasourceError = "";
     render();
     if (state.sourcesOpen && state.token && !state.datasourcesLoaded) {
-        await loadDatasources();
+        await loadDatasources({ preserveOrder: true });
     }
 }
 async function loadDashboards() {
@@ -2062,7 +2062,7 @@ async function uploadSelectedSource(event) {
             ]);
         }
         state.datasourcesLoaded = false;
-        await loadDatasources();
+        await loadDatasources({ preserveOrder: true });
     } catch (error) {
         state.datasourceError = error.message || "Could not add the data source.";
         reportApiError(error, "Could not add the data source.");

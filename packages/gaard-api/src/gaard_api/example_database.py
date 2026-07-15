@@ -293,7 +293,9 @@ def seed_medical_poc_dashboard(
         DashboardUserState,
         DashboardWidget,
         OverviewWidget,
+        OverviewWidgetTag,
         UserSavedMetric,
+        WidgetTag,
     )
 
     session = create_session()
@@ -310,7 +312,7 @@ def seed_medical_poc_dashboard(
         seed_metric_keys = {str(item["widget_key"]) for item in MEDICAL_POC_OVERVIEW_WIDGETS}
 
         for item in MEDICAL_POC_OVERVIEW_WIDGETS:
-            widget = session.scalar(
+            overview_widget = session.scalar(
                 select(OverviewWidget).where(OverviewWidget.widget_key == item["widget_key"])
             )
 
@@ -321,22 +323,12 @@ def seed_medical_poc_dashboard(
                 2 if values.get("widget_type") == "scalar" else 4,
             )
 
-            if widget is None:
+            if overview_widget is None:
                 session.add(OverviewWidget(**values))
                 continue
 
             for key, value in values.items():
-                setattr(widget, key, value)
-
-        for legacy_key in MEDICAL_POC_LEGACY_METRIC_KEYS:
-            saved_metric = session.scalar(
-                select(UserSavedMetric).where(
-                    UserSavedMetric.owner_user_id == owner_user_id,
-                    UserSavedMetric.widget_key == legacy_key,
-                )
-            )
-            if saved_metric is not None:
-                session.delete(saved_metric)
+                setattr(overview_widget, key, value)
 
         dashboard = session.scalar(
             select(Dashboard).where(
@@ -367,6 +359,7 @@ def seed_medical_poc_dashboard(
             dashboard.name = MEDICAL_POC_DASHBOARD_NAME
             dashboard.description = MEDICAL_POC_DASHBOARD_DESCRIPTION
 
+        session.flush()
         for item in MEDICAL_POC_OVERVIEW_WIDGETS:
             saved_metric = session.scalar(
                 select(UserSavedMetric).where(
@@ -385,6 +378,19 @@ def seed_medical_poc_dashboard(
             else:
                 saved_metric.owner_username = owner_username
 
+        for tag_name in ("public", owner_username):
+            if session.get(WidgetTag, tag_name) is None:
+                session.add(WidgetTag(name=tag_name))
+        session.flush()
+        for item in MEDICAL_POC_OVERVIEW_WIDGETS:
+            overview_widget = session.scalar(
+                select(OverviewWidget).where(OverviewWidget.widget_key == item["widget_key"])
+            )
+            assert overview_widget is not None
+            for tag_name in ("public", owner_username):
+                if session.get(OverviewWidgetTag, (overview_widget.id, tag_name)) is None:
+                    session.add(OverviewWidgetTag(widget_id=overview_widget.id, tag_name=tag_name))
+
         dashboard_widgets = list(
             session.scalars(
                 select(DashboardWidget).where(
@@ -393,18 +399,18 @@ def seed_medical_poc_dashboard(
                 )
             )
         )
-        for widget in dashboard_widgets:
-            if widget.metric_widget_key not in seed_metric_keys:
-                session.delete(widget)
+        for existing_dashboard_widget in dashboard_widgets:
+            if existing_dashboard_widget.metric_widget_key not in seed_metric_keys:
+                session.delete(existing_dashboard_widget)
 
         session.flush()
 
         for item in MEDICAL_POC_DASHBOARD_WIDGETS:
-            widget = session.scalar(
+            dashboard_widget = session.scalar(
                 select(DashboardWidget).where(DashboardWidget.widget_id == item["widget_id"])
             )
-            if widget is None:
-                widget = session.scalar(
+            if dashboard_widget is None:
+                dashboard_widget = session.scalar(
                     select(DashboardWidget).where(
                         DashboardWidget.dashboard_id == dashboard.dashboard_id,
                         DashboardWidget.owner_user_id == owner_user_id,
@@ -412,30 +418,30 @@ def seed_medical_poc_dashboard(
                     )
                 )
 
-            values = dict(item)
+            dashboard_values: dict[str, object] = dict(item)
 
-            if widget is None:
+            if dashboard_widget is None:
                 session.add(
                     DashboardWidget(
                         dashboard_id=dashboard.dashboard_id,
                         owner_user_id=owner_user_id,
                         owner_username=owner_username,
-                        **values,
+                        **dashboard_values,
                     )
                 )
                 continue
 
-            widget.widget_id = str(values["widget_id"])
-            widget.dashboard_id = dashboard.dashboard_id
-            widget.owner_user_id = owner_user_id
-            widget.owner_username = owner_username
-            widget.metric_widget_key = str(values["metric_widget_key"])
-            widget.title = str(values["title"])
-            widget.visualization_type = str(values["visualization_type"])
-            widget.x = int(values["x"])
-            widget.y = int(values["y"])
-            widget.w = int(values["w"])
-            widget.h = int(values["h"])
+            dashboard_widget.widget_id = str(dashboard_values["widget_id"])
+            dashboard_widget.dashboard_id = dashboard.dashboard_id
+            dashboard_widget.owner_user_id = owner_user_id
+            dashboard_widget.owner_username = owner_username
+            dashboard_widget.metric_widget_key = str(dashboard_values["metric_widget_key"])
+            dashboard_widget.title = str(dashboard_values["title"])
+            dashboard_widget.visualization_type = str(dashboard_values["visualization_type"])
+            dashboard_widget.x = int(str(dashboard_values["x"]))
+            dashboard_widget.y = int(str(dashboard_values["y"]))
+            dashboard_widget.w = int(str(dashboard_values["w"]))
+            dashboard_widget.h = int(str(dashboard_values["h"]))
 
         state = session.get(DashboardUserState, owner_user_id)
         if state is None:

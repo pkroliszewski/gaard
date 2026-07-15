@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import (
@@ -13,6 +13,7 @@ from gaard_api.admin.models import (
     DashboardUserState,
     DashboardWidget,
     OverviewWidget,
+    OverviewWidgetTag,
     UserSavedMetric,
 )
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
@@ -89,6 +90,10 @@ def dashboard_owner_user_id(principal: AuthenticatedSession) -> str:
 
 def dashboard_owner_username(principal: AuthenticatedSession) -> str:
     return principal.session.username or principal.user.username
+
+
+def saved_metric_tag_names(owner_username: str) -> tuple[str, str]:
+    return ("public", owner_username)
 
 
 def serialize_dashboard(dashboard: Dashboard) -> dict[str, Any]:
@@ -220,40 +225,39 @@ def get_dashboard_widget_for_owner(
 def get_saved_metric_for_owner(
     session: Session,
     widget_key: str,
-    owner_user_id: str,
+    owner_username: str,
 ) -> OverviewWidget | None:
+    public_tag, owner_tag = saved_metric_tag_names(owner_username)
+    public_assignment = aliased(OverviewWidgetTag)
+    owner_assignment = aliased(OverviewWidgetTag)
     return session.scalar(
         select(OverviewWidget)
-        .join(UserSavedMetric, UserSavedMetric.widget_key == OverviewWidget.widget_key)
+        .join(public_assignment, public_assignment.widget_id == OverviewWidget.id)
+        .join(owner_assignment, owner_assignment.widget_id == OverviewWidget.id)
         .where(
             OverviewWidget.widget_key == widget_key,
-            UserSavedMetric.owner_user_id == owner_user_id,
-        )
-    )
-
-
-def get_saved_metric_link_for_owner(
-    session: Session,
-    widget_key: str,
-    owner_user_id: str,
-) -> UserSavedMetric | None:
-    return session.scalar(
-        select(UserSavedMetric).where(
-            UserSavedMetric.widget_key == widget_key,
-            UserSavedMetric.owner_user_id == owner_user_id,
+            public_assignment.tag_name == public_tag,
+            owner_assignment.tag_name == owner_tag,
         )
     )
 
 
 def list_saved_metrics_for_owner(
     session: Session,
-    owner_user_id: str,
+    owner_username: str,
 ) -> list[OverviewWidget]:
+    public_tag, owner_tag = saved_metric_tag_names(owner_username)
+    public_assignment = aliased(OverviewWidgetTag)
+    owner_assignment = aliased(OverviewWidgetTag)
     return list(
         session.scalars(
             select(OverviewWidget)
-            .join(UserSavedMetric, UserSavedMetric.widget_key == OverviewWidget.widget_key)
-            .where(UserSavedMetric.owner_user_id == owner_user_id)
+            .join(public_assignment, public_assignment.widget_id == OverviewWidget.id)
+            .join(owner_assignment, owner_assignment.widget_id == OverviewWidget.id)
+            .where(
+                public_assignment.tag_name == public_tag,
+                owner_assignment.tag_name == owner_tag,
+            )
             .order_by(OverviewWidget.updated_at.desc(), OverviewWidget.id.desc())
         )
     )
@@ -334,7 +338,7 @@ def list_saved_dashboard_metrics(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    metrics = list_saved_metrics_for_owner(session, dashboard_owner_user_id(principal))
+    metrics = list_saved_metrics_for_owner(session, dashboard_owner_username(principal))
     return {
         "items": [
             serialize_saved_metric(session, metric, include_result=include_result)
@@ -351,8 +355,7 @@ def update_saved_dashboard_metric(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    owner_user_id = dashboard_owner_user_id(principal)
-    metric = get_saved_metric_for_owner(session, widget_key, owner_user_id)
+    metric = get_saved_metric_for_owner(session, widget_key, dashboard_owner_username(principal))
     if metric is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -380,9 +383,8 @@ def delete_saved_dashboard_metric(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     owner_user_id = dashboard_owner_user_id(principal)
-    metric = get_saved_metric_for_owner(session, widget_key, owner_user_id)
-    metric_link = get_saved_metric_link_for_owner(session, widget_key, owner_user_id)
-    if metric is None or metric_link is None:
+    metric = get_saved_metric_for_owner(session, widget_key, dashboard_owner_username(principal))
+    if metric is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Saved metric not found.",
@@ -399,14 +401,11 @@ def delete_saved_dashboard_metric(
     for widget in dashboard_widgets:
         session.delete(widget)
 
-    session.delete(metric_link)
-    session.flush()
-
-    remaining_links = session.scalar(
-        select(UserSavedMetric.id).where(UserSavedMetric.widget_key == widget_key)
-    )
-    if remaining_links is None:
-        session.delete(metric)
+    for metric_link in session.scalars(
+        select(UserSavedMetric).where(UserSavedMetric.widget_key == widget_key)
+    ):
+        session.delete(metric_link)
+    session.delete(metric)
 
     session.commit()
 
@@ -547,7 +546,11 @@ def add_widget_to_dashboard(
             detail="Dashboard not found.",
         )
 
-    metric = get_saved_metric_for_owner(session, request.metric_widget_key, owner_user_id)
+    metric = get_saved_metric_for_owner(
+        session,
+        request.metric_widget_key,
+        dashboard_owner_username(principal),
+    )
     if metric is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

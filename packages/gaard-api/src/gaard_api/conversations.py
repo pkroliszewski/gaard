@@ -431,10 +431,11 @@ def update_summary(summary_json: str, latest_question: str) -> dict[str, Any]:
         summary = {}
 
     turn_count = summary.get("turn_count")
-    try:
-        next_turn_count = int(turn_count) + 1
-    except (TypeError, ValueError):
-        next_turn_count = 1
+    next_turn_count = (
+        int(turn_count) + 1
+        if isinstance(turn_count, (str, int, float))
+        else 1
+    )
 
     summary["turn_count"] = next_turn_count
     summary["latest_question"] = latest_question

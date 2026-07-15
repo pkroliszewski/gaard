@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import create_engine, inspect, select, text
 
 from gaard_core.errors import QueryPipelineStepError
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
@@ -21,6 +21,7 @@ from gaard_llm.providers.models import ChatCompletionResponse
 
 from gaard_api.admin.database import (
     create_session,
+    ensure_admin_user_schema,
     reset_metadata_store_for_tests,
     seed_prompts,
 )
@@ -38,8 +39,9 @@ from gaard_api.admin.models import (
     DatasourceConnector,
     DatasourceSchemaCache,
     OverviewWidget,
+    OverviewWidgetTag,
     PromptTemplate,
-    UserSavedMetric,
+    WidgetTag,
 )
 from gaard_api.admin.security import hash_password, hash_token
 from gaard_api.admin.services import (
@@ -138,6 +140,66 @@ def test_login_does_not_query_extension_auth_without_identity_license(
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid username or password."
+
+
+def test_external_users_store_the_provider_separately(admin_client: TestClient) -> None:
+    from gaard_api.api.v1.admin import get_or_create_external_auth_user
+
+    with create_session() as session:
+        user = get_or_create_external_auth_user(session, "ldap", "ada")
+        session.add(
+            AdminUser(
+                username="ada",
+                password_hash=hash_password("local-password"),
+                must_change_password=False,
+            )
+        )
+        session.commit()
+
+        assert user.username == "ada"
+        assert user.auth_provider == "ldap"
+        assert session.scalar(
+            select(AdminUser).where(
+                AdminUser.username == "ada", AdminUser.auth_provider == "ldap"
+            )
+        ) is not None
+
+
+def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE admin_users (
+                id INTEGER NOT NULL PRIMARY KEY,
+                username VARCHAR(255) NOT NULL UNIQUE,
+                display_name VARCHAR(255) NOT NULL DEFAULT '',
+                auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
+                password_hash TEXT NOT NULL,
+                must_change_password BOOLEAN NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+        """))
+        connection.execute(text("""
+            INSERT INTO admin_users
+                (id, username, display_name, auth_provider, password_hash, must_change_password, created_at, updated_at)
+            VALUES
+                (1, 'ldap:ada', '', 'local', 'external$disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                (2, 'ada', '', 'local', 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                (3, 'ldap:grace', '', 'ldap', 'external$disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """))
+
+    ensure_admin_user_schema(engine)
+
+    with engine.connect() as connection:
+        users = connection.execute(text(
+            "SELECT username, auth_provider FROM admin_users ORDER BY id"
+        )).all()
+    assert users == [("ada", "ldap"), ("ada", "local"), ("grace", "ldap")]
+    assert any(
+        constraint["column_names"] == ["auth_provider", "username"]
+        for constraint in inspect(engine).get_unique_constraints("admin_users")
+    )
 
 
 def auth_headers(client: TestClient) -> dict[str, str]:
@@ -420,13 +482,17 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
                 updated_by="admin",
             )
         )
-        session.add(
-            UserSavedMetric(
-                owner_user_id="1",
-                owner_username="admin",
-                widget_key="admin_saved_metric",
-            )
+        session.flush()
+        for tag_name in ("public", "admin"):
+            if session.get(WidgetTag, tag_name) is None:
+                session.add(WidgetTag(name=tag_name))
+        session.flush()
+        metric = session.scalar(
+            select(OverviewWidget).where(OverviewWidget.widget_key == "admin_saved_metric")
         )
+        assert metric is not None
+        for tag_name in ("public", "admin"):
+            session.add(OverviewWidgetTag(widget_id=metric.id, tag_name=tag_name))
         session.commit()
 
     metrics_response = admin_client.get(
@@ -558,15 +624,6 @@ def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -
     assert widgets_after_metric_delete.json()["items"] == []
 
     with create_session() as session:
-        assert (
-            session.scalar(
-                select(UserSavedMetric).where(
-                    UserSavedMetric.owner_user_id == "1",
-                    UserSavedMetric.widget_key == "admin_saved_metric",
-                )
-            )
-            is None
-        )
         assert (
             session.scalar(
                 select(DashboardWidget).where(
@@ -1459,12 +1516,17 @@ def test_overview_widget_can_be_updated(admin_client: TestClient) -> None:
             "widget_type": "scalar",
             "datasource_key": "metadata-db",
             "question": "Return one value for the prompt template count.",
+            "tags": ["public", "user:admin", "user:not-a-user"],
+            "assigned_usernames": [],
         },
     )
 
     assert update_response.status_code == 200
     assert update_response.json()["item"]["label"] == "Prompt templates"
     assert update_response.json()["item"]["sql"] == "SELECT 1 AS value"
+    assert update_response.json()["item"]["assigned_usernames"] == ["admin"]
+    assert "admin" in update_response.json()["item"]["tags"]
+    assert "user:not-a-user" in update_response.json()["item"]["tags"]
 
     overview_response = admin_client.get(
         "/api/v1/admin/overview",
@@ -1577,12 +1639,19 @@ def test_overview_widget_can_be_saved_from_query_and_deleted(
     assert created_item["active"] is False
     assert created_item["result_mode"] == "data"
     assert created_item["result"]["status"] == "ok"
+    assert created_item["assigned_usernames"] == ["admin"]
     with create_session() as session:
-        saved_metric = session.scalar(
-            select(UserSavedMetric).where(UserSavedMetric.widget_key == widget_key)
+        created_widget = session.scalar(
+            select(OverviewWidget).where(OverviewWidget.widget_key == widget_key)
         )
-        assert saved_metric is not None
-        assert saved_metric.owner_username == "admin"
+        assert created_widget is not None
+        assert set(
+            session.scalars(
+                select(OverviewWidgetTag.tag_name).where(
+                    OverviewWidgetTag.widget_id == created_widget.id
+                )
+            )
+        ) == {"public", "admin"}
 
     overview_response = admin_client.get(
         "/api/v1/admin/overview",
@@ -2679,9 +2748,12 @@ def test_query_stream_ignores_legacy_mode_field(
 
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.strip().splitlines()]
-    assert len(events) == 1
-    assert events[0]["final"]["sql"] == "SELECT 1 AS value"
-    assert "query_mode" not in events[0]["final"]["metadata"]
+    # 3 events: processing query,waiting on data server and final: {question:'',anwser:''}
+    assert len(events) == 3
+    event = next((x for x in events if x["final"] is not None), None)
+    assert event is not None
+    assert event["final"]["sql"] == "SELECT 1 AS value"
+    assert "query_mode" not in event["final"]["metadata"]
 
 
 def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
