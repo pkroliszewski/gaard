@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from gaard_core.conversation_context.llm_classifier import LlmConversationContextClassifier
 from gaard_core.conversation_context.mock_classifier import MockConversationContextClassifier
@@ -18,6 +19,7 @@ from gaard_core.errors import (
     QueryPipelineStepError,
     SqlValidationError,
 )
+from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_intent.llm_classifier import LlmQueryIntentClassifier
 from gaard_core.query_intent.mock_classifier import MockQueryIntentClassifier
 from gaard_core.query_pipeline.llm_sql_generator import LlmSqlGenerator
@@ -39,8 +41,11 @@ from gaard_core.result_interpreter.llm_interpreter import LlmResultInterpreter
 from gaard_core.result_interpreter.mock_interpreter import MockResultInterpreter
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 
+from gaard_api.admin.database import create_session
 from gaard_api.admin.prompt_runtime import (
+    get_answer_explanation_prompt_compiler,
     get_conversation_context_prompt_compiler,
     get_intent_classification_prompt_compiler,
     get_result_classification_prompt_compiler,
@@ -50,6 +55,9 @@ from gaard_api.admin.prompt_runtime import (
 from gaard_api.admin.services import (
     ACCESS_ERROR_INTENT_CLASSIFICATION,
     ACCESS_ERROR_SQL_VALIDATION,
+    get_active_business_logic_prompt_safe,
+    get_active_datasource_connectors,
+    get_datasource_connector_by_key,
     get_llm_runtime_config_safe,
     get_query_runtime_config_safe,
     learn_business_logic_from_sql_error,
@@ -119,6 +127,45 @@ VALIDATION_SQL_PREFIXES = (
     "Invalid SQL syntax. ",
 )
 
+INFERENCE_METADATA_KEYS = {
+    "active_datasource_ids",
+    "assumptions",
+    "confidence",
+    "datasource_id",
+    "datasource_ids",
+    "intent_classification_mode",
+    "intent_confidence",
+    "intent_decision",
+    "intent_model_response",
+    "intent_reason",
+    "llm_sql_language",
+    "output_classification",
+    "output_classification_error",
+    "output_classification_mode",
+    "raw_sql_output",
+    "result_interpretation_mode",
+    "sql_generation_mode",
+}
+
+
+class QueryAnswerExplanationRequest(BaseModel):
+    question: str = Field(min_length=1)
+    sql: str = ""
+    answer: str = ""
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    inference_metadata: dict[str, Any] = Field(default_factory=dict)
+    prompt_metadata: dict[str, Any] = Field(default_factory=dict)
+    business_logic: str = ""
+    datasource_id: str = ""
+    datasource_ids: list[str] = Field(default_factory=list)
+
+
+class QueryAnswerExplanationResponse(BaseModel):
+    explanation: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
 
 def create_llm_client(
     llm_config: LlmRuntimeConfig | None = None,
@@ -136,6 +183,183 @@ def create_llm_client(
         api_key=llm_config.api_key,
         timeout_seconds=llm_config.timeout_seconds,
     )
+
+
+def explain_query_answer(
+    request: QueryAnswerExplanationRequest,
+    llm_config: LlmRuntimeConfig | None = None,
+) -> QueryAnswerExplanationResponse:
+    compiler = get_answer_explanation_prompt_compiler()
+    if compiler is None:
+        raise ConfigurationError("Active answer_explanation prompt is not configured.")
+
+    llm_config = llm_config or get_llm_runtime_config_safe()
+    payload = build_answer_explanation_payload(request)
+    compiled_prompt = compiler.compile(payload)
+    response = create_llm_client(llm_config).create_chat_completion(
+        ChatCompletionRequest(
+            model=llm_config.model,
+            temperature=0.0,
+            extra_body=llm_config.extra_body,
+            messages=[
+                ChatMessage(role="system", content=compiled_prompt.system_prompt),
+                ChatMessage(role="user", content=compiled_prompt.user_prompt),
+            ],
+        )
+    )
+
+    return QueryAnswerExplanationResponse(
+        explanation=remove_thinking_blocks(response.content).strip(),
+        metadata={
+            **compiled_prompt.metadata,
+            "model": response.model or llm_config.model,
+            "datasource_ids": payload["datasource_ids"],
+            "business_logic_included": bool(payload["business_logic"]),
+        },
+    )
+
+
+def build_answer_explanation_payload(
+    request: QueryAnswerExplanationRequest,
+) -> dict[str, Any]:
+    metadata = request.metadata or {}
+    inference_metadata = {
+        **extract_inference_metadata(metadata),
+        **request.inference_metadata,
+    }
+    prompt_metadata = {
+        **extract_prompt_metadata(metadata),
+        **request.prompt_metadata,
+    }
+    datasource_ids = datasource_ids_for_explanation(request)
+    business_logic = request.business_logic.strip() or active_business_logic_for_explanation(
+        datasource_ids,
+    )
+
+    return {
+        "question": request.question,
+        "sql": request.sql,
+        "answer": request.answer,
+        "result": {
+            "columns": request.columns or columns_from_rows(request.rows),
+            "rows": request.rows,
+        },
+        "metadata": metadata,
+        "inference_metadata": inference_metadata,
+        "prompt_metadata": prompt_metadata,
+        "business_logic": business_logic,
+        "datasource_id": request.datasource_id or str(metadata.get("datasource_id") or ""),
+        "datasource_ids": datasource_ids,
+    }
+
+
+def extract_inference_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    extracted = {
+        key: value
+        for key, value in metadata.items()
+        if key in INFERENCE_METADATA_KEYS
+        or key.startswith("intent_")
+        or key.startswith("context_")
+    }
+    conversation = metadata.get("conversation")
+    if isinstance(conversation, dict):
+        extracted["conversation"] = {
+            key: conversation.get(key)
+            for key in (
+                "context_decision",
+                "standalone_question",
+                "confidence",
+                "context_reason",
+                "context_source",
+                "context_model_response",
+            )
+            if key in conversation
+        }
+    return extracted
+
+
+def extract_prompt_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    extracted = {
+        key: value
+        for key, value in metadata.items()
+        if "prompt" in key and isinstance(value, (dict, list, str, int, float, bool))
+    }
+    conversation = metadata.get("conversation")
+    if isinstance(conversation, dict):
+        context_prompt = conversation.get("context_prompt")
+        if isinstance(context_prompt, dict):
+            extracted["conversation_context_prompt"] = context_prompt
+    return extracted
+
+
+def datasource_ids_for_explanation(request: QueryAnswerExplanationRequest) -> list[str]:
+    ids: list[str] = []
+    ids.extend(request.datasource_ids)
+    ids.extend(split_datasource_ids(request.datasource_id))
+
+    metadata = request.metadata or {}
+    for key in ("datasource_ids", "active_datasource_ids"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            ids.extend(str(item) for item in value)
+        else:
+            ids.extend(split_datasource_ids(str(value or "")))
+
+    ids.extend(split_datasource_ids(str(metadata.get("datasource_id") or "")))
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in ids:
+        datasource_id = item.strip()
+        if not datasource_id or datasource_id in seen:
+            continue
+        seen.add(datasource_id)
+        normalized.append(datasource_id)
+    return normalized
+
+
+def split_datasource_ids(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def active_business_logic_for_explanation(datasource_ids: list[str]) -> str:
+    connector_refs: list[tuple[int, str, str]] = []
+    try:
+        with create_session() as session:
+            if datasource_ids:
+                for datasource_id in datasource_ids:
+                    connector = get_datasource_connector_by_key(session, datasource_id)
+                    if connector is not None:
+                        connector_refs.append(
+                            (connector.id, connector.name, connector.connector_key)
+                        )
+            if not connector_refs:
+                connector_refs.extend(
+                    (connector.id, connector.name, connector.connector_key)
+                    for connector in get_active_datasource_connectors(session)
+                )
+    except Exception:
+        return ""
+
+    blocks: list[str] = []
+    for connector_id, name, connector_key in connector_refs:
+        business_logic = get_active_business_logic_prompt_safe(connector_id)
+        if business_logic:
+            blocks.append(
+                f"Data source {name} ({connector_key}):\n{business_logic}"
+            )
+    return "\n\n".join(blocks)
+
+
+def columns_from_rows(rows: list[dict[str, Any]]) -> list[str]:
+    columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                columns.append(key)
+    return columns
 
 
 def create_sql_generator(
@@ -1635,6 +1859,14 @@ def query(
             mode="sql",
         )
     return response
+
+
+@router.post("/query/explain", response_model=QueryAnswerExplanationResponse)
+def query_explain(
+    request: QueryAnswerExplanationRequest,
+    _user: AuthenticatedSession = Depends(get_current_api_user),
+) -> QueryAnswerExplanationResponse:
+    return explain_query_answer(request)
 
 
 @router.post("/query/stream")

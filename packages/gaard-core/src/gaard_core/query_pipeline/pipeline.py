@@ -102,23 +102,26 @@ class QueryPipeline:
         )
         if not request.interpret:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            metadata = {
+                "duration_ms": duration_ms,
+                "datasource_id": request.datasource_id,
+                "user_id": request.user_id,
+                "confidence": generated_sql.confidence,
+                "assumptions": generated_sql.assumptions,
+                "sql_generation_mode": self.sql_generation_mode,
+                "result_interpretation_mode": "none",
+                "output_classification_mode": "none",
+                "output_classification": OutputClassification.UNKNOWN.value,
+                "raw_sql_output": True,
+            }
+            if generated_sql.prompt_metadata:
+                metadata["sql_generation_prompt_metadata"] = generated_sql.prompt_metadata
             return QueryResponse(
                 question=request.question,
                 answer="",
                 sql=generated_sql.sql,
                 rows=result.rows,
-                metadata={
-                    "duration_ms": duration_ms,
-                    "datasource_id": request.datasource_id,
-                    "user_id": request.user_id,
-                    "confidence": generated_sql.confidence,
-                    "assumptions": generated_sql.assumptions,
-                    "sql_generation_mode": self.sql_generation_mode,
-                    "result_interpretation_mode": "none",
-                    "output_classification_mode": "none",
-                    "output_classification": OutputClassification.UNKNOWN.value,
-                    "raw_sql_output": True,
-                },
+                metadata=metadata,
             )
 
         try:
@@ -161,6 +164,9 @@ class QueryPipeline:
 
         if classification_error:
             metadata["output_classification_error"] = classification_error
+
+        if generated_sql.prompt_metadata:
+            metadata["sql_generation_prompt_metadata"] = generated_sql.prompt_metadata
 
         return QueryResponse(
             question=request.question,

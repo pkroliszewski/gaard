@@ -53,6 +53,11 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "reportApiError" in response.text
     assert "formatApiResponseError" in response.text
     assert "/api/widgets/title-suggestion" in response.text
+    assert "/api/query/explain" in response.text
+    assert "data-explain-answer" in response.text
+    assert "renderAnswerExplanation" in response.text
+    assert "function renderMarkdown" in response.text
+    assert "markdown-content" in response.text
     assert "data-save-widget-form" in response.text
     assert "Save metric" in response.text
     assert "data-edit-metric" in response.text
@@ -240,6 +245,75 @@ def test_client_app_proxies_query_conversation_id(monkeypatch) -> None:
         "user_id": "client",
         "mode": "sql",
         "conversation_id": "conversation-1",
+    }
+
+
+def test_client_app_proxies_query_explanation(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            request = httpx.Request("POST", url)
+
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "explanation": "The SQL counts completed appointments.",
+                    "metadata": {"prompt_key": "answer_explanation"},
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/query/explain",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "question": "How many patients were admitted?",
+            "sql": "SELECT COUNT(*) AS patient_count FROM appointments",
+            "answer": "12 patients were admitted.",
+            "rows": [{"patient_count": 12}],
+            "metadata": {
+                "datasource_id": "default",
+                "sql_generation_prompt_metadata": {"prompt_key": "sql_generation"},
+            },
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["prompt_key"] == "answer_explanation"
+    assert captured["url"] == "http://backend.example/api/v1/query/explain"
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["json"] == {
+        "question": "How many patients were admitted?",
+        "sql": "SELECT COUNT(*) AS patient_count FROM appointments",
+        "answer": "12 patients were admitted.",
+        "rows": [{"patient_count": 12}],
+        "columns": [],
+        "metadata": {
+            "datasource_id": "default",
+            "sql_generation_prompt_metadata": {"prompt_key": "sql_generation"},
+        },
+        "inference_metadata": {},
+        "prompt_metadata": {},
+        "business_logic": "",
+        "datasource_id": "",
+        "datasource_ids": [],
     }
 
 

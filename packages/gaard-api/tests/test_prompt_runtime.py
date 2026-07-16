@@ -4,6 +4,7 @@ from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 
 from gaard_api.admin.models import PromptTemplate
 from gaard_api.admin.prompt_runtime import (
+    MetadataAnswerExplanationPromptCompiler,
     MetadataConversationContextPromptCompiler,
     MetadataIntentClassificationPromptCompiler,
     MetadataResultClassificationPromptCompiler,
@@ -117,3 +118,40 @@ def test_metadata_result_classification_prompt_compiler_serializes_answer() -> N
 
     assert "There are 12 audit logs" in compiled.user_prompt
     assert compiled.metadata["prompt_key"] == "result_classification"
+
+
+def test_metadata_answer_explanation_prompt_compiler_serializes_context() -> None:
+    compiler = MetadataAnswerExplanationPromptCompiler(
+        prompt_template=PromptTemplate(
+            prompt_key="answer_explanation",
+            name="Answer explanation",
+            system_prompt="system",
+            user_prompt_template="{payload}\n{question}\n{sql}\n{business_logic}",
+            version=4,
+            active=True,
+        )
+    )
+
+    compiled = compiler.compile(
+        {
+            "question": "Ilu pacjentów przyjęto w tym tygodniu?",
+            "sql": "SELECT COUNT(*) AS patient_count FROM appointments",
+            "answer": "Przyjęto 12 pacjentów.",
+            "result": {
+                "columns": ["patient_count"],
+                "rows": [{"patient_count": Decimal("12")}],
+            },
+            "metadata": {"sql_generation_mode": "llm"},
+            "inference_metadata": {"intent_decision": "read_only_data_question"},
+            "prompt_metadata": {"sql_generation_prompt_metadata": {"prompt_version": 2}},
+            "business_logic": "Business logic:\n- Count completed appointments.",
+        }
+    )
+
+    assert "Ilu pacjentów" in compiled.user_prompt
+    assert "SELECT COUNT(*)" in compiled.user_prompt
+    assert '"patient_count": 12' in compiled.user_prompt
+    assert "Count completed appointments" in compiled.user_prompt
+    assert compiled.metadata["prompt_key"] == "answer_explanation"
+    assert compiled.metadata["prompt_version"] == 4
+    assert compiled.metadata["has_business_logic"] is True

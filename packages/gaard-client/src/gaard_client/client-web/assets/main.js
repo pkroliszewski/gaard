@@ -88,6 +88,105 @@ const WIDGET_TYPES = [
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
+function renderMarkdown(value) {
+  const text = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!text) return "";
+  const lines = text.split("\n");
+  const blocks = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+    const fenceMatch = line.match(/^\s*```([A-Za-z0-9_-]*)\s*$/);
+    if (fenceMatch) {
+      index += 1;
+      const codeLines = [];
+      while (index < lines.length && !lines[index].match(/^\s*```\s*$/)) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      continue;
+    }
+    const headingMatch = line.match(/^\s{0,3}(#{1,4})\s+(.+?)\s*#*\s*$/);
+    if (headingMatch) {
+      const level = Math.min(headingMatch[1].length + 2, 5);
+      blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*[-*]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(`<ul>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+      continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*\d+[.)]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(`<ol>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const quoteLines = [];
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^\s*>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"))}</blockquote>`);
+      continue;
+    }
+    const paragraph = [];
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !/^\s*```/.test(lines[index]) &&
+      !/^\s{0,3}#{1,4}\s+/.test(lines[index]) &&
+      !/^\s*[-*]\s+/.test(lines[index]) &&
+      !/^\s*\d+[.)]\s+/.test(lines[index]) &&
+      !/^\s*>\s?/.test(lines[index])
+    ) {
+      paragraph.push(lines[index]);
+      index += 1;
+    }
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join("\n"))}</p>`);
+  }
+  return `<div class="markdown-content">${blocks.join("")}</div>`;
+}
+function renderInlineMarkdown(value) {
+  const placeholders = [];
+  const reserve = (html) => {
+    const token = `@@GAARD_MD_${placeholders.length}@@`;
+    placeholders.push([token, html]);
+    return token;
+  };
+  let text = String(value ?? "");
+  text = text.replace(/`([^`\n]+)`/g, (_match, code) => reserve(`<code>${escapeHtml(code)}</code>`));
+  text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => {
+    const safeUrl = escapeHtml(url);
+    return reserve(`<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
+  });
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[\s(])_([^_\n]+)_/g, "$1<em>$2</em>");
+  html = html.replace(/\n/g, "<br />");
+  placeholders.forEach(([token, replacement]) => {
+    html = html.replaceAll(token, replacement);
+  });
+  return html;
+}
 function renderIcon(name) {
   const icons = {
     home: `
@@ -1162,6 +1261,9 @@ function render(options = {}) {
   });
   document.querySelectorAll("[data-save-widget]").forEach((button) => {
     button.addEventListener("click", saveWidgetFromMessage);
+  });
+  document.querySelectorAll("[data-explain-answer]").forEach((button) => {
+    button.addEventListener("click", explainAnswer);
   });
   document.querySelectorAll("[data-close-save-widget-dialog]").forEach((button) => {
     button.addEventListener("click", closeSaveWidgetDialog);
@@ -2473,6 +2575,7 @@ function renderMessage(message) {
   const dataTable = message.status === "ok" && message.dataOpen ? renderDataTable(rows) : "";
   const mockWarning = message.status === "ok" ? renderMockWarning(message.response?.metadata) : "";
   const saveNotice = renderSaveNotice(message);
+  const explanation = renderAnswerExplanation(message);
   const progress = message.mode === "analysis" ? renderAnalysisProgress(message) : "";
   const analysisReply = message.status === "waiting" ? renderAnalysisReply(message) : "";
   return `
@@ -2486,12 +2589,13 @@ function renderMessage(message) {
       </div>
       <div class="answer">
         <span>Answer</span>
-        <p>${escapeHtml(answer)}</p>
+        ${renderMarkdown(answer)}
       </div>
       ${progress}
       ${analysisReply}
       ${mockWarning}
       ${saveNotice}
+      ${explanation}
       ${meta}
       ${dataTable}
     </article>`;
@@ -2500,6 +2604,8 @@ function renderMessageActions(message) {
   const saveDialogOpen = state.saveWidgetDialogOpen && state.saveWidgetMessageId === message.id;
   const saveDisabled = state.pending || saveDialogOpen || message.saveStatus === "saving" || message.saveStatus === "saved";
   const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : saveDialogOpen || message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
+  const explainDisabled = state.pending || message.explanationStatus === "loading";
+  const explainTitle = message.explanationStatus === "ok" ? "Refresh explanation" : message.explanationStatus === "loading" ? "Explaining answer" : "Explain answer";
   return `
     <div class="message-actions">
       <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
@@ -2516,9 +2622,20 @@ function renderMessageActions(message) {
             <path d="M7 3v5h8" />
           </svg>
         </button>` : ""}
+      ${canExplainAnswer(message) ? `
+        <button class="explain-answer-button" type="button" data-explain-answer="${message.id}" aria-label="Explain answer" title="${escapeHtml(explainTitle)}" ${explainDisabled ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.6 9a2.7 2.7 0 0 1 4.8 1.7c0 1.8-2.4 2.2-2.4 3.8" />
+            <path d="M12 18h.01" />
+          </svg>
+        </button>` : ""}
     </div>`;
 }
 function canSaveWidget(message) {
+  return message.status === "ok" && Boolean(message.response?.sql?.trim());
+}
+function canExplainAnswer(message) {
   return message.status === "ok" && Boolean(message.response?.sql?.trim());
 }
 function renderSaveNotice(message) {
@@ -2527,6 +2644,22 @@ function renderSaveNotice(message) {
   }
   if (message.saveStatus === "error") {
     return `<div class="save-notice error" role="alert">${escapeHtml(message.saveError || "Widget could not be saved.")}</div>`;
+  }
+  return "";
+}
+function renderAnswerExplanation(message) {
+  if (message.explanationStatus === "loading") {
+    return `<div class="answer-explanation loading" role="status">Preparing explanation...</div>`;
+  }
+  if (message.explanationStatus === "error") {
+    return `<div class="answer-explanation error" role="alert">${escapeHtml(message.explanationError || "Explanation could not be prepared.")}</div>`;
+  }
+  if (message.explanationStatus === "ok" && message.explanation) {
+    return `
+      <section class="answer-explanation" aria-label="Answer explanation">
+        <span>Explanation</span>
+        ${renderMarkdown(message.explanation)}
+      </section>`;
   }
   return "";
 }
@@ -2539,15 +2672,15 @@ function renderAnalysisProgress(message) {
     <details class="analysis-log" data-analysis-progress="${message.id}" ${message.progressOpen ? "open" : ""}>
       <summary>
         <span>Analysis</span>
-        <strong>${escapeHtml(latest.title)}</strong>
-        ${latest.detail ? `<small>${escapeHtml(latest.detail)}</small>` : ""}
+        <strong>${renderInlineMarkdown(latest.title)}</strong>
+        ${latest.detail ? `<small>${renderInlineMarkdown(latest.detail)}</small>` : ""}
       </summary>
       <ol class="analysis-progress" aria-label="Analysis progress">
         ${message.progress.map((update, index) => `
           <li class="${index === message.progress.length - 1 ? "active" : "done"}">
             <div>
-              <p>${escapeHtml(update.title)}</p>
-              ${update.detail ? `<p class="progress-detail">${escapeHtml(update.detail)}</p>` : ""}
+              <p>${renderInlineMarkdown(update.title)}</p>
+              ${update.detail ? `<div class="progress-detail">${renderMarkdown(update.detail)}</div>` : ""}
               ${renderProgressDecisions(update.items)}
             </div>
           </li>`).join("")}
@@ -2557,7 +2690,7 @@ function renderAnalysisProgress(message) {
 function renderAnalysisReply(message) {
   return `
     <form class="analysis-reply" data-analysis-reply-form="${message.id}">
-      <div class="analysis-reply-question">${escapeHtml(message.userQuestion || "GAARD needs a clarification.")}</div>
+      <div class="analysis-reply-question">${renderMarkdown(message.userQuestion || "GAARD needs a clarification.")}</div>
       <label>
         <span>Your answer</span>
         <textarea name="reply" rows="2" placeholder="Answer GAARD" ${state.pending ? "disabled" : ""}></textarea>
@@ -2570,7 +2703,7 @@ function renderProgressDecisions(decisions) {
   if (!visible.length) {
     return "";
   }
-  return `<ul>${visible.map((decision) => `<li>${escapeHtml(decision)}</li>`).join("")}</ul>`;
+  return `<ul>${visible.map((decision) => `<li>${renderInlineMarkdown(decision)}</li>`).join("")}</ul>`;
 }
 function renderMockWarning(metadata) {
   const mockModes = [
@@ -2662,6 +2795,51 @@ function retryQuestion(event) {
   refreshedInput.value = message.question;
   refreshedInput.focus();
   refreshedInput.setSelectionRange(refreshedInput.value.length, refreshedInput.value.length);
+}
+async function explainAnswer(event) {
+  const id = Number(event.currentTarget.dataset.explainAnswer);
+  const message = state.messages.find((item) => item.id === id);
+  const responsePayload = message?.response || {};
+  const sql = responsePayload.sql?.trim() || "";
+  if (!message || !sql || message.explanationStatus === "loading") {
+    return;
+  }
+  const rows = getRows(responsePayload);
+  message.explanationStatus = "loading";
+  message.explanationError = "";
+  render();
+  try {
+    const response = await fetch("/api/query/explain", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders()
+      },
+      body: JSON.stringify({
+        question: message.question,
+        sql,
+        answer: responsePayload.answer || "",
+        rows,
+        columns: getColumns(rows),
+        metadata: responsePayload.metadata || {},
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+    }
+    message.explanationStatus = "ok";
+    message.explanation = String(payload.explanation || "").trim();
+    message.explanationMetadata = payload.metadata || {};
+  } catch (error) {
+    message.explanationStatus = "error";
+    message.explanationError = error.message || "Explanation could not be prepared.";
+    reportApiError(error, "Explanation could not be prepared.");
+  } finally {
+    const latestMessage = state.messages[state.messages.length - 1];
+    render({ scrollToLatest: latestMessage?.id === message.id });
+  }
 }
 async function saveWidgetFromMessage(event) {
   const id = Number(event.currentTarget.dataset.saveWidget);
@@ -2997,6 +3175,10 @@ async function submitQuestion(event) {
     dataOpen: false,
     saveStatus: "idle",
     saveError: "",
+    explanationStatus: "idle",
+    explanation: "",
+    explanationError: "",
+    explanationMetadata: {},
     progress: [],
     progressOpen: false,
     processingStage: "Processing query..",
