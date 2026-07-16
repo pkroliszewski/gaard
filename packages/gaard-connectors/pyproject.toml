@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-connectors"
-version = "2.0.7"
+version = "0.2.8"
 description = "Database connectors for GAARD based on SQLAlchemy"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "gaard-core==2.0.7",
-    "gaard-plugin-api>=2.0.7,<2.1.0",
+    "gaard-core==0.2.8",
+    "gaard-plugin-api>=0.2.8,<0.3.0",
     "sqlalchemy>=2.0.0",
 ]
 

@@ -1,11 +1,15 @@
-### v2.0.7 - Prompt visibility and client metric management
+### v0.2.8 - Identity privileges and client datasource access
+- Fixed identity-privileges datasource filtering for built-in users so admin-granted datasource access is visible in the client and query execution uses the same identity key.
+- Bumped all public packages and local public package references to `0.2.8` for the next PyPI release.
+
+### v0.2.7 - Prompt visibility and client metric management
 - Added the conversation-context classification prompt to the admin prompt configuration so follow-up/new-topic classification is visible and editable like the other LLM prompts.
 - Reworked conversation-context classification to use explicit recent-turn context when deciding whether the current question is a logical continuation.
 - Added saved metric deletion in the client Metrics view, including a confirmation warning that deleting a metric also removes it from all dashboards.
 - Added backend cleanup for deleted saved metrics so dashboard widgets referencing the removed metric are deleted for the same owner.
 - Improved the client Metrics view with datasource-grouped sections, wider metric cards, two-line metric names, and full-name title hints.
 - Resolved `default` datasource labels in the Metrics view to the active datasource name, displayed as `Datasource Name (default)`.
-- Bumped all public packages, the public example connector, and local public package references to `2.0.7` for the next PyPI release.
+- Bumped all public packages, the public example connector, and local public package references to `0.2.7` for the PyPI release.
 
 ### v.0.2.6 - Public package release
 - Bumped all public packages and local public package references to `0.2.6` for the next PyPI release.

@@ -23,7 +23,7 @@ DEFAULT_BACKEND_URL = "http://localhost:8000"
 
 app = FastAPI(
     title="GAARD Client",
-    version="2.0.7",
+    version="0.2.8",
     description="Community client for asking governed natural-language questions.",
 )
 
