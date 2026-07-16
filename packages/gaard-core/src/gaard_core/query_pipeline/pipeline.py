@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable
 from typing import Protocol
@@ -15,6 +16,9 @@ from gaard_core.query_pipeline.models import (
 from gaard_core.result_classifier.mock_classifier import MockResultClassifier
 from gaard_core.result_interpreter.mock_interpreter import MockResultInterpreter
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
+
+
+logger = logging.getLogger(__name__)
 
 
 class SqlGenerator(Protocol):
@@ -75,11 +79,27 @@ class QueryPipeline:
                 error_detail=exc.message,
             ) from exc
 
+        logger.info(
+            "SQL pipeline generated query: datasource_id=%r datasource_ids=%r sql=%r "
+            "validator=%s executor=%s",
+            request.datasource_id,
+            request.datasource_ids,
+            generated_sql.sql,
+            type(self.sql_validator).__name__,
+            type(self.executor).__name__,
+        )
         self.sql_validator.validate(generated_sql.sql)
+        logger.info("SQL pipeline validation passed: sql=%r", generated_sql.sql)
 
         if on_stage is not None:
             on_stage("waiting_on_data_server")
         result = self.executor.execute(generated_sql.sql)
+        logger.info(
+            "SQL pipeline execution completed: sql=%r columns=%r row_count=%s",
+            generated_sql.sql,
+            result.columns,
+            len(result.rows),
+        )
         if not request.interpret:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
             return QueryResponse(

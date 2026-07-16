@@ -1317,11 +1317,12 @@ function renderOverviewWidgetSettingsForm(widget) {
         <label>Datasource<select name="datasource_key">${renderOverviewDatasourceOptions(widget?.datasource_key || "metadata-db")}</select></label>
       </div>
       <label>Result mode<select name="result_mode">${renderOverviewWidgetResultModeOptions(resultMode)}</select></label>
-      <label>Tags<div class="widget-tags-input">${assignedUsers.map((username) => `<span class="widget-user-tag" data-widget-user-assignment="${escapeHtml(username)}">User: ${escapeHtml(username)}<button type="button" data-remove-widget-user="${escapeHtml(username)}" aria-label="Remove ${escapeHtml(username)}" title="Remove user assignment">×</button><input type="hidden" name="assigned_usernames" value="${escapeHtml(username)}" /></span>`).join("")}<input name="tags" value="${escapeHtml(editableTags)}" placeholder="public, finance, user:username" /></div><span class="muted">Use <code>user:username</code> to assign a known user; otherwise it remains a regular tag.</span></label>
+      <div class="widget-tags-field"><label for="overview-widget-tags">Tags</label><div class="widget-tags-input">${assignedUsers.map((username) => `<span class="widget-user-tag" data-widget-user-assignment="${escapeHtml(username)}">User: ${escapeHtml(username)}<button type="button" data-remove-widget-user="${escapeHtml(username)}" aria-label="Remove ${escapeHtml(username)}" title="Remove user assignment">×</button><input type="hidden" name="assigned_usernames" value="${escapeHtml(username)}" /></span>`).join("")}<input id="overview-widget-tags" name="tags" value="${escapeHtml(editableTags)}" placeholder="public, finance, user:username" /></div><span class="muted">Use <code>user:username</code> to assign a known user; otherwise it remains a regular tag.</span></div>
       <label class="inline-check"><input name="active" type="checkbox" ${widget?.active || creating ? "checked" : ""} /> Enabled</label>
       <label>Question<textarea name="question">${escapeHtml(widget?.question || "")}</textarea></label>
-      <label>Generated SQL<textarea class="textarea-small" readonly>${escapeHtml(widget?.sql || "")}</textarea></label>
+      <label>Generated SQL<textarea class="textarea-small" name="sql" readonly>${escapeHtml(widget?.sql || "")}</textarea></label>
       <div class="form-actions">
+        <button type="button" data-generate-overview-widget-sql>Generate SQL</button>
         <button class="primary" type="submit">${creating ? "Create and refresh" : "Save and refresh"}</button>
       </div>
     </form>`;
@@ -1948,6 +1949,7 @@ function attachSectionHandlers() {
     button.addEventListener("click", removeOverviewWidgetFromDashboard);
   });
   document.querySelector("#overview-widget-settings-form")?.addEventListener("submit", saveOverviewWidgetSettings);
+  document.querySelector("[data-generate-overview-widget-sql]")?.addEventListener("click", generateOverviewWidgetSql);
   document.querySelectorAll("[data-remove-widget-user]").forEach((button) => {
     button.addEventListener("click", () => {
       button.closest("[data-widget-user-assignment]")?.remove();
@@ -2485,6 +2487,36 @@ async function saveOverviewWidgetSettings(event) {
     }
   } catch (error) {
     setMessage("error", error.message);
+  }
+}
+async function generateOverviewWidgetSql(event) {
+  const formElement = event.currentTarget.closest("#overview-widget-settings-form");
+  if (!formElement) return;
+  const form = new FormData(formElement);
+  const widgetKey = String(form.get("widget_key") || "").trim();
+  const question = String(form.get("question") || "").trim();
+  if (!widgetKey || !question) {
+    setMessage("error", "Widget key and question are required to generate SQL.");
+    return;
+  }
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const response = await api("/api/v1/admin/overview/widgets/generate-sql", {
+      method: "POST",
+      body: JSON.stringify({
+        widget_key: widgetKey,
+        datasource_key: form.get("datasource_key"),
+        question
+      })
+    });
+    const sqlField = formElement.querySelector("[name=sql]");
+    if (sqlField) sqlField.value = response.sql || "";
+    setMessage("success", "SQL generated. Save the widget to persist it.");
+  } catch (error) {
+    setMessage("error", error.message);
+  } finally {
+    button.disabled = false;
   }
 }
 async function updateBusinessLogicSuggestion(event) {

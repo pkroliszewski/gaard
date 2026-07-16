@@ -117,6 +117,7 @@ def ensure_admin_user_schema(engine: Engine) -> None:
     additions = {
         "display_name": "ALTER TABLE admin_users ADD COLUMN display_name VARCHAR(255) NOT NULL DEFAULT ''",
         "auth_provider": "ALTER TABLE admin_users ADD COLUMN auth_provider VARCHAR(255) NOT NULL DEFAULT 'local'",
+        "is_provisioned": "ALTER TABLE admin_users ADD COLUMN is_provisioned BOOLEAN NOT NULL DEFAULT 0",
     }
     with engine.begin() as connection:
         for name, sql in additions.items():
@@ -176,6 +177,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
             auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
             password_hash TEXT NOT NULL,
             must_change_password BOOLEAN NOT NULL,
+            is_provisioned BOOLEAN NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             CONSTRAINT uq_admin_users_auth_provider_username UNIQUE (auth_provider, username)
@@ -183,7 +185,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
     """))
     connection.execute(text("""
         INSERT INTO admin_users__migrated
-            (id, username, display_name, auth_provider, password_hash, must_change_password, created_at, updated_at)
+            (id, username, display_name, auth_provider, password_hash, must_change_password, is_provisioned, created_at, updated_at)
         SELECT
             id,
             CASE WHEN password_hash = 'external$disabled' AND instr(username, ':') > 0
@@ -192,7 +194,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
             display_name,
             CASE WHEN auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0
                 THEN substr(username, 1, instr(username, ':') - 1) ELSE auth_provider END,
-            password_hash, must_change_password, created_at, updated_at
+            password_hash, must_change_password, 0, created_at, updated_at
         FROM admin_users
     """))
     connection.execute(text("DROP TABLE admin_users"))

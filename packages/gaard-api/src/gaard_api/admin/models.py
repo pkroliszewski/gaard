@@ -37,6 +37,9 @@ class AdminUser(Base):
     auth_provider: Mapped[str] = mapped_column(String(255), index=True, default="local")
     password_hash: Mapped[str] = mapped_column(Text)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Provider refreshes create provisional records so they can be assigned before login.
+    # The provider may safely remove only records which remain provisional.
+    is_provisioned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
