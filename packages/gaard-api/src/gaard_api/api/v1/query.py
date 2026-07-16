@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import queue
 import threading
@@ -90,6 +91,7 @@ from gaard_api.query_hooks import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 READ_ONLY_REFUSAL_ANSWER = (
     "Nie mogę tego zrobić. GAARD obsługuje tylko odczyt danych i nie wykonuje "
@@ -390,6 +392,22 @@ def create_sql_generator(
                     datasource_contexts
                 )
                 dialect_plan = dialect_plan or resolve_sql_dialect_plan(datasource_contexts)
+                logger.info(
+                    "Creating LLM SQL generator: datasources=%r dialect=%r parser_dialect=%r "
+                    "schema_context=%r",
+                    [
+                        {
+                            "id": connector.id,
+                            "key": connector.connector_key,
+                            "database_type": connector.database_type,
+                            "sql_dialect": connector.sql_dialect,
+                        }
+                        for connector, _cache in datasource_contexts
+                    ],
+                    dialect_plan.prompt_dialect,
+                    dialect_plan.sqlglot_read_dialect,
+                    formatted_schema,
+                )
                 return LlmSqlGenerator(
                     client=create_llm_client(llm_config),
                     model=llm_config.model,
@@ -793,6 +811,24 @@ def run_sql_request(
     extra_metadata = extra_metadata or {}
     datasource_contexts = normalize_datasource_contexts(datasource_context)
     dialect_plan = resolve_sql_dialect_plan(datasource_contexts)
+    logger.info(
+        "Starting SQL request: question=%r datasource_id=%r datasource_ids=%r "
+        "resolved_datasources=%r prompt_dialect=%r parser_dialect=%r",
+        effective_request.question,
+        effective_request.datasource_id,
+        effective_request.datasource_ids,
+        [
+            {
+                "id": connector.id,
+                "key": connector.connector_key,
+                "database_type": connector.database_type,
+                "sql_dialect": connector.sql_dialect,
+            }
+            for connector, _cache in datasource_contexts
+        ],
+        dialect_plan.prompt_dialect,
+        dialect_plan.sqlglot_read_dialect,
+    )
     extra_metadata = {
         **extra_metadata,
         "llm_sql_language": dialect_plan.prompt_dialect,
@@ -984,6 +1020,24 @@ def effective_query_request(
     contexts = get_query_hook_registry().filter_datasource_contexts(
         principal,
         effective_context.datasource_contexts,
+    )
+    logger.info(
+        "Resolved query datasource context: requested_datasource_id=%r "
+        "requested_datasource_ids=%r effective_datasource_id=%r "
+        "effective_datasource_ids=%r resolved_datasources=%r",
+        request.datasource_id,
+        request.datasource_ids,
+        effective_context.request.datasource_id,
+        effective_context.request.datasource_ids,
+        [
+            {
+                "id": connector.id,
+                "key": connector.connector_key,
+                "database_type": connector.database_type,
+                "sql_dialect": connector.sql_dialect,
+            }
+            for connector, _cache in contexts
+        ],
     )
     license_service.ensure_datasource_contexts_allowed(contexts)
     return effective_context.request, contexts

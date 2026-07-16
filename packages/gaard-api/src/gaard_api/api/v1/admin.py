@@ -245,6 +245,7 @@ class OverviewWidgetUpdateRequest(BaseModel):
     widget_type: str = Field(pattern=r"^(scalar|timeseries|table)$")
     datasource_key: str = Field(min_length=1, max_length=255)
     question: str = Field(min_length=1)
+    sql: str | None = None
     result_mode: str = Field(
         default=OVERVIEW_WIDGET_RESULT_DATA, pattern=r"^(data|interpretation)$"
     )
@@ -262,6 +263,12 @@ class OverviewWidgetCreateRequest(OverviewWidgetUpdateRequest):
     grid_width: int | None = Field(default=None, ge=1, le=12)
     grid_height: int | None = Field(default=None, ge=2, le=24)
     active: bool = True
+
+
+class OverviewWidgetSqlGenerationRequest(BaseModel):
+    widget_key: str = Field(min_length=1, max_length=255, pattern=r"^[a-zA-Z0-9_-]+$")
+    datasource_key: str = Field(min_length=1, max_length=255)
+    question: str = Field(min_length=1)
 
 
 class OverviewWidgetStateRequest(BaseModel):
@@ -681,7 +688,6 @@ def resolve_overview_widget_tags_and_assignments(
     for tag in tags:
         if tag.lower().startswith("user:") and tag[5:].strip():
             username = tag[5:].strip()
-            print(username)
             if session.scalar(select(AdminUser.id).where(AdminUser.username == username)):
                 requested_usernames.append(username)
                 continue
@@ -1421,6 +1427,7 @@ def get_or_create_external_auth_user(
     )
     if user is not None:
         user.must_change_password = False
+        user.is_provisioned = False
         return user
 
     user = AdminUser(
@@ -1428,6 +1435,7 @@ def get_or_create_external_auth_user(
         password_hash="external$disabled",
         must_change_password=False,
         auth_provider=provider_id,
+        is_provisioned=False,
     )
     session.add(user)
     session.flush()
@@ -1715,7 +1723,7 @@ def create_overview_widget(
     next_result_mode = normalize_overview_widget_result_mode(request.result_mode)
 
     try:
-        generated_sql = generate_overview_widget_sql(
+        generated_sql = request.sql or generate_overview_widget_sql(
             session=session,
             connector=datasource,
             query_request=query_request,
@@ -1776,7 +1784,7 @@ def create_overview_widget(
             session,
             widget,
             ["public", *(request.tags or [])],
-            [user.username, *(request.assigned_usernames or [])],
+            request.assigned_usernames or [],
         ),
     )
     record_admin_audit(
@@ -1917,6 +1925,41 @@ def create_overview_widget_from_query(
     }
 
 
+@router.post("/overview/widgets/generate-sql")
+def generate_overview_widget_sql_preview(
+    request: OverviewWidgetSqlGenerationRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    datasource = get_datasource_connector_by_key(session, request.datasource_key)
+
+    if datasource is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Datasource does not exist.",
+        )
+
+    query_request = build_overview_widget_query_request(
+        connector=datasource,
+        widget_key=request.widget_key,
+        question=request.question,
+    )
+    try:
+        generated_sql = generate_overview_widget_sql(
+            session=session,
+            connector=datasource,
+            query_request=query_request,
+            actor=user.username,
+        )
+    except (ConfigurationError, LlmProviderError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {"sql": generated_sql}
+
+
 @router.post("/overview/widgets/title-suggestion")
 def suggest_overview_widget_title(
     request: OverviewWidgetTitleSuggestionRequest,
@@ -1962,7 +2005,8 @@ def update_overview_widget(
         widget_key=widget.widget_key,
         question=request.question,
     )
-    generated_sql = ""
+    question_changed = request.question != widget.question
+    generated_sql = widget.sql
     next_position = request.position if request.position is not None else widget.position
     next_grid_width = normalize_overview_widget_grid_width(
         request.widget_type,
@@ -1976,12 +2020,13 @@ def update_overview_widget(
     next_active = request.active if request.active is not None else widget.active
 
     try:
-        generated_sql = generate_overview_widget_sql(
-            session=session,
-            connector=datasource,
-            query_request=query_request,
-            actor=user.username,
-        )
+        if question_changed:
+            generated_sql = request.sql or generate_overview_widget_sql(
+                session=session,
+                connector=datasource,
+                query_request=query_request,
+                actor=user.username,
+            )
         probe_widget = OverviewWidget(
             widget_key=widget.widget_key,
             label=request.label,

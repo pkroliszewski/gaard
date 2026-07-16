@@ -1545,6 +1545,115 @@ def test_overview_widget_can_be_updated(admin_client: TestClient) -> None:
     assert audit_items[0]["metadata"]["widget_key"] == "prompts_count"
 
 
+def test_admin_created_overview_widget_is_not_implicitly_assigned_to_creator(
+    admin_client: TestClient,
+) -> None:
+    headers = auth_headers(admin_client)
+
+    response = admin_client.post(
+        "/api/v1/admin/overview/widgets",
+        headers=headers,
+        json={
+            "widget_key": "admin_created_widget",
+            "label": "Admin-created widget",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "Return one value for the prompt template count.",
+        },
+    )
+
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["assigned_usernames"] == []
+    assert item["tags"] == ["public"]
+
+
+def test_overview_widget_save_only_generates_sql_when_question_changes(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    headers = auth_headers(admin_client)
+    create_response = admin_client.post(
+        "/api/v1/admin/overview/widgets",
+        headers=headers,
+        json={
+            "widget_key": "save_sql_widget",
+            "label": "Save SQL widget",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "Return one value for the prompt template count.",
+        },
+    )
+    assert create_response.status_code == 200
+
+    generated_questions: list[str] = []
+
+    def generate_sql(*args, **kwargs) -> str:
+        generated_questions.append(kwargs["query_request"].question)
+        return "SELECT 1 AS value"
+
+    monkeypatch.setattr(admin_api, "generate_overview_widget_sql", generate_sql)
+
+    unchanged_response = admin_client.put(
+        "/api/v1/admin/overview/widgets/save_sql_widget",
+        headers=headers,
+        json={
+            "label": "Renamed save SQL widget",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "Return one value for the prompt template count.",
+        },
+    )
+    assert unchanged_response.status_code == 200
+    assert generated_questions == []
+
+    changed_response = admin_client.put(
+        "/api/v1/admin/overview/widgets/save_sql_widget",
+        headers=headers,
+        json={
+            "label": "Renamed save SQL widget",
+            "widget_type": "scalar",
+            "datasource_key": "metadata-db",
+            "question": "Return one new value.",
+        },
+    )
+    assert changed_response.status_code == 200
+    assert generated_questions == ["Return one new value."]
+
+
+def test_overview_widget_sql_can_be_generated_without_saving(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    headers = auth_headers(admin_client)
+    monkeypatch.setattr(
+        admin_api,
+        "generate_overview_widget_sql",
+        lambda **_kwargs: "SELECT 1 AS value",
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/overview/widgets/generate-sql",
+        headers=headers,
+        json={
+            "widget_key": "preview_sql_widget",
+            "datasource_key": "metadata-db",
+            "question": "Return one value.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"sql": "SELECT 1 AS value"}
+    with create_session() as session:
+        assert session.scalar(
+            select(OverviewWidget).where(OverviewWidget.widget_key == "preview_sql_widget")
+        ) is None
+
+
 def test_overview_widget_can_use_table_type(admin_client: TestClient) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)

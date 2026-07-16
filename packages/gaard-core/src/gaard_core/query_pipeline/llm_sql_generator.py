@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Protocol
 
 from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromptRequest
@@ -6,6 +7,9 @@ from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import GeneratedSql, QueryRequest
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
+
+
+logger = logging.getLogger(__name__)
 
 
 class SqlPromptCompiler(Protocol):
@@ -42,6 +46,20 @@ class LlmSqlGenerator:
             )
         )
 
+        # This is deliberately logged as separate fields so a failed text-to-SQL
+        # request can be reconstructed from the service log without guessing
+        # which dialect or schema context reached the model.
+        logger.info(
+            "SQL generation request: model=%r dialect=%r max_rows=%s question=%r "
+            "system_prompt=%r user_prompt=%r",
+            self.model,
+            self.dialect,
+            self.max_rows,
+            request.question,
+            compiled_prompt.system_prompt,
+            compiled_prompt.user_prompt,
+        )
+
         response = self.client.create_chat_completion(
             ChatCompletionRequest(
                 model=self.model,
@@ -61,6 +79,13 @@ class LlmSqlGenerator:
         )
 
         sql = self._clean_sql(response.content)
+
+        logger.info(
+            "SQL generation response: model=%r raw_response=%r cleaned_sql=%r",
+            self.model,
+            response.content,
+            sql,
+        )
 
         return GeneratedSql(
             sql=sql,
