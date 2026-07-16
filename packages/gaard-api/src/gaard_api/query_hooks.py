@@ -13,6 +13,7 @@ from gaard_core.errors import ConfigurationError, QueryExecutionError
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 
 from gaard_api.admin.models import DatasourceConnector, DatasourceSchemaCache
+from gaard_api.auth_dependencies import identity_id_for_principal
 from gaard_api.core.settings import settings
 
 
@@ -274,9 +275,7 @@ def normalize_datasource_contexts(
 
 
 def principal_identity_id(principal: Any | None) -> str | None:
-    if principal is None:
-        return None
-    return f"{principal.session.auth_provider}:{principal.session.username}"
+    return identity_id_for_principal(principal)
 
 
 def selected_table_names(cache: DatasourceSchemaCache) -> list[str]:

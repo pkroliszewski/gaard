@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -2004,6 +2005,59 @@ def test_client_datasource_selection_is_per_user_and_requires_available_sources(
         json={"datasource_ids": ["metadata-db"]},
     )
     assert unavailable_response.status_code == 403
+
+
+def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
+    admin_client: TestClient,
+    monkeypatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+    from gaard_api.query_hooks import principal_identity_id as query_principal_identity_id
+
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: True)
+    headers = user_headers("client-user")
+
+    with create_session() as session:
+        user = session.scalar(select(AdminUser).where(AdminUser.username == "client-user"))
+        connector = session.scalar(
+            select(DatasourceConnector).where(DatasourceConnector.connector_key == "default")
+        )
+        assert user is not None
+        assert connector is not None
+        user_id = user.id
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS identity_privilege_datasource_permissions (
+                id INTEGER PRIMARY KEY,
+                connector_id INTEGER,
+                identity_id VARCHAR(512),
+                allowed BOOLEAN
+            )
+        """))
+        session.execute(
+            text("""
+                INSERT INTO identity_privilege_datasource_permissions
+                    (connector_id, identity_id, allowed)
+                VALUES (:connector_id, :identity_id, 1)
+            """),
+            {
+                "connector_id": connector.id,
+                "identity_id": f"local:{user_id}",
+            },
+        )
+        session.commit()
+
+    response = admin_client.get(
+        "/api/v1/admin/datasources?available_only=true",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert [item["connector_key"] for item in response.json()["items"]] == ["default"]
+    principal = SimpleNamespace(
+        session=SimpleNamespace(auth_provider="local", username="client-user"),
+        user=SimpleNamespace(id=user_id, username="client-user", auth_provider="local"),
+    )
+    assert query_principal_identity_id(principal) == f"local:{user_id}"
 
 
 def test_deactivating_datasource_removes_it_from_client_selections(

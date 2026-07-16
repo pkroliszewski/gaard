@@ -1134,8 +1134,8 @@ function renderDatasourcesView() {
         </header>
         ${state.datasourceError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.datasourceError)}</div>` : ""}
         ${state.datasourcesLoading ? `<div class="datasource-empty">Loading data sources...</div>` : ""}
-        ${!state.datasourcesLoading && !state.token ? `<div class="datasource-empty">Log in to manage Excel workbooks.</div>` : ""}
-        ${!state.datasourcesLoading && state.token && !visibleSources.length ? `<div class="datasource-empty">No Excel workbooks have been added yet.</div>` : ""}
+        ${!state.datasourcesLoading && !state.token ? `<div class="datasource-empty">Log in to manage datasources.</div>` : ""}
+        ${!state.datasourcesLoading && state.token && !visibleSources.length ? `<div class="datasource-empty">No Datasources have been enabled.</div>` : ""}
         ${!state.datasourcesLoading && visibleSources.length ? `
           <div class="datasource-table">
             ${visibleSources.map(renderDatasourceRow).join("")}

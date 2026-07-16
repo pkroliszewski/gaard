@@ -110,6 +110,10 @@ from gaard_api.admin.services import (
     update_schema_table_settings,
 )
 from gaard_api.api.v1.schema import get_schema_cache_key
+from gaard_api.auth_dependencies import (
+    identity_id_for_principal,
+    identity_ids_for_principal,
+)
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
 from gaard_api.extensions import (
@@ -389,7 +393,7 @@ def identity_privileges_are_active() -> bool:
 
 
 def principal_identity_id(principal: AuthenticatedSession) -> str:
-    return f"{principal.session.auth_provider}:{principal.session.username}"
+    return identity_id_for_principal(principal) or ""
 
 
 def filter_datasources_for_identity_privileges(
@@ -401,11 +405,16 @@ def filter_datasources_for_identity_privileges(
     if not identity_privileges_are_active():
         return connectors
 
+    identity_ids = identity_ids_for_principal(principal)
+    if not identity_ids:
+        return []
+
     allowed_ids = set(
         session.scalars(
             select(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.connector_id).where(
-                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id
-                == principal_identity_id(principal),
+                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id.in_(
+                    identity_ids,
+                ),
                 IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.allowed.is_(True),
             )
         )

@@ -18,6 +18,56 @@ class AuthenticatedSession:
     user: AdminUser
 
 
+def identity_id_for_principal(principal: object | None) -> str | None:
+    if principal is None:
+        return None
+
+    principal_session = getattr(principal, "session", None)
+    principal_user = getattr(principal, "user", None)
+    auth_provider = str(
+        getattr(principal_session, "auth_provider", "")
+        or getattr(principal_user, "auth_provider", "")
+        or ""
+    )
+    username = str(
+        getattr(principal_session, "username", "")
+        or getattr(principal_user, "username", "")
+        or ""
+    )
+
+    if auth_provider == "local":
+        user_id = getattr(principal_user, "id", None)
+        if user_id is not None:
+            return f"local:{user_id}"
+
+    if auth_provider and username:
+        return f"{auth_provider}:{username}"
+    return None
+
+
+def identity_ids_for_principal(principal: object | None) -> list[str]:
+    primary = identity_id_for_principal(principal)
+    ids = [primary] if primary is not None else []
+
+    principal_session = getattr(principal, "session", None)
+    principal_user = getattr(principal, "user", None)
+    auth_provider = str(
+        getattr(principal_session, "auth_provider", "")
+        or getattr(principal_user, "auth_provider", "")
+        or ""
+    )
+    username = str(
+        getattr(principal_session, "username", "")
+        or getattr(principal_user, "username", "")
+        or ""
+    )
+    legacy_username_id = f"{auth_provider}:{username}" if auth_provider and username else ""
+    if legacy_username_id and legacy_username_id not in ids:
+        ids.append(legacy_username_id)
+
+    return ids
+
+
 def get_authorization_token(authorization: str | None) -> str:
     if authorization is None:
         raise HTTPException(
