@@ -1786,6 +1786,11 @@ button.primary {
   cursor: pointer;
 }
 
+.dashboard-edit-mode-button:not(.saving) {
+  width: 36px;
+  padding: 0;
+}
+
 .dashboard-edit-mode-button:hover,
 .dashboard-edit-mode-button:focus-visible {
   border-color: var(--accent);

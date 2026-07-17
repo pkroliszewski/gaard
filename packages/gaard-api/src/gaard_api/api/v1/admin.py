@@ -34,10 +34,15 @@ from sqlglot import expressions as exp
 
 from gaard_api.admin.database import create_session, get_session
 from gaard_api.admin.models import (
+    AnalysisSessionRecord,
     AdminSession,
     AdminUser,
     BusinessLogicSuggestion,
+    Conversation,
+    ConversationTurn,
     Dashboard,
+    DashboardUserState,
+    DashboardWidget,
     DatasourceConnector,
     DatasourceSchemaCache,
     OverviewWidget,
@@ -49,6 +54,7 @@ from gaard_api.admin.models import (
 )
 from gaard_api.admin.security import (
     create_session_token,
+    generate_temporary_password,
     hash_password,
     hash_token,
     verify_password,
@@ -160,6 +166,11 @@ class IdentityUpdateRequest(BaseModel):
     display_name: str | None = None
     username: str | None = Field(default=None, min_length=1, max_length=255)
     new_password: str | None = Field(default=None, min_length=8)
+
+
+class IdentityCreateRequest(BaseModel):
+    display_name: str = Field(default="", max_length=255)
+    username: str = Field(min_length=1, max_length=255)
 
 
 class MeResponse(BaseModel):
@@ -1310,6 +1321,11 @@ def get_current_api_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated user does not have API access.",
         )
+    if principal.user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change is required before using the application.",
+        )
     return principal
 
 
@@ -1338,7 +1354,12 @@ def get_current_admin(
 
 @router.post("/auth/login", response_model=LoginResponse)
 def login(request: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
-    user = session.scalar(select(AdminUser).where(AdminUser.username == request.username))
+    user = session.scalar(
+        select(AdminUser).where(
+            AdminUser.username == request.username,
+            AdminUser.auth_provider == "local",
+        )
+    )
 
     if user is not None and verify_password(request.password, user.password_hash):
         token = create_session_token()
@@ -1347,7 +1368,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
                 token_hash=hash_token(token),
                 user_id=user.id,
                 username=user.username,
-                role="admin",
+                role=user.role,
                 auth_provider="local",
             )
         )
@@ -1364,7 +1385,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
             token=token,
             username=user.username,
             must_change_password=user.must_change_password,
-            role="admin",
+            role=user.role,
         )
 
     identity = None
@@ -1456,10 +1477,12 @@ def get_me(
 @router.post("/auth/change-password", response_model=MeResponse)
 def change_password(
     request: ChangePasswordRequest,
-    user: AdminUser = Depends(get_current_admin_allow_password_change),
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
     session: Session = Depends(get_session),
 ) -> MeResponse:
-    user = session.merge(user)
+    user = session.get(AdminUser, principal.user.id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin session.")
 
     if not verify_password(request.current_password, user.password_hash):
         raise HTTPException(
@@ -1478,7 +1501,11 @@ def change_password(
     )
     session.commit()
 
-    return MeResponse(username=user.username, must_change_password=False)
+    return MeResponse(
+        username=user.username,
+        must_change_password=False,
+        role=principal.session.role,
+    )
 
 
 @router.get("/identities")
@@ -1505,7 +1532,7 @@ def list_identities(
                 "id": f"local:{item.id}",
                 "username": item.username,
                 "name": item.display_name or item.username,
-                "role": "admin",
+                "role": item.role,
                 "provider": "Built-in",
                 "provider_id": "local",
                 "editable_name": True,
@@ -1550,6 +1577,115 @@ def mark_overshadowed_identities(items: list[dict[str, Any]]) -> None:
             }
             continue
         seen[key] = item
+
+
+def create_local_identity(session: Session, request: IdentityCreateRequest) -> tuple[AdminUser, str]:
+    username = request.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username must not be empty.")
+    if session.scalar(select(AdminUser.id).where(AdminUser.username == username)) is not None:
+        raise HTTPException(status_code=400, detail="Username is already in use.")
+
+    temporary_password = generate_temporary_password()
+    identity = AdminUser(
+        username=username,
+        display_name=request.display_name.strip(),
+        password_hash=hash_password(temporary_password),
+        must_change_password=True,
+        auth_provider="local",
+        role="user",
+    )
+    session.add(identity)
+    session.flush()
+    return identity, temporary_password
+
+
+@router.post("/identities")
+def create_identity(
+    request: IdentityCreateRequest,
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    with create_session() as session:
+        identity, temporary_password = create_local_identity(session, request)
+        record_admin_audit(
+            session=session,
+            actor=user.username,
+            action="identity.create",
+            resource_type="admin_user",
+            resource_id=identity.username,
+            details={"auth_provider": identity.auth_provider, "role": identity.role},
+        )
+        session.commit()
+        return {
+            "status": "created",
+            "id": f"local:{identity.id}",
+            "temporary_password": temporary_password,
+        }
+
+
+@router.delete("/identities/{identity_id}")
+def delete_identity(
+    identity_id: str,
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    if not identity_id.startswith("local:"):
+        raise HTTPException(
+            status_code=400, detail="External identities are managed by their provider."
+        )
+    try:
+        target_id = int(identity_id.removeprefix("local:"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Identity not found.") from exc
+
+    with create_session() as session:
+        target = session.get(AdminUser, target_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Identity not found.")
+        if target.auth_provider != "local" or target.role != "user":
+            raise HTTPException(
+                status_code=400, detail="Only built-in user accounts can be deleted."
+            )
+
+        owner_user_id = str(target.id)
+        conversation_ids = list(session.scalars(
+            select(Conversation.conversation_id).where(
+                Conversation.owner_user_id == owner_user_id
+            )
+        ))
+        if conversation_ids:
+            session.execute(delete(ConversationTurn).where(
+                ConversationTurn.conversation_id.in_(conversation_ids)
+            ))
+        session.execute(delete(Conversation).where(Conversation.owner_user_id == owner_user_id))
+        session.execute(delete(AnalysisSessionRecord).where(
+            AnalysisSessionRecord.user_id == owner_user_id
+        ))
+        session.execute(delete(DashboardWidget).where(
+            DashboardWidget.owner_user_id == owner_user_id
+        ))
+        session.execute(delete(Dashboard).where(Dashboard.owner_user_id == owner_user_id))
+        session.execute(delete(DashboardUserState).where(
+            DashboardUserState.owner_user_id == owner_user_id
+        ))
+        session.execute(delete(UserDatasourceSelection).where(
+            UserDatasourceSelection.owner_user_id == owner_user_id
+        ))
+        session.execute(delete(UserSavedMetric).where(
+            UserSavedMetric.owner_user_id == owner_user_id
+        ))
+        session.execute(delete(AdminSession).where(AdminSession.user_id == target.id))
+        username = target.username
+        session.delete(target)
+        record_admin_audit(
+            session=session,
+            actor=user.username,
+            action="identity.delete",
+            resource_type="admin_user",
+            resource_id=username,
+            details={"auth_provider": "local", "role": "user"},
+        )
+        session.commit()
+        return {"status": "deleted"}
 
 
 @router.patch("/identities/{identity_id}")

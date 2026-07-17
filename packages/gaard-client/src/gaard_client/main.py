@@ -50,6 +50,12 @@ class ClientLoginRequest(BaseModel):
     backend_url: str | None = None
 
 
+class ClientChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+    backend_url: str | None = None
+
+
 class ClientAnalysisMessageRequest(BaseModel):
     message: str = Field(min_length=1)
     backend_url: str | None = None
@@ -306,6 +312,71 @@ async def login_backend(request: ClientLoginRequest) -> dict[str, Any]:
                     "username": request.username,
                     "password": request.password,
                 },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.post("/api/auth/change-password")
+async def change_password_backend(
+    request: ClientChangePasswordRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    change_password_url = f"{backend_url}/api/v1/admin/auth/change-password"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                change_password_url,
+                **backend_request_kwargs(authorization, {
+                    "current_password": request.current_password,
+                    "new_password": request.new_password,
+                }),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.get("/api/auth/me")
+async def get_current_user_backend(
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    me_url = f"{resolved_backend_url}/api/v1/admin/me"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                me_url,
+                headers={"Authorization": authorization} if authorization else {},
             )
     except httpx.HTTPError as exc:
         raise HTTPException(

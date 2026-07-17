@@ -3,6 +3,8 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
   let paneWidth = 420;
   let loaded = false;
   let editAction = null;
+  let createError = "";
+  let temporaryPassword = "";
   let refreshOnAttach = false;
   let pageResizeObserver = null;
 
@@ -24,12 +26,13 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
 
   function renderPane(user) {
     const editable = Boolean(user.editable_name || user.editable_password);
+    const deletable = user.provider_id === "local" && user.role === "user";
     return `<aside class="identity-pane" style="width:${paneWidth}px">
       <div class="identity-resizer" id="identity-resizer" title="Drag to resize"></div>
       <header><div><h2>${escapeHtml(user.name || user.username)}</h2><p>${escapeHtml(user.provider)}</p></div><button id="identity-close" type="button" aria-label="Close">×</button></header>
       <div class="identity-pane-content">
         <dl class="identity-basics"><dt>Name</dt><dd>${escapeHtml(user.name || user.username)}</dd><dt>Username</dt><dd>${escapeHtml(user.username)}${user.overshadowed ? ` <span class="identity-warning" title="Overshadowed by ${escapeHtml(user.overshadowed_by?.username || "another user")} from ${escapeHtml(user.overshadowed_by?.provider || "another provider")}">⚠️</span>` : ""}</dd></dl>
-        <div class="identity-actions">${actionButton("username", "Change username", editable)}${actionButton("password", "Change password", Boolean(user.editable_password))}</div>
+        <div class="identity-actions">${actionButton("username", "Change username", editable)}${actionButton("password", "Change password", Boolean(user.editable_password))}${deletable ? actionButton("delete", "Delete user", true) : ""}</div>
         ${userDashboards(user)}
         ${providerSpecific(user)}
       </div>
@@ -38,15 +41,22 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
 
   function renderEditModal() {
     if (!editAction || !selected) return "";
+    if (editAction === "delete") return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">Delete user</h2><p>Delete ${escapeHtml(selected.name || selected.username)} and their saved application data?</p></div></div><div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="danger" type="button" id="identity-delete-confirm">Delete</button></div></section></div>`;
     const isPassword = editAction === "password";
     const label = isPassword ? "New password" : "New username";
     const value = isPassword ? "" : escapeHtml(selected.username);
     return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">${isPassword ? "Change password" : "Change username"}</h2><p>${escapeHtml(selected.name || selected.username)}</p></div></div><form id="identity-edit-modal-form" class="form-grid"><label>${label}<input name="value" ${isPassword ? "type=\"password\" minlength=\"8\" autocomplete=\"new-password\"" : "autocomplete=\"username\""} value="${value}" required /></label><div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="primary" type="submit">Apply now</button></div></form></section></div>`;
   }
 
+  function renderCreateModal() {
+    if (temporaryPassword) return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">User created</h2><p>Share this temporary password securely. The user must change it after signing in.</p></div></div><label>Temporary password<input value="${escapeHtml(temporaryPassword)}" readonly /></label><div class="form-actions"><button class="primary" type="button" data-identity-modal-cancel>Done</button></div></section></div>`;
+    if (editAction !== "create") return "";
+    return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">Create user</h2></div></div><form id="identity-create-modal-form" class="form-grid"><label>Name<input name="display_name" maxlength="255" autocomplete="name" /></label><label>Username<input name="username" maxlength="255" autocomplete="username" required /></label>${createError ? `<div class="error" role="alert">${escapeHtml(createError)}</div>` : ""}<div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="primary" type="submit">Create user</button></div></form></section></div>`;
+  }
+
   function renderIdentity() {
     const rows = (state.identities || []).map((user) => `<tr class="identity-table-row${selected?.id === user.id ? " selected" : ""}" data-identity-id="${escapeHtml(user.id)}"><td>${escapeHtml(user.name || user.username)}</td><td>${escapeHtml(user.username)}${user.overshadowed ? ` <span class="identity-warning" title="Overshadowed by ${escapeHtml(user.overshadowed_by?.username || "another user")} from ${escapeHtml(user.overshadowed_by?.provider || "another provider")}">⚠️</span>` : ""}</td><td>${escapeHtml(user.role)}</td><td>${escapeHtml(user.provider)}</td></tr>`).join("");
-    return `<section class="panel identities-page"><div class="panel-header"><h2>Identities</h2><button id="identity-refresh" type="button">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Provider</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No users found.</td></tr>`}</tbody></table></div>${selected ? renderPane(selected) : ""}</section>${renderEditModal()}`;
+    return `<section class="panel identities-page"><div class="panel-header"><h2>Identities</h2><div class="form-actions"><button id="identity-create" class="primary" type="button">Create user</button><button id="identity-refresh" type="button">Refresh</button></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Provider</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No users found.</td></tr>`}</tbody></table></div>${selected ? renderPane(selected) : ""}</section>${renderEditModal()}${renderCreateModal()}`;
   }
 
   function clampPaneWidth() {
@@ -87,12 +97,15 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
   }
 
   function attachModal() {
-    document.querySelector("[data-identity-modal-cancel]")?.addEventListener("click", () => { editAction = null; render(); });
-    document.querySelector("[data-identity-modal-backdrop]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { editAction = null; render(); } });
+    document.querySelector("[data-identity-modal-cancel]")?.addEventListener("click", () => { editAction = null; createError = ""; temporaryPassword = ""; render(); });
+    document.querySelector("[data-identity-modal-backdrop]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { editAction = null; createError = ""; temporaryPassword = ""; render(); } });
     document.querySelector("#identity-edit-modal-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get("value") || ""); const body = editAction === "password" ? { new_password: value } : { username: value }; try { await api(`/api/v1/admin/identities/${encodeURIComponent(selected.id)}`, { method: "PATCH", body: JSON.stringify(body) }); editAction = null; setMessage("success", "Identity updated. The affected user has been signed out."); await load(); } catch (error) { setMessage("error", error.message); } });
+    document.querySelector("#identity-create-modal-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); createError = ""; try { const result = await api("/api/v1/admin/identities", { method: "POST", body: JSON.stringify({ display_name: form.get("display_name"), username: form.get("username") }) }); temporaryPassword = result.temporary_password || ""; await load(); } catch (error) { createError = error.message; render(); } });
+    document.querySelector("#identity-delete-confirm")?.addEventListener("click", async () => { try { await api(`/api/v1/admin/identities/${encodeURIComponent(selected.id)}`, { method: "DELETE" }); selected = null; editAction = null; setMessage("success", "Built-in user deleted."); await load(); } catch (error) { setMessage("error", error.message); } });
   }
 
   function attach() {
+    document.querySelector("#identity-create")?.addEventListener("click", () => { editAction = "create"; createError = ""; temporaryPassword = ""; render(); });
     document.querySelector("#identity-refresh")?.addEventListener("click", () => void load(true));
     document.querySelectorAll("[data-identity-id]").forEach((row) => row.addEventListener("click", () => { selected = state.identities.find((item) => item.id === row.dataset.identityId) || null; render(); }));
     document.querySelector("#identity-close")?.addEventListener("click", () => { selected = null; render(); });

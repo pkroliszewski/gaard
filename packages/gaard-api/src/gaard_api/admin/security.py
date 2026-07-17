@@ -41,5 +41,9 @@ def create_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def generate_temporary_password() -> str:
+    return secrets.token_urlsafe(18)
+
+
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()

@@ -35,6 +35,7 @@ class AdminUser(Base):
     username: Mapped[str] = mapped_column(String(255), index=True)
     display_name: Mapped[str] = mapped_column(String(255), default="")
     auth_provider: Mapped[str] = mapped_column(String(255), index=True, default="local")
+    role: Mapped[str] = mapped_column(String(50), index=True, default="admin")
     password_hash: Mapped[str] = mapped_column(Text)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     # Provider refreshes create provisional records so they can be assigned before login.

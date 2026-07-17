@@ -5,12 +5,15 @@ var configuredBackendUrl = (params.get("backendUrl") || params.get("apiUrl") || 
 var storedToken = localStorage.getItem("gaard_client_token") || "";
 var storedUsername = localStorage.getItem("gaard_client_username") || "";
 var storedRole = localStorage.getItem("gaard_client_role") || "";
+var storedMustChangePassword = localStorage.getItem("gaard_client_must_change_password") === "true";
 var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
 var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
   username: storedUsername,
   role: storedRole,
+  mustChangePassword: storedMustChangePassword,
+  passwordChangeError: "",
   activeView: normalizeView(params.get("view") || storedActiveView),
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
@@ -535,7 +538,7 @@ function renderAnalysisView() {
             ${state.dashboardLayoutSaving ? "disabled" : ""}
           >
             ${state.dashboardLayoutSaving ? `<span class="dashboard-edit-saving-spinner" aria-hidden="true"></span>` : renderIcon("edit")}
-            <span>${state.dashboardLayoutSaving ? "Saving..." : state.dashboardEditMode ? "Finish editing" : "Edit layout"}</span>
+            ${state.dashboardLayoutSaving ? `<span>Saving...</span>` : ""}
           </button>` : ""}
           ${dashboard && state.token && state.dashboardEditMode ? `
           <button class="dashboard-add-widget-button" type="button" data-open-widget-dialog aria-label="Add widget" title="Add widget">
@@ -1192,6 +1195,7 @@ function render(options = {}) {
       </section>
       <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
       ${state.loginOpen ? renderLoginDialog() : ""}
+      ${state.mustChangePassword ? renderPasswordChangeDialog() : ""}
       ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
       ${state.dashboardWidgetDialogOpen ? renderDashboardWidgetDialog() : ""}
       ${state.saveWidgetDialogOpen ? renderSaveWidgetDialog() : ""}
@@ -1250,6 +1254,7 @@ function render(options = {}) {
   });
   document.querySelector("#excel-source-input")?.addEventListener("change", uploadSelectedSource);
   document.querySelector("#login-form")?.addEventListener("submit", login);
+  document.querySelector("#password-change-form")?.addEventListener("submit", changePassword);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
     input2.addEventListener("change", handleModeChange);
   });
@@ -2056,7 +2061,7 @@ function setDashboardLayoutSaving(saving) {
     button.setAttribute("title", saving ? "Saving..." : "Finish editing");
     button.innerHTML = saving
         ? `<span class="dashboard-edit-saving-spinner" aria-hidden="true"></span><span>Saving...</span>`
-        : `${renderIcon("edit")}<span>Finish editing</span>`;
+        : renderIcon("edit");
 }
 function collectDashboardLayout() {
     return Array.from(document.querySelectorAll(".dashboard-grid .grid-stack-item")).map((element) => {
@@ -2545,6 +2550,23 @@ function renderLoginDialog() {
       </section>
     </div>`;
 }
+function renderPasswordChangeDialog() {
+  return `
+    <div class="login-overlay" role="presentation">
+      <section class="login-panel" role="dialog" aria-modal="true" aria-labelledby="password-change-title">
+        <img class="login-logo" src="/assets/getgaard.svg" alt="" />
+        <h1 id="password-change-title">Set a new password</h1>
+        <p>Your temporary password can only be used to sign in once.</p>
+        <form id="password-change-form" class="form-grid">
+          <label>Temporary password<input name="current_password" type="password" autocomplete="current-password" required /></label>
+          <label>New password<input name="new_password" type="password" minlength="8" autocomplete="new-password" required /></label>
+          <label>Confirm new password<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required /></label>
+          ${state.passwordChangeError ? `<div class="error" role="alert">${escapeHtml(state.passwordChangeError)}</div>` : ""}
+          <div class="form-actions"><button class="primary" type="submit">Save password</button></div>
+        </form>
+      </section>
+    </div>`;
+}
 function renderLogin() {
   state.loginOpen = true;
   render();
@@ -3004,6 +3026,8 @@ async function login(event) {
     state.token = payload.token || "";
     state.username = payload.username || "";
     state.role = payload.role || "";
+    state.mustChangePassword = payload.must_change_password === true;
+    state.passwordChangeError = "";
     state.loginOpen = false;
     state.dashboards = [];
     state.dashboardsLoaded = false;
@@ -3012,11 +3036,57 @@ async function login(event) {
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
     localStorage.setItem("gaard_client_role", state.role);
+    localStorage.setItem("gaard_client_must_change_password", String(state.mustChangePassword));
     render();
   } catch (error) {
     state.error = error.message || "Login failed.";
     reportApiError(error, "Login failed.");
     renderLogin();
+  }
+}
+async function changePassword(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const newPassword = String(form.get("new_password") || "");
+  if (newPassword !== String(form.get("confirm_password") || "")) {
+    state.passwordChangeError = "New passwords do not match.";
+    render();
+    return;
+  }
+  try {
+    const response = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        current_password: String(form.get("current_password") || ""),
+        new_password: newPassword,
+        backend_url: state.backendUrl
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+    state.mustChangePassword = false;
+    state.passwordChangeError = "";
+    localStorage.setItem("gaard_client_must_change_password", "false");
+    render();
+  } catch (error) {
+    state.passwordChangeError = error.message || "Password could not be changed.";
+    render();
+  }
+}
+async function refreshPasswordChangeRequirement() {
+  if (!state.token) return;
+  try {
+    const response = await fetch(`/api/auth/me?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+      headers: authHeaders()
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+    state.mustChangePassword = payload.must_change_password === true;
+    localStorage.setItem("gaard_client_must_change_password", String(state.mustChangePassword));
+    render();
+  } catch (error) {
+    if (error.message?.includes("401")) await logout();
   }
 }
 async function logout() {
@@ -3026,6 +3096,8 @@ async function logout() {
   state.token = "";
   state.username = "";
   state.role = "";
+  state.mustChangePassword = false;
+  state.passwordChangeError = "";
   state.messages = [];
   state.conversationId = "";
   state.datasources = [];
@@ -3061,6 +3133,7 @@ async function logout() {
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
   localStorage.removeItem("gaard_client_role");
+  localStorage.removeItem("gaard_client_must_change_password");
   render();
 }
 function buildWidgetLabel(question) {
@@ -3582,3 +3655,4 @@ function scrollToLatest() {
   });
 }
 render();
+void refreshPasswordChangeRequirement();

@@ -193,6 +193,89 @@ def test_client_app_proxies_query(monkeypatch) -> None:
     }
 
 
+def test_client_app_proxies_password_change(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def post(self, url, json, headers):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"username": "ada", "must_change_password": False, "role": "user"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "current_password": "temporary-password",
+            "new_password": "new-user-password",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "http://backend.example/api/v1/admin/auth/change-password"
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["json"] == {
+        "current_password": "temporary-password",
+        "new_password": "new-user-password",
+    }
+
+
+def test_client_app_proxies_current_user(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        async def get(self, url, headers):
+            captured["url"] = url
+            captured["headers"] = headers
+            request = httpx.Request("GET", url)
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"username": "ada", "must_change_password": True, "role": "user"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/auth/me?backend_url=http://backend.example/",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["must_change_password"] is True
+    assert captured["url"] == "http://backend.example/api/v1/admin/me"
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+
+
 def test_client_app_proxies_query_conversation_id(monkeypatch) -> None:
     captured = {}
 

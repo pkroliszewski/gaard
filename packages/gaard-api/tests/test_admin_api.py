@@ -167,6 +167,79 @@ def test_external_users_store_the_provider_separately(admin_client: TestClient) 
         ) is not None
 
 
+def test_admin_can_create_and_sign_in_with_a_built_in_identity(
+    admin_client: TestClient,
+) -> None:
+    admin_login = login(admin_client)
+    change_password(admin_client, admin_login["token"])
+    admin_headers = {"Authorization": f"Bearer {admin_login['token']}"}
+
+    response = admin_client.post(
+        "/api/v1/admin/identities",
+        headers=admin_headers,
+        json={
+            "display_name": "Ada Lovelace",
+            "username": "ada",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"].startswith("local:")
+    temporary_password = response.json()["temporary_password"]
+    assert len(temporary_password) >= 8
+
+    identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
+    assert identities.status_code == 200
+    identity = next(item for item in identities.json()["items"] if item["username"] == "ada")
+    assert identity["name"] == "Ada Lovelace"
+    assert identity["provider"] == "Built-in"
+    assert identity["role"] == "user"
+
+    login_response = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "ada", "password": temporary_password},
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["role"] == "user"
+    assert login_response.json()["must_change_password"] is True
+
+    user_headers = {"Authorization": f"Bearer {login_response.json()['token']}"}
+    blocked_response = admin_client.get("/api/v1/admin/datasources", headers=user_headers)
+    assert blocked_response.status_code == 403
+
+    change_response = admin_client.post(
+        "/api/v1/admin/auth/change-password",
+        headers=user_headers,
+        json={"current_password": temporary_password, "new_password": "ada-password"},
+    )
+    assert change_response.status_code == 200
+    assert change_response.json()["must_change_password"] is False
+    assert change_response.json()["role"] == "user"
+
+    expired_password_login = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "ada", "password": temporary_password},
+    )
+    assert expired_password_login.status_code == 401
+
+    updated_password_login = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "ada", "password": "ada-password"},
+    )
+    assert updated_password_login.status_code == 200
+    assert updated_password_login.json()["must_change_password"] is False
+
+    delete_response = admin_client.delete(
+        f"/api/v1/admin/identities/{response.json()['id']}",
+        headers=admin_headers,
+    )
+    assert delete_response.status_code == 200
+    assert admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "ada", "password": "ada-password"},
+    ).status_code == 401
+
+
 def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
     with engine.begin() as connection:
