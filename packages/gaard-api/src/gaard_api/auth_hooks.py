@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 @dataclass(frozen=True)
 class AuthenticatedIdentity:
     username: str
-    role: str
     provider_id: str
     provider_name: str
     metadata: dict[str, Any] = field(default_factory=dict)

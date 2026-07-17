@@ -117,7 +117,7 @@ def get_current_authenticated_session(
 def get_current_api_user(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AuthenticatedSession:
-    if principal.session.role not in {"user", "admin"}:
+    if principal.user.role not in {"user", "admin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated user does not have API access.",
@@ -128,7 +128,7 @@ def get_current_api_user(
 def get_current_admin_allow_password_change(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AdminUser:
-    if principal.session.role != "admin":
+    if principal.user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin role is required.",

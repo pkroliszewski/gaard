@@ -315,6 +315,7 @@ def user_headers(username: str = "client-user") -> dict[str, str]:
             username=username,
             password_hash=hash_password("not-used"),
             must_change_password=False,
+            role="user",
         )
         session.add(user)
         session.flush()

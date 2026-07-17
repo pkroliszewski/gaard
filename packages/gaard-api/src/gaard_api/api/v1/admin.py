@@ -1316,7 +1316,7 @@ def get_current_authenticated_session(
 def get_current_api_user(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AuthenticatedSession:
-    if principal.session.role not in {"user", "admin"}:
+    if principal.user.role not in {"user", "admin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated user does not have API access.",
@@ -1332,7 +1332,7 @@ def get_current_api_user(
 def get_current_admin_allow_password_change(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AdminUser:
-    if principal.session.role != "admin":
+    if principal.user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin role is required.",
@@ -1409,7 +1409,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
             token_hash=hash_token(token),
             user_id=user.id,
             username=identity.username,
-            role=identity.role,
+            role=user.role,
             auth_provider=identity.provider_id,
         )
     )
@@ -1422,7 +1422,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
         details={
             "provider_id": identity.provider_id,
             "provider_name": identity.provider_name,
-            "role": identity.role,
+            "role": user.role,
         },
     )
     session.commit()
@@ -1431,7 +1431,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
         token=token,
         username=identity.username,
         must_change_password=False,
-        role=identity.role,
+        role=user.role,
     )
 
 
@@ -1470,7 +1470,7 @@ def get_me(
     return MeResponse(
         username=principal.session.username or principal.user.username,
         must_change_password=principal.user.must_change_password,
-        role=principal.session.role,
+        role=principal.user.role,
     )
 
 
@@ -1504,7 +1504,7 @@ def change_password(
     return MeResponse(
         username=user.username,
         must_change_password=False,
-        role=principal.session.role,
+        role=user.role,
     )
 
 
@@ -2542,13 +2542,13 @@ def get_datasources(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     connectors = list_datasource_connectors(session)
-    if available_only or principal.session.role != "admin":
+    if available_only or principal.user.role != "admin":
         connectors = [
             connector
             for connector in connectors
             if connector.active and not is_system_datasource_connector(connector)
         ]
-    if available_only or principal.session.role != "admin":
+    if available_only or principal.user.role != "admin":
         connectors = filter_datasources_for_identity_privileges(session, principal, connectors)
 
     available_ids = {connector.connector_key for connector in connectors}
@@ -2709,7 +2709,7 @@ async def upload_excel_datasource(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    if principal.session.role != "admin" and active:
+    if principal.user.role != "admin" and active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only administrators can activate datasources.",
