@@ -60,7 +60,7 @@ var state = {
   overviewExtraSlots: 0,
   overviewLoading: Boolean(localStorage.getItem("gaard_admin_token") && localStorage.getItem("gaard_admin_must_change") !== "true"),
   overviewRefreshing: false,
-  overviewEditMode: true,
+  overviewEditMode: false,
   overviewTablePages: {},
   dataAudit: [],
   dataAuditType: "",
@@ -739,6 +739,7 @@ function allowedRequestsForExtension(extensionId) {
     "siem-forwarder": new Set([
       "GET /api/v1/extensions/siem-forwarder/siem/config",
       "PUT /api/v1/extensions/siem-forwarder/siem/config",
+      "PUT /api/v1/extensions/siem-forwarder/siem/enabled",
       "POST /api/v1/extensions/siem-forwarder/siem/test"
     ]),
     "identity-privileges": new Set([
@@ -909,9 +910,9 @@ function renderOverviewGridWidget(widget, slot) {
             <span>${escapeHtml(widget.datasource_key)}</span>
             <strong>${escapeHtml(widget.label)}</strong>
           </div>
-          <div class="widget-card-actions">${renderOverviewWidgetActions(widget.widget_key)}</div>
         </div>
         <div class="widget-card-main">${renderOverviewWidgetBody(widget, result)}</div>
+        <div class="overview-widget-actions">${renderOverviewWidgetActions(widget.widget_key)}</div>
       </section>
     </div>`;
 }
@@ -2341,7 +2342,7 @@ function initializeOverviewGridStack() {
     float: false,
     margin: 12,
     alwaysShowResizeHandle: state.overviewEditMode,
-    draggable: { handle: ".overview-widget-drag-handle", cancel: ".widget-card-actions, button, a, input, select, textarea" },
+    draggable: { handle: ".overview-widget-drag-handle", cancel: ".overview-widget-actions, button, a, input, select, textarea" },
     resizable: { handles: "e,se,s,sw,w" }
   }, gridElement);
   if (state.overviewEditMode) {

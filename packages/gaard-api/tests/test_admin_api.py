@@ -555,8 +555,10 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "Loading dashboard overview" in response.text
     assert "overview-page-loading" in response.text
     assert "data-toggle-overview-edit" in response.text
-    assert "Finish editing" in response.text
+    assert "Edit layout" in response.text
+    assert "overviewEditMode: false" in response.text
     assert "data-remove-overview-widget" in response.text
+    assert "overview-widget-actions" in response.text
 
     styles_response = admin_client.get("/admin/assets/styles.css")
     assert styles_response.status_code == 200
@@ -567,6 +569,7 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "calc(100vh - 260px)" in styles_response.text
     assert "overview-edit-mode-button" in styles_response.text
     assert "overview-grid-readonly" in styles_response.text
+    assert ".overview-widget-actions" in styles_response.text
 
     logo_response = admin_client.get("/admin/assets/getgaard.svg")
     assert logo_response.status_code == 200
