@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 import json
 import threading
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.engine import Engine
@@ -95,6 +96,17 @@ def init_metadata_store() -> None:
             backfill_overview_widget_tags(session)
             backfill_data_query_audit_types(session)
             session.commit()
+
+
+def clear_expired_admin_sessions(session: Session) -> int:
+    """Remove sessions inactive for 30 days; called once during application startup."""
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    result = session.execute(
+        delete(AdminSession)
+        .where(AdminSession.last_seen < cutoff)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
 
 
 def seed_admin_user(session: Session) -> None:
@@ -596,11 +608,19 @@ def ensure_admin_session_schema(engine: Engine) -> None:
         "auth_provider": (
             "ALTER TABLE admin_sessions ADD COLUMN auth_provider VARCHAR(255) DEFAULT 'local'"
         ),
+        # SQLite cannot add a column with CURRENT_TIMESTAMP as its default.  Backfill
+        # legacy rows below, while newly created sessions use the ORM default.
+        "last_seen": "ALTER TABLE admin_sessions ADD COLUMN last_seen DATETIME",
     }
     with engine.begin() as connection:
         for column_name, sql in additions.items():
             if column_name not in columns:
                 connection.execute(text(sql))
+
+        if "last_seen" not in columns:
+            connection.execute(
+                text("UPDATE admin_sessions SET last_seen = created_at WHERE last_seen IS NULL")
+            )
 
         session_table = cast(Table, AdminSession.__table__)
         for index in session_table.indexes:

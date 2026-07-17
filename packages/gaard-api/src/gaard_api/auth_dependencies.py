@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import AdminSession, AdminUser
 from gaard_api.admin.security import hash_token
+
+
+SESSION_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,23 @@ def get_current_authenticated_session(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin session.",
         )
+
+    # Update activity in the authentication boundary so every authenticated flow is
+    # covered, while the conditional update caps writes to one per session per 5 min.
+    activity_cutoff = datetime.now(UTC) - SESSION_ACTIVITY_WRITE_INTERVAL
+    result = session.execute(
+        update(AdminSession)
+        .where(AdminSession.id == admin_session.id, AdminSession.last_seen < activity_cutoff)
+        .values(last_seen=datetime.now(UTC))
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount:
+        session.commit()
+    else:
+        # End the read transaction before the endpoint opens another metadata
+        # session (some admin flows do this on SQLite).  This is a read-only
+        # commit; the activity row itself remains untouched.
+        session.commit()
 
     return AuthenticatedSession(session=admin_session, user=user)
 

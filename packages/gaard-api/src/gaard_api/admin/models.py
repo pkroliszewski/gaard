@@ -59,6 +59,9 @@ class AdminSession(Base):
     role: Mapped[str] = mapped_column(String(50), index=True, default="admin")
     auth_provider: Mapped[str] = mapped_column(String(255), index=True, default="local")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, default=utc_now
+    )
 
 
 class AdminAuditLog(Base):

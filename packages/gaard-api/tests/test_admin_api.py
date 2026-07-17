@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 import io
 import json
 from pathlib import Path
@@ -21,7 +22,9 @@ from gaard_core.query_pipeline.models import (
 from gaard_llm.providers.models import ChatCompletionResponse
 
 from gaard_api.admin.database import (
+    clear_expired_admin_sessions,
     create_session,
+    ensure_admin_session_schema,
     ensure_admin_user_schema,
     reset_metadata_store_for_tests,
     seed_prompts,
@@ -112,6 +115,113 @@ def change_password(client: TestClient, token: str) -> None:
 
     assert response.status_code == 200
     assert response.json()["must_change_password"] is False
+
+
+def test_logout_removes_the_server_session(admin_client: TestClient) -> None:
+    login_response = login(admin_client)
+    token = login_response["token"]
+
+    response = admin_client.post(
+        "/api/v1/admin/auth/logout",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "logged_out"}
+    assert admin_client.get(
+        "/api/v1/admin/me", headers={"Authorization": f"Bearer {token}"}
+    ).status_code == 401
+
+
+def test_authenticated_request_updates_last_seen_without_writing_every_request(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    with create_session() as session:
+        admin_session = session.scalar(select(AdminSession).where(AdminSession.token_hash == hash_token(token)))
+        assert admin_session is not None
+        original_last_seen = datetime.now(UTC) - timedelta(minutes=6)
+        admin_session.last_seen = original_last_seen
+        session.commit()
+
+    assert admin_client.get(
+        "/api/v1/admin/me", headers={"Authorization": f"Bearer {token}"}
+    ).status_code == 200
+    with create_session() as session:
+        first_seen = session.scalar(select(AdminSession.last_seen).where(AdminSession.token_hash == hash_token(token)))
+        assert first_seen is not None and first_seen != original_last_seen
+
+    assert admin_client.get(
+        "/api/v1/admin/me", headers={"Authorization": f"Bearer {token}"}
+    ).status_code == 200
+    with create_session() as session:
+        second_seen = session.scalar(select(AdminSession.last_seen).where(AdminSession.token_hash == hash_token(token)))
+        assert second_seen == first_seen
+
+
+def test_session_schema_backfills_last_seen_and_startup_cleanup_removes_stale_sessions(
+    tmp_path: Path,
+    admin_client: TestClient,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-sessions.db'}")
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE admin_sessions (
+                id INTEGER NOT NULL PRIMARY KEY,
+                token_hash VARCHAR(128) NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+        """))
+        connection.execute(text("""
+            INSERT INTO admin_sessions (id, token_hash, user_id, created_at)
+            VALUES (1, 'legacy', 1, CURRENT_TIMESTAMP)
+        """))
+    ensure_admin_session_schema(engine)
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT last_seen FROM admin_sessions WHERE id = 1")).scalar() is not None
+
+    # Exercise the cleanup independently of the app lifespan.
+    with create_session() as session:
+        user = session.scalar(select(AdminUser).where(AdminUser.username == "admin"))
+        assert user is not None
+        session.add(AdminSession(
+            token_hash="stale", user_id=user.id, last_seen=datetime.now(UTC) - timedelta(days=31)
+        ))
+        session.commit()
+        assert clear_expired_admin_sessions(session) >= 1
+        session.commit()
+        assert session.scalar(select(AdminSession).where(AdminSession.token_hash == "stale")) is None
+
+
+def test_identity_sessions_can_be_cleared_without_revoking_the_requesting_session(
+    admin_client: TestClient,
+) -> None:
+    first_token = login(admin_client)["token"]
+    change_password(admin_client, first_token)
+    second_login = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "admin", "password": "new-admin-password"},
+    )
+    assert second_login.status_code == 200
+    second_token = second_login.json()["token"]
+    headers = {"Authorization": f"Bearer {second_token}"}
+
+    identities = admin_client.get("/api/v1/admin/identities", headers=headers)
+    assert identities.status_code == 200
+    admin_identity = next(item for item in identities.json()["items"] if item["username"] == "admin")
+    assert admin_identity["sessions_count"] == 2
+
+    response = admin_client.delete(
+        f"/api/v1/admin/identities/{admin_identity['id']}/sessions", headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json()["cleared_sessions"] == 1
+
+    assert admin_client.get("/api/v1/admin/me", headers=headers).status_code == 200
+    assert admin_client.get(
+        "/api/v1/admin/me", headers={"Authorization": f"Bearer {first_token}"}
+    ).status_code == 401
 
 
 def test_login_does_not_query_extension_auth_without_identity_license(

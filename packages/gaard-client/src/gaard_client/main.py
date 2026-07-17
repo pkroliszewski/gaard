@@ -364,6 +364,37 @@ async def change_password_backend(
     return cast(dict[str, Any], response.json())
 
 
+@app.post("/api/auth/logout")
+async def logout_backend(
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    logout_url = f"{resolved_backend_url}/api/v1/admin/auth/logout"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                logout_url,
+                headers={"Authorization": authorization} if authorization else {},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
 @app.get("/api/auth/me")
 async def get_current_user_backend(
     backend_url: str | None = None,

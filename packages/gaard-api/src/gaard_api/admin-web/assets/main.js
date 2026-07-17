@@ -381,6 +381,14 @@ function persistAuth(token, username, mustChangePassword) {
   localStorage.setItem("gaard_admin_must_change", String(mustChangePassword));
 }
 function logout() {
+  const token = state.token;
+  if (token) {
+    void fetch("/api/v1/admin/auth/logout", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
+      keepalive: true,
+    });
+  }
   state.token = null;
   state.username = "";
   state.mustChangePassword = false;

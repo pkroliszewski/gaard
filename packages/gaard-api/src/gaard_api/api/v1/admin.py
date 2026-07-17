@@ -2,7 +2,7 @@ import json
 import re
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Annotated
 
@@ -26,7 +26,7 @@ from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, Integer, String, column, delete, insert, select, table
+from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import sqlglot
@@ -171,6 +171,9 @@ class IdentityUpdateRequest(BaseModel):
 class IdentityCreateRequest(BaseModel):
     display_name: str = Field(default="", max_length=255)
     username: str = Field(min_length=1, max_length=255)
+
+
+SESSION_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=5)
 
 
 class MeResponse(BaseModel):
@@ -1310,6 +1313,18 @@ def get_current_authenticated_session(
             detail="Invalid admin session.",
         )
 
+    activity_cutoff = datetime.now(UTC) - SESSION_ACTIVITY_WRITE_INTERVAL
+    result = session.execute(
+        update(AdminSession)
+        .where(AdminSession.id == admin_session.id, AdminSession.last_seen < activity_cutoff)
+        .values(last_seen=datetime.now(UTC))
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount:
+        session.commit()
+    else:
+        session.commit()
+
     return AuthenticatedSession(session=admin_session, user=user)
 
 
@@ -1474,6 +1489,16 @@ def get_me(
     )
 
 
+@router.post("/auth/logout")
+def logout(
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    session.delete(principal.session)
+    session.commit()
+    return {"status": "logged_out"}
+
+
 @router.post("/auth/change-password", response_model=MeResponse)
 def change_password(
     request: ChangePasswordRequest,
@@ -1514,6 +1539,11 @@ def list_identities(
     user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
     with create_session() as session:
+        session_counts = dict(
+            session.execute(
+                select(AdminSession.user_id, func.count(AdminSession.id)).group_by(AdminSession.user_id)
+            ).all()
+        )
         external_user_ids = {
             f"{item.auth_provider}:{item.username}": str(item.id)
             for item in session.scalars(
@@ -1538,6 +1568,7 @@ def list_identities(
                 "editable_name": True,
                 "editable_password": True,
                 "attributes": {},
+                "sessions_count": session_counts.get(item.id, 0),
             }
             for item in session.scalars(
                 select(AdminUser)
@@ -1555,8 +1586,56 @@ def list_identities(
                 else external_user_ids.get(str(item.get("id") or ""))
             )
             item["dashboards"] = dashboards_by_owner.get(owner_user_id or "", [])
+            if item.get("provider_id") != "local":
+                user_id = external_user_ids.get(str(item.get("id") or ""))
+                item["sessions_count"] = session_counts.get(int(user_id), 0) if user_id else 0
         mark_overshadowed_identities(items)
         return {"items": items}
+
+
+def identity_user_for_session_action(session: Session, identity_id: str) -> AdminUser:
+    if identity_id.startswith("local:"):
+        try:
+            user_id = int(identity_id.removeprefix("local:"))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Identity not found.") from exc
+        user = session.get(AdminUser, user_id)
+    else:
+        user = session.scalar(
+            select(AdminUser).where(
+                (AdminUser.auth_provider + ":" + AdminUser.username) == identity_id
+            )
+        )
+    if user is None:
+        raise HTTPException(status_code=404, detail="Identity not found.")
+    return user
+
+
+@router.delete("/identities/{identity_id}/sessions")
+def clear_identity_sessions(
+    identity_id: str,
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    target = identity_user_for_session_action(session, identity_id)
+    result = session.execute(
+        delete(AdminSession).where(
+            AdminSession.user_id == target.id,
+            AdminSession.id != principal.session.id,
+        )
+    )
+    cleared = int(result.rowcount or 0)
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="identity.sessions.clear",
+        resource_type="admin_user",
+        resource_id=target.username,
+        details={"cleared_sessions": cleared, "auth_provider": target.auth_provider},
+    )
+    session.commit()
+    return {"status": "cleared", "cleared_sessions": cleared}
 
 
 def mark_overshadowed_identities(items: list[dict[str, Any]]) -> None:

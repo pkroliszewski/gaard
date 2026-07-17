@@ -3093,6 +3093,14 @@ async function logout() {
   if (state.dashboardEditMode) {
     await flushPendingDashboardLayoutSave();
   }
+  const token = state.token;
+  if (token) {
+    void fetch(`/api/auth/logout?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
+      keepalive: true,
+    });
+  }
   state.token = "";
   state.username = "";
   state.role = "";

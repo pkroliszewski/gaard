@@ -1587,6 +1587,9 @@ code {
 .identity-resizer { position:absolute; left:-5px; top:0; bottom:0; width:10px; cursor:ew-resize; touch-action:none; }
 .identity-pane dt { color:var(--muted); font-size:12px; margin-top:12px; }.identity-pane dd { margin:3px 0; overflow-wrap:anywhere; }
 .identity-basics { margin:0; }
+.identity-sessions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
+.identity-sessions-summary { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; }
+.identity-sessions-summary strong { color:var(--text); font-size:14px; }
 .identity-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:22px 0; }
 .identity-actions button:disabled { color:var(--muted); background:var(--panel-strong); border-color:var(--line); cursor:not-allowed; opacity:.7; }
 .identity-pane h3 { margin:22px 0 8px; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
