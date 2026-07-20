@@ -288,7 +288,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     monkeypatch.setattr(admin_api.license_service, "ensure_identity_management_allowed", lambda: None)
     monkeypatch.setattr(
         admin_api.license_service,
-        "ensure_human_user_limit",
+        "ensure_human_user_seat_available",
         lambda count: assigned_counts.append(count),
     )
     monkeypatch.setattr(

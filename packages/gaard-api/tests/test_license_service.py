@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import httpx2 as httpx
 import pytest
+from sqlalchemy import select
 
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
 from gaard_api.admin.models import AdminUser
@@ -170,7 +171,7 @@ def test_identity_management_allows_active_enterprise_license(
     isolated_license_service.ensure_identity_management_allowed()
 
 
-def test_enterprise_human_user_limit_defaults_to_one_when_missing(
+def test_enterprise_human_user_seat_availability_defaults_to_two_when_missing(
     isolated_license_service: LicenseService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -180,12 +181,12 @@ def test_enterprise_human_user_limit_defaults_to_one_when_missing(
     )
     isolated_license_service.refresh(force=True)
 
-    isolated_license_service.ensure_human_user_limit(1)
-    with pytest.raises(LicenseAccessError, match="allows 1 human user"):
-        isolated_license_service.ensure_human_user_limit(2)
+    isolated_license_service.ensure_human_user_seat_available(2)
+    with pytest.raises(LicenseAccessError, match="allows 2 human users"):
+        isolated_license_service.ensure_human_user_seat_available(3)
 
 
-def test_license_refresh_revokes_newest_excess_enterprise_users(
+def test_license_refresh_revokes_newest_excess_enterprise_users_and_preserves_admin_seat(
     isolated_license_service: LicenseService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,6 +198,11 @@ def test_license_refresh_revokes_newest_excess_enterprise_users(
     )
 
     with create_session() as session:
+        default_admin = session.scalar(
+            select(AdminUser).where(AdminUser.username == "admin")
+        )
+        assert default_admin is not None
+        default_admin_id = default_admin.id
         older_user = AdminUser(
             username="licensed-user-1",
             password_hash="unused",
@@ -227,6 +233,7 @@ def test_license_refresh_revokes_newest_excess_enterprise_users(
     isolated_license_service.refresh(force=True)
 
     with create_session() as session:
+        assert session.get(AdminUser, default_admin_id).enterprise_access is True
         assert session.get(AdminUser, older_user_id).enterprise_access is True
         assert session.get(AdminUser, newer_user_id).enterprise_access is False
         assert session.get(AdminUser, newest_user_id).enterprise_access is False

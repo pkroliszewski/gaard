@@ -354,31 +354,7 @@ class LicenseService:
                     self._set_state(session, state)
                     session.commit()
                     if state.features.get("identity_management"):
-                        assigned_users = session.scalar(
-                            select(func.count())
-                            .select_from(AdminUser)
-                            .where(AdminUser.enterprise_access.is_(True))
-                        ) or 0
-                        revoked_users: list[str] = []
-                        while True:
-                            try:
-                                self.ensure_human_user_limit(assigned_users)
-                                break
-                            except LicenseAccessError:
-                                newest_user = session.scalars(
-                                    select(AdminUser)
-                                    .where(
-                                        AdminUser.enterprise_access.is_(True),
-                                        AdminUser.role != "admin",
-                                    )
-                                    .order_by(AdminUser.created_at.desc(), AdminUser.id.desc())
-                                ).first()
-                                if newest_user is None:
-                                    raise
-                                newest_user.enterprise_access = False
-                                session.flush()
-                                revoked_users.append(newest_user.username)
-                                assigned_users -= 1
+                        revoked_users = self.ensure_human_user_limit(session)
                         if revoked_users:
                             session.commit()
                             logger.warning(
@@ -596,8 +572,38 @@ class LicenseService:
             )
         )
 
-    def ensure_human_user_limit(self, assigned_users: int) -> None:
-        """Ensure Enterprise seats are not exceeded by assigned users."""
+    def ensure_human_user_limit(self, session: Session) -> list[str]:
+        """Remove Enterprise access from users above the licensed seat limit."""
+        state = self.refresh_if_due()
+        self.ensure_identity_management_allowed()
+        limit = state.limits.get("human_users")
+
+        limit = 2 if limit is None else limit # if is only for dev test !!! to do: remove this if in production
+        assigned_users = session.scalar(
+            select(func.count())
+            .select_from(AdminUser)
+            .where(AdminUser.enterprise_access.is_(True))
+        ) or 0
+        revoked_users: list[str] = []
+        while assigned_users > limit:
+            newest_user = session.scalars(
+                select(AdminUser)
+                .where(
+                    AdminUser.enterprise_access.is_(True),
+                    AdminUser.role != "admin",
+                )
+                .order_by(AdminUser.created_at.desc(), AdminUser.id.desc())
+            ).first()
+            if newest_user is None:
+                break
+            newest_user.enterprise_access = False
+            session.flush()
+            revoked_users.append(newest_user.username)
+            assigned_users -= 1
+        return revoked_users
+
+    def ensure_human_user_seat_available(self, assigned_users: int) -> None:
+        """Ensure an Enterprise seat is available for a newly assigned user."""
         state = self.refresh_if_due()
         self.ensure_identity_management_allowed()
         limit = state.limits.get("human_users")

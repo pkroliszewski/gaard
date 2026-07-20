@@ -1743,7 +1743,7 @@ def update_identity_enterprise_access(
             )
         ) or 0
         try:
-            license_service.ensure_human_user_limit(assigned_users + 1)
+            license_service.ensure_human_user_seat_available(assigned_users + 1)
         except LicenseAccessError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
