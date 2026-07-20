@@ -93,6 +93,7 @@ var state = {
   datasourceSchemaContentTab: "details",
   datasourceSchemaEditorTab: "tables",
   datasourceExtensions: [],
+  identityExtensions: [],
   extensionSections: [],
   extensionsLoaded: false,
   license: null,
@@ -321,6 +322,11 @@ function formatLicenseMessage(license) {
     return "License validation returned a deleted status. Update the key or run a recheck after changes in GAARD Website.";
   }
   return message;
+}
+function formatEnterpriseSeats(license) {
+  if (license?.plan !== "enterprise") return null;
+  const seats = Number(license?.human_users ?? 1);
+  return Number.isFinite(seats) ? String(seats) : "1";
 }
 function extractErrorMessage(value) {
   if (typeof value === "string") {
@@ -1827,6 +1833,7 @@ function renderLicense() {
   const statusClass = license.valid ? "ok" : license.status === "missing" ? "planned" : "danger";
   const canUpdatePackages = license.plan && license.plan !== "community";
   const packageUpdateRunning = state.licensePackageUpdate?.status === "running";
+  const enterpriseSeats = formatEnterpriseSeats(license);
   return `
     <section class="panel">
       <div class="panel-header">
@@ -1837,6 +1844,7 @@ function renderLicense() {
         <div class="license-status-grid">
           ${renderLicenseStatusItem("Plan", license.plan || "community")}
           ${renderLicenseStatusItem("Valid", license.valid ? "yes" : "no")}
+          ${enterpriseSeats ? renderLicenseStatusItem("Enterprise seats", enterpriseSeats) : ""}
           ${renderLicenseStatusItem("Current period end", formatLicenseDate(license.current_period_end))}
           ${renderLicenseStatusItem("Grace until", formatLicenseDate(license.grace_until))}
           ${renderLicenseStatusItem("Last checked", formatLicenseDate(license.last_checked_at))}
@@ -3107,7 +3115,8 @@ async function loadExtensions(shouldRender = true) {
 }
 async function loadAdminFrontendModules(modules) {
   for (const descriptor of modules) {
-    if (state.datasourceExtensions.some((extension) => extension.modulePath === descriptor.module_path)) continue;
+    if ([...state.datasourceExtensions, ...state.identityExtensions]
+      .some((extension) => extension.modulePath === descriptor.module_path)) continue;
     try {
       const module = await import(descriptor.module_path);
       if (typeof module.default !== "function") continue;
@@ -3118,6 +3127,9 @@ async function loadAdminFrontendModules(modules) {
         setMessage,
         registerDatasourceExtension(candidate) {
           state.datasourceExtensions.push({ ...candidate, modulePath: descriptor.module_path });
+        },
+        registerIdentityExtension(candidate) {
+          state.identityExtensions.push({ ...candidate, modulePath: descriptor.module_path });
         }
       });
       if (extension) state.datasourceExtensions.push({ ...extension, modulePath: descriptor.module_path });

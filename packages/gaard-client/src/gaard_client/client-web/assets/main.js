@@ -6,12 +6,14 @@ var storedToken = localStorage.getItem("gaard_client_token") || "";
 var storedUsername = localStorage.getItem("gaard_client_username") || "";
 var storedRole = localStorage.getItem("gaard_client_role") || "";
 var storedMustChangePassword = localStorage.getItem("gaard_client_must_change_password") === "true";
+var storedEnterpriseAccess = localStorage.getItem("gaard_client_enterprise_access") === "true";
 var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
 var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
   username: storedUsername,
   role: storedRole,
+  enterpriseAccess: storedEnterpriseAccess,
   mustChangePassword: storedMustChangePassword,
   passwordChangeError: "",
   activeView: normalizeView(params.get("view") || storedActiveView),
@@ -30,6 +32,7 @@ var state = {
   datasourcesLoading: false,
   datasourceError: "",
   datasourceUploadPending: false,
+  excelUploadAllowed: false,
   datasourceSelectionPending: false,
   selectedDatasourceIds: [],
   multipleDatasourceSelectionAllowed: false,
@@ -301,7 +304,9 @@ function renderErrorIcon() {
     </svg>`;
 }
 function renderSidebar() {
-  const items = [
+  const items = state.token && !state.enterpriseAccess ? [
+    ["analysis", "Dashboards", "Your saved dashboards"]
+  ] : [
     ["home", "Home", "Ask your data"],
     ["analysis", "Analysis", "Dashboards"],
     ["metrics", "Metrics", "Dashboard widgets"],
@@ -1104,15 +1109,18 @@ function renderSavedMetricCard(metric) {
 }
 function renderDatasourcesView() {
   const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
+  const uploadAllowed = Boolean(state.token && state.excelUploadAllowed);
   const uploadLabel = state.datasourceUploadPending
     ? "Uploading..."
-    : state.token
+    : uploadAllowed
       ? "Upload .xlsx workbook"
-      : "Log in to upload .xlsx workbook";
+      : state.token
+        ? "Enterprise access required"
+        : "Log in to upload .xlsx workbook";
   return `
     <section class="datasources-view placeholder-view">
       <div class="datasource-actions-grid">
-        <button class="placeholder-item datasource-upload-card" type="button" data-add-source ${state.datasourceUploadPending ? "disabled" : ""}>
+        <button class="placeholder-item datasource-upload-card" type="button" data-add-source ${state.datasourceUploadPending || !uploadAllowed ? "disabled" : ""}>
           ${renderIcon("plus")}
           <span><strong>Excel workbooks</strong><small>${escapeHtml(uploadLabel)}</small></span>
         </button>
@@ -1345,7 +1353,7 @@ function formatApiResponseError(response, message) {
   return detail === "Request failed." ? `${prefix}: Request failed.` : `${prefix}: ${detail}`;
 }
 function maybeLoadDatasourcesForActiveView() {
-    if (["home", "datasources", "metrics"].includes(state.activeView) && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
+    if (state.enterpriseAccess && ["home", "datasources", "metrics"].includes(state.activeView) && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
         void loadDatasources();
     }
 }
@@ -2084,6 +2092,7 @@ function openSourcePicker() {
         openLogin();
         return;
     }
+    if (!state.excelUploadAllowed) return;
     const input = document.querySelector("#excel-source-input");
     if (!input) return;
     input.value = "";
@@ -2125,6 +2134,7 @@ async function loadDatasources(options = {}) {
         const availableDatasourceIds = new Set(items.map((item) => item.connector_key));
         state.selectedDatasourceIds = (payload.selected_datasource_ids || []).filter((id) => availableDatasourceIds.has(id));
         state.multipleDatasourceSelectionAllowed = Boolean(payload.multiple_selection_allowed);
+        state.excelUploadAllowed = Boolean(payload.excel_upload_allowed);
         state.datasourcesLoaded = true;
     } catch (error) {
         state.datasourceError = error.message || "Could not load data sources.";
@@ -3026,6 +3036,7 @@ async function login(event) {
     state.token = payload.token || "";
     state.username = payload.username || "";
     state.role = payload.role || "";
+    state.enterpriseAccess = payload.enterprise_access === true;
     state.mustChangePassword = payload.must_change_password === true;
     state.passwordChangeError = "";
     state.loginOpen = false;
@@ -3033,9 +3044,14 @@ async function login(event) {
     state.dashboardsLoaded = false;
     state.activeDashboardId = "";
     state.dashboardEditMode = false;
+    if (!state.enterpriseAccess) {
+      state.activeView = "analysis";
+      rememberActiveView(state.activeView);
+    }
     localStorage.setItem("gaard_client_token", state.token);
     localStorage.setItem("gaard_client_username", state.username);
     localStorage.setItem("gaard_client_role", state.role);
+    localStorage.setItem("gaard_client_enterprise_access", String(state.enterpriseAccess));
     localStorage.setItem("gaard_client_must_change_password", String(state.mustChangePassword));
     render();
   } catch (error) {
@@ -3083,7 +3099,13 @@ async function refreshPasswordChangeRequirement() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
     state.mustChangePassword = payload.must_change_password === true;
+    state.enterpriseAccess = payload.enterprise_access === true;
+    if (!state.enterpriseAccess) {
+      state.activeView = "analysis";
+      rememberActiveView(state.activeView);
+    }
     localStorage.setItem("gaard_client_must_change_password", String(state.mustChangePassword));
+    localStorage.setItem("gaard_client_enterprise_access", String(state.enterpriseAccess));
     render();
   } catch (error) {
     if (error.message?.includes("401")) await logout();
@@ -3104,6 +3126,7 @@ async function logout() {
   state.token = "";
   state.username = "";
   state.role = "";
+  state.enterpriseAccess = false;
   state.mustChangePassword = false;
   state.passwordChangeError = "";
   state.messages = [];
@@ -3141,6 +3164,7 @@ async function logout() {
   localStorage.removeItem("gaard_client_token");
   localStorage.removeItem("gaard_client_username");
   localStorage.removeItem("gaard_client_role");
+  localStorage.removeItem("gaard_client_enterprise_access");
   localStorage.removeItem("gaard_client_must_change_password");
   render();
 }

@@ -277,7 +277,97 @@ def test_external_users_store_the_provider_separately(admin_client: TestClient) 
         ) is not None
 
 
-def test_admin_can_create_and_sign_in_with_a_built_in_identity(
+def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    assigned_counts: list[int] = []
+    monkeypatch.setattr(admin_api.license_service, "identity_management_allowed", lambda: True)
+    monkeypatch.setattr(admin_api.license_service, "ensure_identity_management_allowed", lambda: None)
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_human_user_limit",
+        lambda count: assigned_counts.append(count),
+    )
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+
+    with create_session() as session:
+        analyst = AdminUser(
+            username="analyst",
+            password_hash=hash_password("analyst-password"),
+            must_change_password=False,
+            role="user",
+            enterprise_access=False,
+        )
+        session.add(analyst)
+        session.commit()
+        analyst_id = analyst.id
+
+    admin_headers = auth_headers(admin_client)
+    identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
+    item = next(identity for identity in identities.json()["items"] if identity["id"] == f"local:{analyst_id}")
+    assert item["enterprise_access"] is False
+    assert item["enterprise_access_editable"] is True
+
+    # An unassigned user stays active while the global Enterprise license is valid.
+    assert login_as(admin_client, "analyst", "analyst-password")
+
+    response = admin_client.patch(
+        f"/api/v1/admin/identities/local:{analyst_id}/enterprise-access",
+        headers=admin_headers,
+        json={"enterprise_access": True},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"enterprise_access": True}
+    assert assigned_counts == [2]
+
+    refreshed_identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
+    refreshed_item = next(
+        identity
+        for identity in refreshed_identities.json()["items"]
+        if identity["id"] == f"local:{analyst_id}"
+    )
+    assert refreshed_item["enterprise_access"] is True
+
+    assert login_as(admin_client, "analyst", "analyst-password")
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": False}),
+    )
+    blocked = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "analyst", "password": "analyst-password"},
+    )
+    assert blocked.status_code == 403
+
+
+def test_admin_enterprise_access_is_not_editable(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(admin_api.license_service, "ensure_identity_management_allowed", lambda: None)
+    admin_headers = auth_headers(admin_client)
+
+    response = admin_client.patch(
+        "/api/v1/admin/identities/local:1/enterprise-access",
+        headers=admin_headers,
+        json={"enterprise_access": False},
+    )
+
+    assert response.status_code == 400
+
+
+def test_core_does_not_expose_built_in_identity_management(
     admin_client: TestClient,
 ) -> None:
     admin_login = login(admin_client)
@@ -293,61 +383,7 @@ def test_admin_can_create_and_sign_in_with_a_built_in_identity(
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["id"].startswith("local:")
-    temporary_password = response.json()["temporary_password"]
-    assert len(temporary_password) >= 8
-
-    identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
-    assert identities.status_code == 200
-    identity = next(item for item in identities.json()["items"] if item["username"] == "ada")
-    assert identity["name"] == "Ada Lovelace"
-    assert identity["provider"] == "Built-in"
-    assert identity["role"] == "user"
-
-    login_response = admin_client.post(
-        "/api/v1/admin/auth/login",
-        json={"username": "ada", "password": temporary_password},
-    )
-    assert login_response.status_code == 200
-    assert login_response.json()["role"] == "user"
-    assert login_response.json()["must_change_password"] is True
-
-    user_headers = {"Authorization": f"Bearer {login_response.json()['token']}"}
-    blocked_response = admin_client.get("/api/v1/admin/datasources", headers=user_headers)
-    assert blocked_response.status_code == 403
-
-    change_response = admin_client.post(
-        "/api/v1/admin/auth/change-password",
-        headers=user_headers,
-        json={"current_password": temporary_password, "new_password": "ada-password"},
-    )
-    assert change_response.status_code == 200
-    assert change_response.json()["must_change_password"] is False
-    assert change_response.json()["role"] == "user"
-
-    expired_password_login = admin_client.post(
-        "/api/v1/admin/auth/login",
-        json={"username": "ada", "password": temporary_password},
-    )
-    assert expired_password_login.status_code == 401
-
-    updated_password_login = admin_client.post(
-        "/api/v1/admin/auth/login",
-        json={"username": "ada", "password": "ada-password"},
-    )
-    assert updated_password_login.status_code == 200
-    assert updated_password_login.json()["must_change_password"] is False
-
-    delete_response = admin_client.delete(
-        f"/api/v1/admin/identities/{response.json()['id']}",
-        headers=admin_headers,
-    )
-    assert delete_response.status_code == 200
-    assert admin_client.post(
-        "/api/v1/admin/auth/login",
-        json={"username": "ada", "password": "ada-password"},
-    ).status_code == 401
+    assert response.status_code == 405
 
 
 def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) -> None:
@@ -2550,14 +2586,54 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     assert not upload_dir.exists()
 
 
-def test_user_may_upload_excel_but_cannot_activate_it(
+def test_unassigned_user_cannot_use_or_upload_excel_datasources(
     admin_client: TestClient,
     monkeypatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
 
     monkeypatch.setattr(admin_api, "get_connector_registry", create_builtin_connector_registry)
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: False)
     headers = user_headers()
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+
+    with create_session() as session:
+        user = session.scalar(select(AdminUser).where(AdminUser.username == "client-user"))
+        assert user is not None
+        user.role = "user"
+        user.enterprise_access = False
+        session.add(
+            DatasourceConnector(
+                connector_key="excel_source",
+                name="Excel source",
+                database_type="duckdb-excel",
+                database_url="duckdb-excel:///test.xlsx",
+                sql_dialect="duckdb",
+                active=True,
+                updated_by="admin",
+            )
+        )
+        session.commit()
+
+    list_response = admin_client.get(
+        "/api/v1/admin/datasources?available_only=true",
+        headers=headers,
+    )
+    assert list_response.status_code == 403
+    assert list_response.json()["detail"] == (
+        "This account has dashboard-only access because no Enterprise user license is assigned."
+    )
+
+    select_response = admin_client.put(
+        "/api/v1/admin/datasources/selection",
+        headers=headers,
+        json={"datasource_ids": ["excel_source"]},
+    )
+    assert select_response.status_code == 403
 
     upload_response = admin_client.post(
         "/api/v1/admin/datasources/excel-upload",
@@ -2570,22 +2646,81 @@ def test_user_may_upload_excel_but_cannot_activate_it(
             )
         },
     )
-    assert upload_response.status_code == 400
-    assert "duckdb-excel datasource connector" in upload_response.json()["detail"]
-
-    activate_response = admin_client.post(
-        "/api/v1/admin/datasources/excel-upload?active=true",
-        headers=headers,
-        files={
-            "file": (
-                "cases.xlsx",
-                io.BytesIO(b"not a real workbook"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    assert upload_response.status_code == 403
+    assert upload_response.json()["detail"] == (
+        "This account has dashboard-only access because no Enterprise user license is assigned."
     )
-    assert activate_response.status_code == 403
-    assert activate_response.json()["detail"] == "Only administrators can activate datasources."
+
+
+def test_unassigned_user_has_dashboard_only_access(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api import auth_dependencies
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        auth_dependencies.license_service,
+        "identity_management_allowed",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    headers = user_headers("dashboard-only-user")
+
+    dashboards = admin_client.get("/api/v1/dashboards", headers=headers)
+    assert dashboards.status_code == 200
+
+    query = admin_client.post(
+        "/api/v1/query",
+        headers=headers,
+        json={"question": "How many records are there?"},
+    )
+    assert query.status_code == 403
+    assert query.json()["detail"] == (
+        "This account has dashboard-only access because no Enterprise user license is assigned."
+    )
+
+    datasources = admin_client.get("/api/v1/admin/datasources", headers=headers)
+    assert datasources.status_code == 403
+    assert datasources.json()["detail"] == query.json()["detail"]
+
+
+def test_inactive_global_enterprise_allows_only_admin_login(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    with create_session() as session:
+        session.add(
+            AdminUser(
+                username="inactive-license-user",
+                password_hash=hash_password("user-password"),
+                must_change_password=False,
+                role="user",
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": False}),
+    )
+
+    user_login = admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "inactive-license-user", "password": "user-password"},
+    )
+    assert user_login.status_code == 403
+    assert admin_client.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "admin", "password": "admin"},
+    ).status_code == 200
 
 
 def test_public_datasource_activation_keeps_single_active_datasource(
@@ -3429,7 +3564,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
     )
     monkeypatch.setattr(
         "gaard_api.api.v1.query.create_pipeline",
-        lambda datasource_context=None, interpret=True: FailingPipeline(),
+        lambda datasource_context=None, interpret=True, enterprise_access=True: FailingPipeline(),
     )
 
     query_response = admin_client.post(
@@ -3491,7 +3626,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
     )
     monkeypatch.setattr(
         "gaard_api.api.v1.query.create_pipeline",
-        lambda datasource_context=None, interpret=True: FailingPipeline(),
+        lambda datasource_context=None, interpret=True, enterprise_access=True: FailingPipeline(),
     )
 
     query_response = admin_client.post(

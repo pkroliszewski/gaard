@@ -68,7 +68,7 @@ from gaard_api.admin.services import (
     record_data_query_pipeline_error_audit,
     record_data_query_sql_error_audit,
 )
-from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_enterprise_api_user
 from gaard_api.conversations import (
     Conversation,
     ConversationPrincipal,
@@ -546,6 +546,7 @@ def create_result_classifier(
 def create_pipeline(
     datasource_context: DatasourceContext | DatasourceContexts | None = None,
     interpret: bool = True,
+    enterprise_access: bool = True,
 ) -> QueryPipeline:
     if datasource_context is None:
         datasource_context = (
@@ -557,7 +558,12 @@ def create_pipeline(
     runtime_config = get_query_runtime_config_safe()
     datasource_contexts = normalize_datasource_contexts(datasource_context)
     dialect_plan = resolve_sql_dialect_plan(datasource_contexts)
-    executor = create_datasource_executor(datasource_contexts, runtime_config, dialect_plan)
+    executor = create_datasource_executor(
+        datasource_contexts,
+        runtime_config,
+        dialect_plan,
+        enterprise_access=enterprise_access,
+    )
     output_classification_mode = resolve_output_classification_mode(runtime_config)
     llm_modes = {runtime_config.sql_generation_mode}
     if interpret:
@@ -604,8 +610,13 @@ def create_datasource_executor(
     datasource_contexts: DatasourceContexts,
     runtime_config: QueryRuntimeConfig,
     dialect_plan: SqlDialectPlan,
+    *,
+    enterprise_access: bool = True,
 ) -> QueryExecutor:
-    license_service.ensure_datasource_contexts_allowed(datasource_contexts)
+    license_service.ensure_datasource_contexts_allowed(
+        datasource_contexts,
+        enterprise_access=enterprise_access,
+    )
     return get_query_hook_registry().create_datasource_executor(
         datasource_contexts,
         runtime_config.query_max_rows,
@@ -807,6 +818,7 @@ def run_sql_request(
     datasource_context: DatasourceContext | DatasourceContexts | None,
     extra_metadata: dict[str, Any] | None = None,
     on_stage: Any | None = None,
+    enterprise_access: bool = True,
 ) -> QueryResponse:
     extra_metadata = extra_metadata or {}
     datasource_contexts = normalize_datasource_contexts(datasource_context)
@@ -872,7 +884,11 @@ def run_sql_request(
         if audit_log is not None:
             response.metadata["data_query_audit_id"] = audit_log.id
         return response
-    pipeline = create_pipeline(datasource_context, interpret=effective_request.interpret)
+    pipeline = create_pipeline(
+        datasource_context,
+        interpret=effective_request.interpret,
+        enterprise_access=enterprise_access,
+    )
     try:
         # Keep the regular endpoint compatible with pipelines that do not
         # implement streaming progress callbacks (including integrations).
@@ -1039,7 +1055,14 @@ def effective_query_request(
             for connector, _cache in contexts
         ],
     )
-    license_service.ensure_datasource_contexts_allowed(contexts)
+    license_service.ensure_datasource_contexts_allowed(
+        contexts,
+        enterprise_access=(
+            principal is None
+            or principal.user.enterprise_access
+            or principal.user.role == "admin"
+        ),
+    )
     return effective_context.request, contexts
 
 
@@ -1815,7 +1838,7 @@ def ndjson_line(payload: dict[str, Any]) -> str:
 @router.post("/query", response_model=QueryResponse)
 def query(
     request: QueryRequest,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> QueryResponse:
     effective_request, datasource_context = effective_query_request(request, _user)
     conversation, context_classification, query_request = resolve_request_conversation(
@@ -1848,6 +1871,7 @@ def query(
         query_request,
         datasource_context,
         {"active_datasource_ids": active_datasource_ids} if active_datasource_ids else None,
+        enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
     )
     if conversation is not None:
         return add_conversation_to_response(
@@ -1864,7 +1888,7 @@ def query(
 @router.post("/query/explain", response_model=QueryAnswerExplanationResponse)
 def query_explain(
     request: QueryAnswerExplanationRequest,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> QueryAnswerExplanationResponse:
     return explain_query_answer(request)
 
@@ -1872,7 +1896,7 @@ def query_explain(
 @router.post("/query/stream")
 def query_stream(
     request: QueryRequest,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> StreamingResponse:
     def single_response() -> Iterator[str]:
         # Every stream event has a ``final`` key so consumers can safely
@@ -1927,6 +1951,7 @@ def query_stream(
                     datasource_context,
                     extra_metadata,
                     on_stage=lambda stage: events.put({"stage": stage, "final": None}),
+                    enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
                 )
                 if conversation is not None:
                     response = add_conversation_to_response(

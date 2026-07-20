@@ -5,11 +5,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 import logging
 import threading
+from types import SimpleNamespace
 
 import httpx2 as httpx
 import pytest
 
-from gaard_api.admin.database import reset_metadata_store_for_tests
+from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
+from gaard_api.admin.models import AdminUser
 from gaard_api.core.settings import settings
 from gaard_api.license import (
     LicenseAccessError,
@@ -166,6 +168,89 @@ def test_identity_management_allows_active_enterprise_license(
     assert state.plan == "enterprise"
     assert isolated_license_service.identity_management_allowed() is True
     isolated_license_service.ensure_identity_management_allowed()
+
+
+def test_enterprise_human_user_limit_defaults_to_one_when_missing(
+    isolated_license_service: LicenseService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
+    isolated_license_service.set_http_post_for_tests(
+        lambda url, json, timeout: response(valid_payload("enterprise"))
+    )
+    isolated_license_service.refresh(force=True)
+
+    isolated_license_service.ensure_human_user_limit(1)
+    with pytest.raises(LicenseAccessError, match="allows 1 human user"):
+        isolated_license_service.ensure_human_user_limit(2)
+
+
+def test_license_refresh_revokes_newest_excess_enterprise_users(
+    isolated_license_service: LicenseService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
+    payload = valid_payload("enterprise")
+    payload["limits"] = {"human_users": 2}
+    isolated_license_service.set_http_post_for_tests(
+        lambda url, json, timeout: response(payload)
+    )
+
+    with create_session() as session:
+        older_user = AdminUser(
+            username="licensed-user-1",
+            password_hash="unused",
+            role="user",
+            enterprise_access=True,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        newer_user = AdminUser(
+            username="licensed-user-2",
+            password_hash="unused",
+            role="user",
+            enterprise_access=True,
+            created_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        newest_user = AdminUser(
+            username="licensed-user-3",
+            password_hash="unused",
+            role="user",
+            enterprise_access=True,
+            created_at=datetime(2026, 1, 3, tzinfo=UTC),
+        )
+        session.add_all([older_user, newer_user, newest_user])
+        session.commit()
+        older_user_id = older_user.id
+        newer_user_id = newer_user.id
+        newest_user_id = newest_user.id
+
+    isolated_license_service.refresh(force=True)
+
+    with create_session() as session:
+        assert session.get(AdminUser, older_user_id).enterprise_access is True
+        assert session.get(AdminUser, newer_user_id).enterprise_access is False
+        assert session.get(AdminUser, newest_user_id).enterprise_access is False
+
+
+def test_unassigned_enterprise_user_is_limited_to_community_query_features(
+    isolated_license_service: LicenseService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
+    isolated_license_service.set_http_post_for_tests(
+        lambda url, json, timeout: response(valid_payload("enterprise"))
+    )
+    isolated_license_service.refresh(force=True)
+
+    isolated_license_service.ensure_datasource_contexts_allowed(
+        [(SimpleNamespace(database_type="sqlite"), None)],
+        enterprise_access=False,
+    )
+    with pytest.raises(LicenseAccessError, match="assigned Enterprise user license"):
+        isolated_license_service.ensure_datasource_contexts_allowed(
+            [(SimpleNamespace(database_type="duckdb-excel"), None)],
+            enterprise_access=False,
+        )
 
 
 def test_env_license_key_takes_precedence_over_admin_ui_key(

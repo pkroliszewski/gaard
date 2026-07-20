@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import AdminSession, AdminUser
 from gaard_api.admin.security import hash_token
+from gaard_api.license import license_service
 
 
 SESSION_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=5)
@@ -114,6 +115,11 @@ def get_current_authenticated_session(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin session.",
         )
+    if user.role != "admin" and not license_service.identity_management_allowed():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is inactive because the Enterprise license is not active.",
+        )
 
     # Update activity in the authentication boundary so every authenticated flow is
     # covered, while the conditional update caps writes to one per session per 5 min.
@@ -132,6 +138,7 @@ def get_current_authenticated_session(
         # commit; the activity row itself remains untouched.
         session.commit()
 
+
     return AuthenticatedSession(session=admin_session, user=user)
 
 
@@ -143,7 +150,26 @@ def get_current_api_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated user does not have API access.",
         )
+    if principal.user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change is required before using the application.",
+        )
     return principal
+
+
+def get_current_enterprise_api_user(
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+) -> AuthenticatedSession:
+    if principal.user.enterprise_access:
+        return principal
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            "This account has dashboard-only access because no Enterprise user "
+            "license is assigned."
+        ),
+    )
 
 
 def get_current_admin_allow_password_change(

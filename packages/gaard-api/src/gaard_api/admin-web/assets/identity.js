@@ -7,6 +7,7 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
   let temporaryPassword = "";
   let refreshOnAttach = false;
   let pageResizeObserver = null;
+  let enterpriseAccessEventsAttached = false;
 
   function providerSpecific(user) {
     const entries = Object.entries(user.attributes || {});
@@ -18,22 +19,63 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
     return `<button type="button" data-identity-action="${action}" ${enabled ? "" : "disabled"}>${label}</button>`;
   }
 
+  function builtinUserExtension() {
+    return (state.identityExtensions || []).find((extension) => extension.builtinUserManagement);
+  }
+
+  function builtinUserId(user) {
+    return String(user.id || "").replace(/^local:/, "");
+  }
+
+  function canManageBuiltinUser(user) {
+    return Boolean(
+      builtinUserExtension()
+      && user.provider_id === "local"
+      && user.role === "user"
+    );
+  }
+
+  function canChangeOwnAdminPassword(user) {
+    return Boolean(
+      user.provider_id === "local"
+      && user.role === "admin"
+      && user.username === state.username
+    );
+  }
+
+  function identityManagementPath(user) {
+    const extension = builtinUserExtension();
+    if (extension && canManageBuiltinUser(user)) {
+      return `${extension.usersPath}/${encodeURIComponent(builtinUserId(user))}`;
+    }
+    return `/api/v1/admin/identities/${encodeURIComponent(user.id)}`;
+  }
+
   function userDashboards(user) {
     const dashboards = user.dashboards || [];
     if (!dashboards.length) return `<h3>Dashboards</h3><p class="identity-empty">No dashboards created.</p>`;
     return `<h3>Dashboards</h3><table class="identity-provider-table"><thead><tr><th>Name</th><th>Last updated</th></tr></thead><tbody>${dashboards.map((dashboard) => `<tr><td><strong>${escapeHtml(dashboard.name || "Untitled dashboard")}</strong>${dashboard.description ? `<br><span class="identity-dashboard-description">${escapeHtml(dashboard.description)}</span>` : ""}</td><td>${escapeHtml(dashboard.updated_at || "-")}</td></tr>`).join("")}</tbody></table>`;
   }
 
+  function enterpriseLicenseControl(user, compact = false) {
+    const editable = user.role !== "admin";
+    return `<label class="identity-license-toggle${compact ? " identity-license-toggle-compact" : ""}" data-identity-enterprise-toggle><input type="checkbox" data-identity-enterprise-access data-identity-id="${escapeHtml(user.id)}" ${user.enterprise_access ? "checked" : ""} ${editable ? "" : "disabled"} /><span>${compact ? "" : "Enterprise license"}</span></label>`;
+  }
+
   function renderPane(user) {
-    const editable = Boolean(user.editable_name || user.editable_password);
-    const deletable = user.provider_id === "local" && user.role === "user";
+    const managedBuiltinUser = canManageBuiltinUser(user);
+    const ownAdminPassword = canChangeOwnAdminPassword(user);
+    const editable = Boolean(user.editable_name || user.editable_password || managedBuiltinUser);
+    const deletable = managedBuiltinUser;
+    const enterpriseLicense = enterpriseLicenseControl(user);
     return `<aside class="identity-pane" style="width:${paneWidth}px">
       <div class="identity-resizer" id="identity-resizer" title="Drag to resize"></div>
       <header><div><h2>${escapeHtml(user.name || user.username)}</h2><p>${escapeHtml(user.provider)}</p></div><button id="identity-close" type="button" aria-label="Close">×</button></header>
       <div class="identity-pane-content">
         <dl class="identity-basics"><dt>Name</dt><dd>${escapeHtml(user.name || user.username)}</dd><dt>Username</dt><dd>${escapeHtml(user.username)}${user.overshadowed ? ` <span class="identity-warning" title="Overshadowed by ${escapeHtml(user.overshadowed_by?.username || "another user")} from ${escapeHtml(user.overshadowed_by?.provider || "another provider")}">⚠️</span>` : ""}</dd></dl>
+        ${enterpriseLicense}
         <div class="identity-sessions"><div class="identity-sessions-summary"><span>Active sessions</span><strong>${escapeHtml(user.sessions_count ?? 0)}</strong></div>${actionButton("sessions", "Clear sessons", Number(user.sessions_count || 0) > 0)}</div>
-        <div class="identity-actions">${actionButton("username", "Change username", editable)}${actionButton("password", "Change password", Boolean(user.editable_password))}${deletable ? actionButton("delete", "Delete user", true) : ""}</div>
+        <div class="identity-actions">${actionButton("username", "Change username", editable)}${actionButton("password", "Change password", Boolean(user.editable_password || managedBuiltinUser || ownAdminPassword))}${deletable ? actionButton("delete", "Delete user", true) : ""}</div>
         ${userDashboards(user)}
         ${providerSpecific(user)}
       </div>
@@ -45,6 +87,9 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
     if (editAction === "delete") return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">Delete user</h2><p>Delete ${escapeHtml(selected.name || selected.username)} and their saved application data?</p></div></div><div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="danger" type="button" id="identity-delete-confirm">Delete</button></div></section></div>`;
     if (editAction === "sessions") return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">Clear sessions</h2><p>Sign ${escapeHtml(selected.name || selected.username)} out of every other session. The session making this request is kept.</p></div></div><div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="danger" type="button" id="identity-sessions-clear-confirm">Clear sessions</button></div></section></div>`;
     const isPassword = editAction === "password";
+    if (isPassword && canChangeOwnAdminPassword(selected)) {
+      return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">Change password</h2><p>${escapeHtml(selected.name || selected.username)}</p></div></div><form id="identity-edit-modal-form" class="form-grid"><label>Current password<input name="current_password" type="password" autocomplete="current-password" required /></label><label>New password<input name="new_password" type="password" minlength="8" autocomplete="new-password" required /></label><div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="primary" type="submit">Apply now</button></div></form></section></div>`;
+    }
     const label = isPassword ? "New password" : "New username";
     const value = isPassword ? "" : escapeHtml(selected.username);
     return `<div class="modal-backdrop" data-identity-modal-backdrop><section class="modal-panel modal-panel-small" role="dialog" aria-modal="true" aria-labelledby="identity-modal-title"><div class="modal-header"><div><h2 id="identity-modal-title">${isPassword ? "Change password" : "Change username"}</h2><p>${escapeHtml(selected.name || selected.username)}</p></div></div><form id="identity-edit-modal-form" class="form-grid"><label>${label}<input name="value" ${isPassword ? "type=\"password\" minlength=\"8\" autocomplete=\"new-password\"" : "autocomplete=\"username\""} value="${value}" required /></label><div class="form-actions"><button type="button" data-identity-modal-cancel>Cancel</button><button class="primary" type="submit">Apply now</button></div></form></section></div>`;
@@ -57,8 +102,11 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
   }
 
   function renderIdentity() {
-    const rows = (state.identities || []).map((user) => `<tr class="identity-table-row${selected?.id === user.id ? " selected" : ""}" data-identity-id="${escapeHtml(user.id)}"><td>${escapeHtml(user.name || user.username)}</td><td>${escapeHtml(user.username)}${user.overshadowed ? ` <span class="identity-warning" title="Overshadowed by ${escapeHtml(user.overshadowed_by?.username || "another user")} from ${escapeHtml(user.overshadowed_by?.provider || "another provider")}">⚠️</span>` : ""}</td><td>${escapeHtml(user.role)}</td><td>${escapeHtml(user.provider)}</td></tr>`).join("");
-    return `<section class="panel identities-page"><div class="panel-header"><h2>Identities</h2><div class="form-actions"><button id="identity-create" class="primary" type="button">Create user</button><button id="identity-refresh" type="button">Refresh</button></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Provider</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No users found.</td></tr>`}</tbody></table></div>${selected ? renderPane(selected) : ""}</section>${renderEditModal()}${renderCreateModal()}`;
+    const rows = (state.identities || []).map((user) => `<tr class="identity-table-row${selected?.id === user.id ? " selected" : ""}" data-identity-id="${escapeHtml(user.id)}"><td>${escapeHtml(user.name || user.username)}</td><td>${escapeHtml(user.username)}${user.overshadowed ? ` <span class="identity-warning" title="Overshadowed by ${escapeHtml(user.overshadowed_by?.username || "another user")} from ${escapeHtml(user.overshadowed_by?.provider || "another provider")}">⚠️</span>` : ""}</td><td>${escapeHtml(user.role)}</td><td>${escapeHtml(user.provider)}</td><td>${enterpriseLicenseControl(user, true)}</td></tr>`).join("");
+    const createButton = builtinUserExtension()
+      ? `<button id="identity-create" class="primary" type="button">Create user</button>`
+      : "";
+    return `<section class="panel identities-page"><div class="panel-header"><h2>Identities</h2><div class="form-actions">${createButton}<button id="identity-refresh" type="button">Refresh</button></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Provider</th><th>Enterprise</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No users found.</td></tr>`}</tbody></table></div>${selected ? renderPane(selected) : ""}</section>${renderEditModal()}${renderCreateModal()}`;
   }
 
   function clampPaneWidth() {
@@ -101,16 +149,42 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
   function attachModal() {
     document.querySelector("[data-identity-modal-cancel]")?.addEventListener("click", () => { editAction = null; createError = ""; temporaryPassword = ""; render(); });
     document.querySelector("[data-identity-modal-backdrop]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { editAction = null; createError = ""; temporaryPassword = ""; render(); } });
-    document.querySelector("#identity-edit-modal-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get("value") || ""); const body = editAction === "password" ? { new_password: value } : { username: value }; try { await api(`/api/v1/admin/identities/${encodeURIComponent(selected.id)}`, { method: "PATCH", body: JSON.stringify(body) }); editAction = null; setMessage("success", "Identity updated. The affected user has been signed out."); await load(); } catch (error) { setMessage("error", error.message); } });
-    document.querySelector("#identity-create-modal-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); createError = ""; try { const result = await api("/api/v1/admin/identities", { method: "POST", body: JSON.stringify({ display_name: form.get("display_name"), username: form.get("username") }) }); temporaryPassword = result.temporary_password || ""; await load(); } catch (error) { createError = error.message; render(); } });
-    document.querySelector("#identity-delete-confirm")?.addEventListener("click", async () => { try { await api(`/api/v1/admin/identities/${encodeURIComponent(selected.id)}`, { method: "DELETE" }); selected = null; editAction = null; setMessage("success", "Built-in user deleted."); await load(); } catch (error) { setMessage("error", error.message); } });
+    document.querySelector("#identity-edit-modal-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { if (editAction === "password" && canChangeOwnAdminPassword(selected)) { const result = await api("/api/v1/admin/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: form.get("current_password"), new_password: form.get("new_password") }) }); state.mustChangePassword = result.must_change_password; localStorage.setItem("gaard_admin_must_change", String(result.must_change_password)); editAction = null; setMessage("success", "Password changed."); await load(); return; } const value = String(form.get("value") || ""); const body = editAction === "password" ? { new_password: value } : { username: value }; await api(identityManagementPath(selected), { method: "PATCH", body: JSON.stringify(body) }); editAction = null; setMessage("success", "Identity updated. The affected user has been signed out."); await load(); } catch (error) { setMessage("error", error.message); } });
+    document.querySelector("#identity-create-modal-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); createError = ""; try { const result = await api(builtinUserExtension().usersPath, { method: "POST", body: JSON.stringify({ display_name: form.get("display_name"), username: form.get("username") }) }); temporaryPassword = result.temporary_password || ""; await load(); } catch (error) { createError = error.message; render(); } });
+    document.querySelector("#identity-delete-confirm")?.addEventListener("click", async () => { try { await api(identityManagementPath(selected), { method: "DELETE" }); selected = null; editAction = null; setMessage("success", "Built-in user deleted."); await load(); } catch (error) { setMessage("error", error.message); } });
     document.querySelector("#identity-sessions-clear-confirm")?.addEventListener("click", async () => { try { const result = await api(`/api/v1/admin/identities/${encodeURIComponent(selected.id)}/sessions`, { method: "DELETE" }); editAction = null; setMessage("success", `${result.cleared_sessions || 0} session(s) cleared.`); await load(); } catch (error) { setMessage("error", error.message); } });
+    document.querySelectorAll("[data-identity-enterprise-toggle]").forEach((toggle) => {
+      toggle.addEventListener("click", (event) => event.stopPropagation());
+    });
+    attachEnterpriseAccessEvents();
+  }
+
+  function attachEnterpriseAccessEvents() {
+    if (enterpriseAccessEventsAttached) return;
+    enterpriseAccessEventsAttached = true;
+    document.addEventListener("change", async (event) => {
+      const checkbox = event.target.closest("[data-identity-enterprise-access]");
+      if (!checkbox) return;
+      const identity = state.identities.find((item) => item.id === checkbox.dataset.identityId);
+      if (!identity) return;
+      try {
+        await api(`/api/v1/admin/identities/${encodeURIComponent(identity.id)}/enterprise-access`, {
+          method: "PATCH",
+          body: JSON.stringify({ enterprise_access: checkbox.checked })
+        });
+        setMessage("success", "Enterprise license assignment updated.");
+        await load();
+      } catch (error) {
+        setMessage("error", error.message);
+        await load();
+      }
+    });
   }
 
   function attach() {
     document.querySelector("#identity-create")?.addEventListener("click", () => { editAction = "create"; createError = ""; temporaryPassword = ""; render(); });
     document.querySelector("#identity-refresh")?.addEventListener("click", () => void load(true));
-    document.querySelectorAll("[data-identity-id]").forEach((row) => row.addEventListener("click", () => { selected = state.identities.find((item) => item.id === row.dataset.identityId) || null; render(); }));
+    document.querySelectorAll(".identity-table-row").forEach((row) => row.addEventListener("click", () => { selected = state.identities.find((item) => item.id === row.dataset.identityId) || null; render(); }));
     document.querySelector("#identity-close")?.addEventListener("click", () => { selected = null; render(); });
     document.querySelectorAll("[data-identity-action]").forEach((button) => button.addEventListener("click", () => { editAction = button.dataset.identityAction; render(); }));
     attachResize(); attachModal();

@@ -31,7 +31,7 @@ from gaard_api.admin.services import (
     json_dumps,
     upsert_analysis_business_logic_suggestion,
 )
-from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_enterprise_api_user
 from gaard_api.api.v1.query import (
     add_conversation_to_response,
     conversation_principal,
@@ -1031,6 +1031,7 @@ def run_analysis_loop(
     conversation=None,
     context_classification: ConversationContextClassification | None = None,
     original_request: QueryRequest | None = None,
+    enterprise_access: bool = True,
 ) -> Iterator[str]:
     planner = create_analysis_planner()
     runtime_config = get_query_runtime_config_safe()
@@ -1125,6 +1126,7 @@ def run_analysis_loop(
                         "database_question",
                         original_question,
                     ),
+                    enterprise_access=enterprise_access,
                 )
                 observation = query_response_observation(response)
                 context.setdefault("observations", []).append(observation)
@@ -1160,6 +1162,7 @@ def run_analysis_loop(
                     final_request,
                     datasource_context,
                     metadata_for_analysis(session_id, "final_query", original_question),
+                    enterprise_access=enterprise_access,
                 )
                 response.metadata.update(final_metadata(session_id, "completed", iteration))
                 response = finalize_analysis_response(
@@ -1281,6 +1284,7 @@ def start_stream_for_record(
     conversation=None,
     context_classification: ConversationContextClassification | None = None,
     original_request: QueryRequest | None = None,
+    enterprise_access: bool = True,
 ) -> Iterator[str]:
     event_name = "session_resumed" if resumed else "session_started"
     payload = serialize_analysis_session(record)
@@ -1294,13 +1298,14 @@ def start_stream_for_record(
         conversation=conversation,
         context_classification=context_classification,
         original_request=original_request,
+        enterprise_access=enterprise_access,
     )
 
 
 @router.post("/analysis/stream")
 def analysis_stream(
     request: QueryRequest,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> StreamingResponse:
     effective_request, datasource_context = effective_query_request(request, _user)
     conversation, context_classification, analysis_request = resolve_request_conversation(
@@ -1371,6 +1376,7 @@ def analysis_stream(
             conversation=conversation,
             context_classification=context_classification if conversation is not None else None,
             original_request=effective_request,
+            enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
         ),
         media_type="application/x-ndjson",
     )
@@ -1380,7 +1386,7 @@ def analysis_stream(
 def analysis_message_stream(
     session_id: str,
     request: AnalysisMessageRequest,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> StreamingResponse:
     record = load_analysis_session_record(session_id)
     if record is None:
@@ -1423,7 +1429,7 @@ def analysis_message_stream(
         user_id=record.user_id,
         conversation_id=conversation_id or None,
     )
-    effective_request, datasource_context = effective_query_request(query_request)
+    effective_request, datasource_context = effective_query_request(query_request, _user)
     refreshed_record = load_analysis_session_record(session_id) or record
 
     return StreamingResponse(
@@ -1435,6 +1441,7 @@ def analysis_message_stream(
             conversation=conversation,
             context_classification=context_classification,
             original_request=query_request.model_copy(update={"question": record.question}),
+            enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
         ),
         media_type="application/x-ndjson",
     )
@@ -1443,7 +1450,7 @@ def analysis_message_stream(
 @router.get("/analysis/{session_id}")
 def get_analysis_session(
     session_id: str,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> dict[str, Any]:
     record = load_analysis_session_record(session_id)
     if record is None:
