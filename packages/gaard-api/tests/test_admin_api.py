@@ -454,7 +454,11 @@ def login_as(client: TestClient, username: str, password: str) -> dict[str, str]
     return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
-def user_headers(username: str = "client-user") -> dict[str, str]:
+def user_headers(
+    username: str = "client-user",
+    *,
+    enterprise_access: bool = False,
+) -> dict[str, str]:
     token = f"{username}-token"
     with create_session() as session:
         user = AdminUser(
@@ -462,6 +466,7 @@ def user_headers(username: str = "client-user") -> dict[str, str]:
             password_hash=hash_password("not-used"),
             must_change_password=False,
             role="user",
+            enterprise_access=enterprise_access,
         )
         session.add(user)
         session.flush()
@@ -2354,8 +2359,22 @@ def test_default_datasource_can_be_tested_and_introspected(admin_client: TestCli
     }
 
 
-def test_user_can_list_datasources_but_cannot_create_them(admin_client: TestClient) -> None:
-    headers = user_headers()
+def test_user_can_list_datasources_but_cannot_create_them(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(
+            features={"identity_management": True, "sql_sources": True},
+            limits={"sources": None},
+        ),
+    )
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: False)
+    headers = user_headers(enterprise_access=True)
 
     list_response = admin_client.get("/api/v1/admin/datasources", headers=headers)
 
@@ -2381,9 +2400,18 @@ def test_user_can_list_datasources_but_cannot_create_them(admin_client: TestClie
 
 def test_client_datasource_selection_is_per_user_and_requires_available_sources(
     admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first_user_headers = user_headers("first-user")
-    second_user_headers = user_headers("second-user")
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: False)
+    first_user_headers = user_headers("first-user", enterprise_access=True)
+    second_user_headers = user_headers("second-user", enterprise_access=True)
 
     first_response = admin_client.put(
         "/api/v1/admin/datasources/selection",
@@ -2418,7 +2446,12 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
     from gaard_api.query_hooks import principal_identity_id as query_principal_identity_id
 
     monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: True)
-    headers = user_headers("client-user")
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    headers = user_headers("client-user", enterprise_access=True)
 
     with create_session() as session:
         user = session.scalar(select(AdminUser).where(AdminUser.username == "client-user"))
@@ -2465,8 +2498,20 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
 
 def test_deactivating_datasource_removes_it_from_client_selections(
     admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    headers = user_headers("first-user")
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(
+            features={"identity_management": True, "sql_sources": True},
+            limits={"sources": None},
+        ),
+    )
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: False)
+    headers = user_headers("first-user", enterprise_access=True)
     selection_response = admin_client.put(
         "/api/v1/admin/datasources/selection",
         headers=headers,
