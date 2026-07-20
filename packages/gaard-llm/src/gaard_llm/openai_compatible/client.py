@@ -72,3 +72,27 @@ class OpenAICompatibleClient:
             model=data.get("model"),
             raw=data,
         )
+
+    def list_models(self) -> list[str]:
+        """Return model identifiers exposed by an OpenAI-compatible provider."""
+        try:
+            response = httpx.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise LlmProviderError(
+                f"LLM provider returned HTTP {exc.response.status_code} while listing models."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise LlmProviderError("LLM provider request failed while listing models.") from exc
+
+        try:
+            models = response.json()["data"]
+            model_ids = [item["id"] for item in models if isinstance(item, dict) and item.get("id")]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LlmProviderError("Invalid OpenAI-compatible models response format.") from exc
+
+        return sorted(set(model_ids))

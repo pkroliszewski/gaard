@@ -77,6 +77,60 @@ button.icon-button {
   padding: 0;
 }
 
+.model-picker {
+  position: relative;
+}
+
+.model-input {
+  height:100%;
+  display: flex;
+}
+
+.model-input button {
+  height:100%;
+  align-items: normal;
+}
+
+.model-input input {
+  min-width: 0;
+  flex: 1;
+  border-radius: 6px 0 0 6px;
+}
+
+.model-input .icon-button {
+  border-radius: 0 6px 6px 0;
+  border-left: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.model-options {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  width: 100%;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.model-option {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+}
+
+.model-option:hover {
+  background: var(--panel-strong);
+}
+
 button.icon-button svg {
   width: 16px;
   height: 16px;

@@ -175,3 +175,21 @@ def test_openai_compatible_client_includes_provider_error_body(monkeypatch) -> N
 
     assert "LLM provider returned HTTP 400." in str(exc_info.value)
     assert "Unrecognized request argument supplied." in str(exc_info.value)
+
+
+def test_openai_compatible_client_lists_models(monkeypatch) -> None:
+    def fake_get(*args, **kwargs):
+        assert args[0] == "https://example.com/v1/models"
+        assert kwargs["headers"]["Authorization"] == "Bearer test-key"
+        request = httpx.Request(method="GET", url=args[0])
+        return httpx.Response(
+            status_code=200,
+            request=request,
+            json={"data": [{"id": "model-b"}, {"id": "model-a"}, {"id": "model-a"}]},
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    assert OpenAICompatibleClient(
+        base_url="https://example.com/v1", api_key="test-key"
+    ).list_models() == ["model-a", "model-b"]

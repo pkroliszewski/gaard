@@ -76,6 +76,8 @@ var state = {
   businessLogicDatasources: [],
   businessLogicEditorId: null,
   llmConfig: null,
+  llmModels: [],
+  llmModelsLoading: false,
   reasoningConfig: null,
   governancePolicy: null,
   datasources: [],
@@ -1693,7 +1695,16 @@ function renderLlmConfig() {
           <label>Provider<input name="provider" value="${escapeHtml(config.provider || "openai-compatible")}" /></label>
           <label>Base URL<input name="base_url" value="${escapeHtml(config.base_url || "")}" /></label>
           <label>API key <span class="muted">${apiKeyStatus}</span><input name="api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>
-          <label>Model<input name="model" value="${escapeHtml(config.model || "")}" /></label>
+          <label>Model
+            <div class="model-picker" id="llm-model-picker">
+              <div class="model-input">
+                <input name="model" value="${escapeHtml(config.model || "")}" autocomplete="off" />
+                <button aria-label="Load available models" class="icon-button" id="load-llm-models" title="Load available models" type="button">⌄</button>
+              </div>
+              <div class="model-options" id="llm-model-options" hidden role="listbox" aria-label="Available models"></div>
+            </div>
+            <span id="llm-models-status" class="muted">Enter a model ID, or use the arrow to load available models.</span>
+          </label>
           <label>LLM timeout seconds<input name="timeout_seconds" type="number" min="1" max="600" value="${escapeHtml(config.timeout_seconds || 60)}" /></label>
           <label>Extra body JSON<textarea name="extra_body">${escapeHtml(config.extra_body_json || "{}")}</textarea></label>
           <div class="form-actions">
@@ -2007,6 +2018,9 @@ function attachSectionHandlers() {
   document.querySelector("#update-license-packages")?.addEventListener("click", updateLicensePackages);
   document.querySelector("#llm-config-form")?.addEventListener("submit", saveLlmConfig);
   document.querySelector("#test-llm-config")?.addEventListener("click", testLlmConfig);
+  document.querySelector("#load-llm-models")?.addEventListener("click", loadLlmModels);
+  document.querySelector("#load-llm-models")?.addEventListener("mousedown", (event) => event.preventDefault());
+  document.querySelector("#llm-model-picker")?.addEventListener("focusout", hideLlmModelsOnUnfocus);
   document.querySelector("#reasoning-config-form")?.addEventListener("submit", saveReasoningConfig);
   document.querySelector("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
   document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
@@ -2700,6 +2714,60 @@ async function testLlmConfig() {
     setMessage("error", error.message);
     render();
   }
+}
+async function loadLlmModels() {
+  if (state.llmModelsLoading) return;
+  const formElement = document.querySelector("#llm-config-form");
+  if (!formElement) return;
+  const statusElement = document.querySelector("#llm-models-status");
+  const optionsElement = document.querySelector("#llm-model-options");
+  if (optionsElement && !optionsElement.hidden) {
+    optionsElement.hidden = true;
+    return;
+  }
+  const form = new FormData(formElement);
+  state.llmModelsLoading = true;
+  if (optionsElement) {
+    optionsElement.hidden = true;
+    optionsElement.innerHTML = "";
+  }
+  if (statusElement) statusElement.textContent = "Loading available models…";
+  try {
+    const result = await api("/api/v1/admin/llm-config/models", {
+      method: "POST",
+      body: JSON.stringify({
+        provider: form.get("provider"),
+        base_url: form.get("base_url"),
+        api_key: form.get("api_key"),
+        timeout_seconds: Number(form.get("timeout_seconds") || 60)
+      })
+    });
+    state.llmModels = result.items || [];
+    if (optionsElement && state.llmModels.length) {
+      optionsElement.innerHTML = state.llmModels.map((model) => `<button class="model-option" data-model="${escapeHtml(model)}" role="option" type="button">${escapeHtml(model)}</button>`).join("");
+      optionsElement.querySelectorAll(".model-option").forEach((option) => option.addEventListener("click", selectLlmModel));
+      optionsElement.hidden = false;
+    }
+    if (statusElement) statusElement.textContent = result.error || (state.llmModels.length ? `${state.llmModels.length} available model${state.llmModels.length === 1 ? "" : "s"}.` : "No models were returned. Enter a model ID manually.");
+  } catch (_error) {
+    if (statusElement) statusElement.textContent = "Could not load models. You can enter a model identifier manually.";
+  } finally {
+    state.llmModelsLoading = false;
+  }
+}
+function selectLlmModel(event) {
+  const model = event.currentTarget.dataset.model;
+  if (!model) return;
+  const input = document.querySelector("#llm-config-form [name='model']");
+  if (input) input.value = model;
+  const optionsElement = document.querySelector("#llm-model-options");
+  if (optionsElement) optionsElement.hidden = true;
+}
+function hideLlmModelsOnUnfocus(event) {
+  const nextTarget = event.relatedTarget;
+  if (nextTarget?.classList?.contains("model-option")) return;
+  const optionsElement = document.querySelector("#llm-model-options");
+  if (optionsElement) optionsElement.hidden = true;
 }
 function getLlmConfigPayload() {
   const formElement = document.querySelector("#llm-config-form");

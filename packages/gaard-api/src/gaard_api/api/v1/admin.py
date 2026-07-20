@@ -236,6 +236,13 @@ class LlmConfigRequest(BaseModel):
     )
 
 
+class LlmModelsRequest(BaseModel):
+    provider: str = Field(min_length=1)
+    base_url: str = Field(min_length=1)
+    api_key: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+
+
 class ReasoningConfigRequest(BaseModel):
     intent_classification_mode: str = Field(pattern=r"^(auto|llm)$")
     sql_generation_mode: str = Field(pattern=r"^llm$")
@@ -3365,6 +3372,37 @@ def remove_business_logic_suggestion(
     session.commit()
 
     return {"status": "deleted"}
+
+
+@router.post("/llm-config/models")
+def list_llm_models(
+    request: LlmModelsRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Discover models without saving the draft LLM configuration."""
+    if request.provider != "openai-compatible":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only openai-compatible LLM provider is supported.",
+        )
+
+    current_config = get_llm_runtime_config(session)
+    api_key = (request.api_key or "").strip() or current_config.api_key
+    if not api_key or api_key == "change-me":
+        return {"items": [], "error": "Enter an API key to load available models."}
+
+    try:
+        items = OpenAICompatibleClient(
+            base_url=request.base_url,
+            api_key=api_key,
+            timeout_seconds=request.timeout_seconds or current_config.timeout_seconds,
+        ).list_models()
+    except LlmProviderError:
+        # Model discovery is optional: users can still enter a model identifier manually.
+        return {"items": [], "error": "Could not load models. You can enter a model identifier manually."}
+
+    return {"items": items, "error": None}
 
 
 @router.get("/llm-config")

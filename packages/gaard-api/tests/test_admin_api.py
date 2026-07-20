@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text
 
-from gaard_core.errors import QueryPipelineStepError
+from gaard_core.errors import LlmProviderError, QueryPipelineStepError
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
 from gaard_core.query_pipeline.models import (
     GeneratedSql,
@@ -1334,6 +1334,77 @@ def test_llm_config_can_be_tested_without_saving(
     assert runtime_config.base_url == "https://api.openai.com/v1"
     assert runtime_config.api_key == "change-me"
     assert runtime_config.model == "gpt-4.1-mini"
+
+
+def test_llm_models_are_listed_without_saving(admin_client: TestClient, monkeypatch) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    class FakeOpenAICompatibleClient:
+        init_kwargs: dict | None = None
+
+        def __init__(self, **kwargs) -> None:
+            self.__class__.init_kwargs = kwargs
+
+        def list_models(self):
+            return ["model-a", "model-b"]
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.admin.OpenAICompatibleClient",
+        FakeOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/llm-config/models",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "https://llm.example/v1",
+            "api_key": "test-secret",
+            "timeout_seconds": 45,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": ["model-a", "model-b"], "error": None}
+    assert FakeOpenAICompatibleClient.init_kwargs == {
+        "base_url": "https://llm.example/v1",
+        "api_key": "test-secret",
+        "timeout_seconds": 45,
+    }
+
+
+def test_llm_models_can_fail_without_blocking_manual_model_entry(
+    admin_client: TestClient, monkeypatch
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    class FailingOpenAICompatibleClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def list_models(self):
+            raise LlmProviderError("Connection refused")
+
+    monkeypatch.setattr(
+        "gaard_api.api.v1.admin.OpenAICompatibleClient",
+        FailingOpenAICompatibleClient,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/llm-config/models",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "openai-compatible",
+            "base_url": "https://llm.example/v1",
+            "api_key": "test-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert "Could not load models" in response.json()["error"]
 
 
 def test_llm_config_test_can_reuse_saved_api_key(
