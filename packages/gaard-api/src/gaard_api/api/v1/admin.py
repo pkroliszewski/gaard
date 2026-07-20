@@ -54,7 +54,6 @@ from gaard_api.admin.models import (
 )
 from gaard_api.admin.security import (
     create_session_token,
-    generate_temporary_password,
     hash_password,
     hash_token,
     verify_password,
@@ -128,7 +127,7 @@ from gaard_api.extensions import (
     get_connector_registry,
     get_extension_manager,
 )
-from gaard_api.license import license_service, redact_license_key
+from gaard_api.license import LicenseAccessError, license_service, redact_license_key
 from gaard_api.package_updates import package_update_jobs, package_update_service
 from gaard_api.query_hooks import sqlglot_read_dialect
 
@@ -155,6 +154,7 @@ class LoginResponse(BaseModel):
     username: str
     must_change_password: bool
     role: str = "admin"
+    enterprise_access: bool
 
 
 class ChangePasswordRequest(BaseModel):
@@ -173,6 +173,10 @@ class IdentityCreateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=255)
 
 
+class IdentityEnterpriseAccessRequest(BaseModel):
+    enterprise_access: bool
+
+
 SESSION_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=5)
 
 
@@ -180,6 +184,7 @@ class MeResponse(BaseModel):
     username: str
     must_change_password: bool
     role: str = "admin"
+    enterprise_access: bool
 
 
 @dataclass(frozen=True)
@@ -1325,7 +1330,28 @@ def get_current_authenticated_session(
     else:
         session.commit()
 
+    ensure_user_license_access(user)
+
+
     return AuthenticatedSession(session=admin_session, user=user)
+
+
+def ensure_user_license_access(user: AdminUser) -> None:
+    """Keep non-admin accounts active only while global Enterprise is active."""
+    if user.role == "admin":
+        return
+    state = license_service.refresh_if_due()
+    if state.features.get("identity_management"):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This account does not have an active Enterprise user license.",
+    )
+
+
+def has_enterprise_user_access(principal: AuthenticatedSession) -> bool:
+    return bool(principal.user.enterprise_access)
+
 
 
 def get_current_api_user(
@@ -1340,6 +1366,14 @@ def get_current_api_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Password change is required before using the application.",
+        )
+    if not has_enterprise_user_access(principal):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This account has dashboard-only access because no Enterprise user "
+                "license is assigned."
+            ),
         )
     return principal
 
@@ -1377,6 +1411,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
     )
 
     if user is not None and verify_password(request.password, user.password_hash):
+        ensure_user_license_access(user)
         token = create_session_token()
         session.add(
             AdminSession(
@@ -1401,6 +1436,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
             username=user.username,
             must_change_password=user.must_change_password,
             role=user.role,
+            enterprise_access=user.enterprise_access,
         )
 
     identity = None
@@ -1418,6 +1454,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
         )
 
     user = get_or_create_external_auth_user(session, identity.provider_id, identity.username)
+    ensure_user_license_access(user)
     token = create_session_token()
     session.add(
         AdminSession(
@@ -1447,6 +1484,7 @@ def login(request: LoginRequest, session: Session = Depends(get_session)) -> Log
         username=identity.username,
         must_change_password=False,
         role=user.role,
+        enterprise_access=user.enterprise_access,
     )
 
 
@@ -1486,6 +1524,7 @@ def get_me(
         username=principal.session.username or principal.user.username,
         must_change_password=principal.user.must_change_password,
         role=principal.user.role,
+        enterprise_access=principal.user.enterprise_access,
     )
 
 
@@ -1530,6 +1569,7 @@ def change_password(
         username=user.username,
         must_change_password=False,
         role=user.role,
+        enterprise_access=user.enterprise_access,
     )
 
 
@@ -1539,16 +1579,19 @@ def list_identities(
     user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
     with create_session() as session:
+        identity_management_allowed = license_service.identity_management_allowed()
         session_counts = dict(
             session.execute(
                 select(AdminSession.user_id, func.count(AdminSession.id)).group_by(AdminSession.user_id)
             ).all()
         )
-        external_user_ids = {
-            f"{item.auth_provider}:{item.username}": str(item.id)
-            for item in session.scalars(
-                select(AdminUser).where(AdminUser.auth_provider != "local")
-            ).all()
+        users_by_identity = {
+            (
+                f"local:{item.id}"
+                if item.auth_provider == "local"
+                else f"{item.auth_provider}:{item.username}"
+            ): item
+            for item in session.scalars(select(AdminUser)).all()
         }
         dashboards_by_owner: dict[str, list[dict[str, Any]]] = {}
         for dashboard in session.scalars(
@@ -1576,19 +1619,26 @@ def list_identities(
                 .order_by(AdminUser.username)
             ).all()
         ]
-        if license_service.identity_management_allowed():
+        if identity_management_allowed:
             for provider in get_auth_provider_registry().identity_providers():
                 items.extend(provider.list_users(session, refresh=refresh))
         for item in items:
+            account = users_by_identity.get(str(item["id"]))
             owner_user_id = (
                 str(item["id"]).removeprefix("local:")
                 if item.get("provider_id") == "local"
-                else external_user_ids.get(str(item.get("id") or ""))
+                else str(account.id) if account is not None else None
             )
             item["dashboards"] = dashboards_by_owner.get(owner_user_id or "", [])
+            item["enterprise_access"] = bool(
+                item.get("role") == "admin"
+                or (account is not None and account.enterprise_access)
+            )
+            item["enterprise_access_editable"] = bool(
+                identity_management_allowed and item.get("role") != "admin"
+            )
             if item.get("provider_id") != "local":
-                user_id = external_user_ids.get(str(item.get("id") or ""))
-                item["sessions_count"] = session_counts.get(int(user_id), 0) if user_id else 0
+                item["sessions_count"] = session_counts.get(account.id, 0) if account else 0
         mark_overshadowed_identities(items)
         return {"items": items}
 
@@ -1636,6 +1686,74 @@ def clear_identity_sessions(
     )
     session.commit()
     return {"status": "cleared", "cleared_sessions": cleared}
+
+
+@router.patch("/identities/{identity_id}/enterprise-access")
+def update_identity_enterprise_access(
+    identity_id: str,
+    request: IdentityEnterpriseAccessRequest,
+    actor: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, bool]:
+    try:
+        license_service.ensure_identity_management_allowed()
+    except LicenseAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    provider_id, separator, identity_value = identity_id.partition(":")
+    if not separator or not provider_id or not identity_value:
+        raise HTTPException(status_code=400, detail="Invalid identity id.")
+
+    if provider_id == "local":
+        try:
+            target = session.get(AdminUser, int(identity_value))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid built-in identity id.") from exc
+        if target is not None and target.auth_provider != "local":
+            target = None
+    else:
+        target = session.scalar(
+            select(AdminUser).where(
+                AdminUser.auth_provider == provider_id,
+                AdminUser.username == identity_value,
+            )
+        )
+
+    if target is None:
+        raise HTTPException(status_code=404, detail="Identity was not found.")
+    if target.role == "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Enterprise access for administrator accounts cannot be changed.",
+        )
+
+    if request.enterprise_access and not target.enterprise_access:
+        assigned_users = session.scalar(
+            select(func.count())
+            .select_from(AdminUser)
+            .where(
+                AdminUser.enterprise_access.is_(True),
+            )
+        ) or 0
+        try:
+            license_service.ensure_human_user_limit(assigned_users + 1)
+        except LicenseAccessError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    target.enterprise_access = request.enterprise_access
+    record_admin_audit(
+        session=session,
+        actor=actor.username,
+        action="identity.enterprise_access.update",
+        resource_type="admin_user",
+        resource_id=target.username,
+        details={
+            "auth_provider": target.auth_provider,
+            "enterprise_access": target.enterprise_access,
+        },
+    )
+    session.commit()
+    return {"enterprise_access": target.enterprise_access}
 
 
 def mark_overshadowed_identities(items: list[dict[str, Any]]) -> None:
@@ -2620,6 +2738,7 @@ def get_datasources(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    enterprise_access = has_enterprise_user_access(principal)
     connectors = list_datasource_connectors(session)
     if available_only or principal.user.role != "admin":
         connectors = [
@@ -2629,6 +2748,12 @@ def get_datasources(
         ]
     if available_only or principal.user.role != "admin":
         connectors = filter_datasources_for_identity_privileges(session, principal, connectors)
+    if not enterprise_access:
+        connectors = [
+            connector
+            for connector in connectors
+            if connector.database_type != "duckdb-excel"
+        ]
 
     available_ids = {connector.connector_key for connector in connectors}
     return {
@@ -2639,6 +2764,7 @@ def get_datasources(
             if source_id in available_ids
         ],
         "multiple_selection_allowed": multi_datasource_access_is_active(),
+        "excel_upload_allowed": enterprise_access,
         "viewer": principal.session.username or principal.user.username,
     }
 
@@ -2668,6 +2794,12 @@ def update_datasource_selection(
     ]
     if identity_privileges_are_active():
         available = filter_datasources_for_identity_privileges(session, principal, available)
+    if not has_enterprise_user_access(principal):
+        available = [
+            connector
+            for connector in available
+            if connector.database_type != "duckdb-excel"
+        ]
     available_ids = {connector.connector_key for connector in available}
     unknown_ids = [source_id for source_id in selected_ids if source_id not in available_ids]
     if unknown_ids:
@@ -2788,6 +2920,11 @@ async def upload_excel_datasource(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    if not has_enterprise_user_access(principal):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Uploading Excel workbooks requires an assigned Enterprise user license.",
+        )
     if principal.user.role != "admin" and active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

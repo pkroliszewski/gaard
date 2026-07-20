@@ -332,7 +332,7 @@ def test_analysis_routes_database_evidence_questions_to_database(
                 answer="The doctors table contains durable specialization values.",
             )
 
-    def fake_run_sql_request(request, datasource_context, metadata):
+    def fake_run_sql_request(request, datasource_context, metadata, **_kwargs):
         return QueryResponse(
             question=request.question,
             answer="The specializations are cardiology and pediatrics.",
@@ -523,7 +523,7 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
                 ),
             )
 
-    def fake_run_sql_request(request, datasource_context, metadata):
+    def fake_run_sql_request(request, datasource_context, metadata, **_kwargs):
         return QueryResponse(
             question=request.question,
             answer="The base price for a cardiology consultation is $220.0.",

@@ -68,17 +68,18 @@ def login(client: TestClient) -> str:
     return token
 
 
-def enterprise_payload() -> dict:
-    return paid_payload("enterprise")
+def enterprise_payload(*, human_users: int | None = None) -> dict:
+    limits = {} if human_users is None else {"human_users": human_users}
+    return paid_payload("enterprise", limits=limits)
 
 
-def paid_payload(plan: str) -> dict:
+def paid_payload(plan: str, *, limits: dict | None = None) -> dict:
     return {
         "valid": True,
         "status": "active",
         "plan": plan,
         "features": {},
-        "limits": {},
+        "limits": limits or {},
         "current_period_end": "2035-01-01T00:00:00Z",
         "grace_until": None,
         "server_time": "2026-07-04T00:00:00Z",
@@ -208,6 +209,7 @@ def test_license_status_is_admin_only_and_does_not_return_key(
         "plan",
         "status",
         "valid",
+        "human_users",
         "current_period_end",
         "grace_until",
         "last_checked_at",
@@ -216,6 +218,7 @@ def test_license_status_is_admin_only_and_does_not_return_key(
     }
     assert "license_key" not in payload
     assert payload["plan"] == "community"
+    assert payload["human_users"] == 1
 
 
 def test_admin_can_set_license_key_without_key_leaking_to_response_or_audit(
@@ -236,6 +239,7 @@ def test_admin_can_set_license_key_without_key_leaking_to_response_or_audit(
     payload = response.json()
     assert payload["plan"] == "enterprise"
     assert payload["valid"] is True
+    assert payload["human_users"] == 1
     assert LICENSE_KEY not in response.text
 
     audit_response = license_client.get(
@@ -246,6 +250,24 @@ def test_admin_can_set_license_key_without_key_leaking_to_response_or_audit(
     audit_text = audit_response.text
     assert LICENSE_KEY not in audit_text
     assert "gaard_live_abc..." in audit_text
+
+
+def test_enterprise_license_status_returns_human_user_seats(
+    license_client: TestClient,
+) -> None:
+    token = login(license_client)
+    license_service.set_http_post_for_tests(
+        lambda url, json, timeout: httpx.Response(200, json=enterprise_payload(human_users=12))
+    )
+
+    response = license_client.put(
+        "/api/v1/admin/license/key",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"license_key": LICENSE_KEY},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["human_users"] == 12
 
 
 def test_admin_can_force_license_recheck(license_client: TestClient) -> None:

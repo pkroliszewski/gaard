@@ -8,7 +8,7 @@ from gaard_core.schema.context import SchemaContextService
 
 from gaard_api.admin.prompt_runtime import get_sql_generation_prompt_compiler
 from gaard_api.admin.services import get_datasource_schema_context_safe, get_query_runtime_config_safe
-from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_enterprise_api_user
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
@@ -24,7 +24,7 @@ class CompileSqlGenerationPromptApiRequest(BaseModel):
 @router.post("/prompts/sql-generation", response_model=CompiledPrompt)
 def compile_sql_generation_prompt(
     request: CompileSqlGenerationPromptApiRequest,
-    _user: AuthenticatedSession = Depends(get_current_api_user),
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
 ) -> CompiledPrompt:
     datasource_context = get_datasource_schema_context_safe()
 

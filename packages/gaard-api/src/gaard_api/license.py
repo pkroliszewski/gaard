@@ -10,11 +10,12 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import httpx2 as httpx
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from gaard_core.errors import GaardError
 
-from gaard_api.admin.models import AdminSetting, DatasourceConnector
+from gaard_api.admin.models import AdminSetting, AdminUser, DatasourceConnector
 from gaard_api.core.settings import settings
 from gaard_api.tls_http import http_error_summary, post as tls_post
 
@@ -76,10 +77,12 @@ class LicenseState:
     source: str = "community"
 
     def serialize_status(self) -> dict[str, Any]:
+        human_users = self.limits.get("human_users")
         return {
             "plan": self.plan,
             "status": self.status,
             "valid": self.valid,
+            "human_users": human_users if human_users is not None else 2, # if is only for dev test !!! to do: remove this if in production
             "current_period_end": serialize_datetime(self.current_period_end),
             "grace_until": serialize_datetime(self.grace_until),
             "last_checked_at": serialize_datetime(self.last_checked_at),
@@ -350,6 +353,38 @@ class LicenseService:
                     )
                     self._set_state(session, state)
                     session.commit()
+                    if state.features.get("identity_management"):
+                        assigned_users = session.scalar(
+                            select(func.count())
+                            .select_from(AdminUser)
+                            .where(AdminUser.enterprise_access.is_(True))
+                        ) or 0
+                        revoked_users: list[str] = []
+                        while True:
+                            try:
+                                self.ensure_human_user_limit(assigned_users)
+                                break
+                            except LicenseAccessError:
+                                newest_user = session.scalars(
+                                    select(AdminUser)
+                                    .where(
+                                        AdminUser.enterprise_access.is_(True),
+                                        AdminUser.role != "admin",
+                                    )
+                                    .order_by(AdminUser.created_at.desc(), AdminUser.id.desc())
+                                ).first()
+                                if newest_user is None:
+                                    raise
+                                newest_user.enterprise_access = False
+                                session.flush()
+                                revoked_users.append(newest_user.username)
+                                assigned_users -= 1
+                        if revoked_users:
+                            session.commit()
+                            logger.warning(
+                                "Revoked Enterprise access from users above the licensed seat limit: %s",
+                                ", ".join(revoked_users),
+                            )
                     logger.info(
                         "GAARD license validated: key=%s plan=%s status=%s",
                         redact_license_key(license_key),
@@ -518,15 +553,26 @@ class LicenseService:
     def ensure_datasource_contexts_allowed(
         self,
         contexts: list[tuple[DatasourceConnector, Any]],
+        *,
+        enterprise_access: bool = True,
     ) -> None:
-        if len(contexts) > 1:
-            self.require_feature(
-                "multi_source",
-                "Queries spanning multiple datasources require a license with multi-source access.",
+        state = self.refresh_if_due()
+        features = (
+            state.features
+            if enterprise_access
+            else PLAN_ENTITLEMENTS["community"].features
+        )
+
+        if len(contexts) > 1 and not features["multi_source"]:
+            raise LicenseAccessError(
+                "Queries spanning multiple datasources require an assigned Enterprise user license."
             )
 
         for connector, _cache in contexts:
-            self.ensure_datasource_type_allowed(connector.database_type)
+            if not is_sql_source_type(connector.database_type) and not features["non_sql_sources"]:
+                raise LicenseAccessError(
+                    "This datasource type requires an assigned Enterprise user license."
+                )
 
     def ensure_models_allowed(self, model: str) -> None:
         model_names = normalize_model_names(model)
@@ -550,19 +596,21 @@ class LicenseService:
             )
         )
 
-    def ensure_machine_consumer_limit(self, count: int) -> None:
+    def ensure_human_user_limit(self, assigned_users: int) -> None:
+        """Ensure Enterprise seats are not exceeded by assigned users."""
         state = self.refresh_if_due()
-        if state.features.get("unlimited_machine_consumers"):
-            return
-        limit = state.limits.get("machine_consumers")
-        if limit is None or count <= limit:
+        self.ensure_identity_management_allowed()
+        limit = state.limits.get("human_users")
+
+        limit = 2 if limit is None else limit # if is only for dev test !!! to do: remove this if in production
+        if assigned_users <= limit:
             return
         raise LicenseAccessError(
-            (
-                f"The current {state.plan} license allows {limit} machine consumer"
-                f"{'' if limit == 1 else 's'}."
-            )
+            f"The current Enterprise license allows {limit} human user"
+            f"{'' if limit == 1 else 's'}."
         )
+
+
 
     def _background_loop(self) -> None:
         while not self._stop_event.is_set():

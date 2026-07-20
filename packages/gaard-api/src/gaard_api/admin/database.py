@@ -120,6 +120,7 @@ def seed_admin_user(session: Session) -> None:
             username="admin",
             password_hash=hash_password("admin"),
             must_change_password=True,
+            enterprise_access=True,
         )
     )
 
@@ -130,12 +131,17 @@ def ensure_admin_user_schema(engine: Engine) -> None:
         "display_name": "ALTER TABLE admin_users ADD COLUMN display_name VARCHAR(255) NOT NULL DEFAULT ''",
         "auth_provider": "ALTER TABLE admin_users ADD COLUMN auth_provider VARCHAR(255) NOT NULL DEFAULT 'local'",
         "role": "ALTER TABLE admin_users ADD COLUMN role VARCHAR(50) NOT NULL DEFAULT 'admin'",
+        "enterprise_access": "ALTER TABLE admin_users ADD COLUMN enterprise_access BOOLEAN NOT NULL DEFAULT 0",
         "is_provisioned": "ALTER TABLE admin_users ADD COLUMN is_provisioned BOOLEAN NOT NULL DEFAULT 0",
     }
     with engine.begin() as connection:
         for name, sql in additions.items():
             if name not in columns:
                 connection.execute(text(sql))
+        # Administrator accounts always retain Enterprise access and count toward the seat limit.
+        connection.execute(text(
+            "UPDATE admin_users SET enterprise_access = 1 WHERE role = 'admin'"
+        ))
         if engine.dialect.name == "sqlite" and (
             admin_user_has_global_username_constraint(engine)
             or not admin_user_has_provider_username_constraint(engine)
@@ -189,6 +195,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
             display_name VARCHAR(255) NOT NULL DEFAULT '',
             auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
             role VARCHAR(50) NOT NULL DEFAULT 'admin',
+            enterprise_access BOOLEAN NOT NULL DEFAULT 0,
             password_hash TEXT NOT NULL,
             must_change_password BOOLEAN NOT NULL,
             is_provisioned BOOLEAN NOT NULL DEFAULT 0,
@@ -199,7 +206,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
     """))
     connection.execute(text("""
         INSERT INTO admin_users__migrated
-            (id, username, display_name, auth_provider, role, password_hash, must_change_password, is_provisioned, created_at, updated_at)
+            (id, username, display_name, auth_provider, role, enterprise_access, password_hash, must_change_password, is_provisioned, created_at, updated_at)
         SELECT
             id,
             CASE WHEN password_hash = 'external$disabled' AND instr(username, ':') > 0
@@ -209,6 +216,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
             CASE WHEN auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0
                 THEN substr(username, 1, instr(username, ':') - 1) ELSE auth_provider END,
             role,
+            CASE WHEN role = 'admin' THEN 1 ELSE 0 END,
             password_hash, must_change_password, 0, created_at, updated_at
         FROM admin_users
     """))

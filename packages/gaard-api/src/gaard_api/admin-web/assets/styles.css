@@ -1610,6 +1610,10 @@ code {
 .identity-resizer { position:absolute; left:-5px; top:0; bottom:0; width:10px; cursor:ew-resize; touch-action:none; }
 .identity-pane dt { color:var(--muted); font-size:12px; margin-top:12px; }.identity-pane dd { margin:3px 0; overflow-wrap:anywhere; }
 .identity-basics { margin:0; }
+.identity-license-toggle { display:flex; align-items:center; gap:8px; margin-top:18px; font-size:13px; font-weight:600; }
+.identity-license-toggle input { width:auto; margin:0; }
+.identity-license-toggle:has(input:disabled) { color:var(--muted); }
+.identity-license-toggle-compact { justify-content:center; margin:0; }
 .identity-sessions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
 .identity-sessions-summary { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; }
 .identity-sessions-summary strong { color:var(--text); font-size:14px; }
