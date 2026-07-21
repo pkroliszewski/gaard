@@ -34,15 +34,10 @@ from sqlglot import expressions as exp
 
 from gaard_api.admin.database import create_session, get_session
 from gaard_api.admin.models import (
-    AnalysisSessionRecord,
     AdminSession,
     AdminUser,
     BusinessLogicSuggestion,
-    Conversation,
-    ConversationTurn,
     Dashboard,
-    DashboardUserState,
-    DashboardWidget,
     DatasourceConnector,
     DatasourceSchemaCache,
     OverviewWidget,
@@ -458,6 +453,18 @@ def grant_client_excel_datasource_permission(
             connector_id=connector_id,
             identity_id=principal_identity_id(principal),
             allowed=True,
+        )
+    )
+
+
+def remove_datasource_permissions(session: Session, connector_id: int) -> None:
+    """Remove identity-privilege grants that point to a deleted datasource."""
+    if not identity_privileges_are_active():
+        return
+
+    session.execute(
+        delete(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS).where(
+            IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.connector_id == connector_id
         )
     )
 
@@ -2762,12 +2769,6 @@ async def upload_excel_datasource(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Uploading Excel workbooks requires an assigned Enterprise user license.",
         )
-    if principal.user.role != "admin" and active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can activate datasources.",
-        )
-
     filename = file.filename or ""
     if Path(filename).suffix.lower() != ".xlsx":
         raise HTTPException(
@@ -2986,6 +2987,7 @@ def delete_datasource(
     if schema_cache is not None:
         session.delete(schema_cache)
     remove_datasource_from_selections(session, connector_key)
+    remove_datasource_permissions(session, connector.id)
     session.delete(connector)
 
     record_admin_audit(

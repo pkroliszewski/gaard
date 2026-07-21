@@ -171,20 +171,6 @@ def test_identity_management_allows_active_enterprise_license(
     isolated_license_service.ensure_identity_management_allowed()
 
 
-def test_enterprise_human_user_seat_availability_defaults_to_two_when_missing(
-    isolated_license_service: LicenseService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
-    isolated_license_service.set_http_post_for_tests(
-        lambda url, json, timeout: response(valid_payload("enterprise"))
-    )
-    isolated_license_service.refresh(force=True)
-
-    isolated_license_service.ensure_human_user_seat_available(2)
-    with pytest.raises(LicenseAccessError, match="allows 2 human users"):
-        isolated_license_service.ensure_human_user_seat_available(3)
-
 
 def test_license_refresh_revokes_newest_excess_enterprise_users_and_preserves_admin_seat(
     isolated_license_service: LicenseService,

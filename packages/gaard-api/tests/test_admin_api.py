@@ -2496,6 +2496,65 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
     assert query_principal_identity_id(principal) == f"local:{user_id}"
 
 
+def test_deleting_datasource_removes_identity_privilege_permissions(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: True)
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    with create_session() as session:
+        connector = DatasourceConnector(
+            connector_key="removable_source",
+            name="Removable source",
+            database_type="sqlite",
+            database_url="sqlite:///./removable.db",
+            sql_dialect="sqlite",
+            active=False,
+            updated_by="admin",
+        )
+        session.add(connector)
+        session.flush()
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS identity_privilege_datasource_permissions (
+                connector_id INTEGER NOT NULL,
+                identity_id VARCHAR(512) NOT NULL,
+                allowed BOOLEAN NOT NULL,
+                UNIQUE (connector_id, identity_id)
+            )
+        """))
+        session.execute(
+            text("""
+                INSERT INTO identity_privilege_datasource_permissions
+                    (connector_id, identity_id, allowed)
+                VALUES (:connector_id, 'local:1', 1)
+            """),
+            {"connector_id": connector.id},
+        )
+        connector_id = connector.id
+        session.commit()
+
+    response = admin_client.delete(
+        f"/api/v1/admin/datasources/{connector_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    with create_session() as session:
+        remaining_permissions = session.scalar(
+            text("""
+                SELECT COUNT(*)
+                FROM identity_privilege_datasource_permissions
+                WHERE connector_id = :connector_id
+            """),
+            {"connector_id": connector_id},
+        )
+    assert remaining_permissions == 0
+
+
 def test_deactivating_datasource_removes_it_from_client_selections(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -2629,6 +2688,43 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     assert response.status_code == 400
     assert "duckdb-excel datasource connector" in response.json()["detail"]
     assert not upload_dir.exists()
+
+
+def test_enterprise_user_can_activate_own_uploaded_excel_datasource(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    upload_dir = tmp_path / "excel-uploads"
+    monkeypatch.setattr(settings, "gaard_excel_upload_directory", str(upload_dir))
+    monkeypatch.setattr(admin_api.license_service, "identity_management_allowed", lambda: True)
+    monkeypatch.setattr(admin_api, "ensure_user_license_access", lambda _user: None)
+    monkeypatch.setattr(admin_api, "ensure_excel_datasource_type_available", lambda: None)
+    monkeypatch.setattr(admin_api.license_service, "ensure_datasource_type_allowed", lambda _type: None)
+    monkeypatch.setattr(admin_api.license_service, "ensure_active_source_limit", lambda _items: None)
+    monkeypatch.setattr(
+        admin_api,
+        "set_active_datasource_connector",
+        lambda _session, _connector, _actor: None,
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/excel-upload?active=true",
+        headers=user_headers("excel-owner", enterprise_access=True),
+        files={
+            "file": (
+                "owner-data.xlsx",
+                io.BytesIO(b"test workbook"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["item"]["active"] is True
+    assert response.json()["item"]["updated_by"] == "excel-owner"
 
 
 def test_unassigned_user_cannot_use_or_upload_excel_datasources(

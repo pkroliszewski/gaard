@@ -2162,7 +2162,7 @@ async function uploadSelectedSource(event) {
     try {
         const params = new URLSearchParams({
             backend_url: state.backendUrl,
-            active: "false"
+            active: "true"
         });
         const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
             method: "POST",

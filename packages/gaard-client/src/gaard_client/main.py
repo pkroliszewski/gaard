@@ -563,7 +563,7 @@ async def update_datasource_selection(
 @app.post("/api/datasources/excel")
 async def upload_excel_datasource(
     file: UploadFile = File(...),
-    active: bool = False,
+    active: bool = True,
     backend_url: str | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
