@@ -1,5 +1,5 @@
 import { createIdentityModule } from "./identity.js";
-// src/main.ts
+
 var app = document.querySelector("#app");
 var licensePackageUpdatePollTimer = null;
 var overviewGridStack = null;
@@ -618,7 +618,7 @@ function resizeExtensionFrames() {
         frame.addEventListener("load", () => initializeExtensionFrameHeight(frame), { once: true });
       }
     } else {
-      setExtensionFrameHeight(frame, getExtensionFrameMaxHeight(frame));
+      setExtensionFrameHeight(frame, getExtensionFrameContentHeight(frame));
     }
   });
 }
@@ -631,7 +631,18 @@ function isExtensionFrameDocumentReady(frame) {
 }
 function initializeExtensionFrameHeight(frame) {
   frame.dataset.extensionHeightReady = "true";
-  setExtensionFrameHeight(frame, getExtensionFrameMaxHeight(frame));
+  setExtensionFrameHeight(frame, getExtensionFrameContentHeight(frame));
+}
+function getExtensionFrameContentHeight(frame) {
+  const reportedHeight = Number(frame.dataset.extensionContentHeight);
+  if (Number.isFinite(reportedHeight) && reportedHeight > 0) return reportedHeight;
+  try {
+    const documentElement = frame.contentDocument?.documentElement;
+    const body = frame.contentDocument?.body;
+    return Math.max(documentElement?.scrollHeight || 0, body?.scrollHeight || 0, 1);
+  } catch {
+    return getExtensionFrameMaxHeight(frame);
+  }
 }
 function getExtensionFrameMaxHeight(frame) {
   const content = frame.closest(".content");
@@ -661,6 +672,7 @@ window.addEventListener("message", (event) => {
     if (!frame.dataset.extensionHeightReady) return;
     const height = Number(data?.height);
     if (!Number.isFinite(height) || height <= 0) return;
+    frame.dataset.extensionContentHeight = String(height);
     setExtensionFrameHeight(frame, height);
     return;
   }
@@ -1043,7 +1055,7 @@ function renderConfirmDialog() {
             <p>${escapeHtml(dialog.message || "")}</p>
           </div>
         </div>
-        <div class="panel-actions modal-actions">
+        <div class="form-actions modal-actions">
           <button type="button" data-confirm-cancel>Cancel</button>
           <button type="button" class="danger" data-confirm-accept>${escapeHtml(dialog.confirmLabel || "Delete")}</button>
         </div>
