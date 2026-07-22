@@ -311,6 +311,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
 
     admin_headers = auth_headers(admin_client)
     identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
+    assert identities.json()["can_manage_identities"] is True
     item = next(identity for identity in identities.json()["items"] if identity["id"] == f"local:{analyst_id}")
     assert item["enterprise_access"] is False
     assert item["enterprise_access_editable"] is True
@@ -365,6 +366,78 @@ def test_admin_enterprise_access_is_not_editable(
     )
 
     assert response.status_code == 400
+
+
+def test_additional_administrator_enterprise_access_is_assigned_like_a_user(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(admin_api.license_service, "ensure_identity_management_allowed", lambda: None)
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_human_user_seat_available",
+        lambda assigned_users: None,
+    )
+    admin_headers = auth_headers(admin_client)
+    with create_session() as session:
+        additional_admin = AdminUser(
+            username="licensed-admin",
+            password_hash=hash_password("licensed-admin-password"),
+            must_change_password=False,
+            role="admin",
+            enterprise_access=False,
+        )
+        session.add(additional_admin)
+        session.commit()
+        additional_admin_id = additional_admin.id
+
+    response = admin_client.patch(
+        f"/api/v1/admin/identities/local:{additional_admin_id}/enterprise-access",
+        headers=admin_headers,
+        json={"enterprise_access": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"enterprise_access": True}
+
+
+def test_additional_administrator_cannot_clear_system_administrator_sessions(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    with create_session() as session:
+        system_admin = session.scalar(select(AdminUser).where(AdminUser.is_system_admin.is_(True)))
+        assert system_admin is not None
+        session.add(
+            AdminUser(
+                username="second-admin",
+                password_hash=hash_password("second-admin-password"),
+                must_change_password=False,
+                role="admin",
+                enterprise_access=True,
+            )
+        )
+        session.commit()
+
+    second_admin_headers = login_as(admin_client, "second-admin", "second-admin-password")
+    response = admin_client.delete(
+        f"/api/v1/admin/identities/local:{system_admin.id}/sessions",
+        headers=second_admin_headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "The system administrator cannot be managed by another administrator."
+    )
 
 
 def test_core_does_not_expose_built_in_identity_management(
@@ -423,6 +496,43 @@ def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) 
     )
 
 
+def test_admin_user_schema_marks_existing_first_local_administrator_as_system_admin(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE admin_users (
+                id INTEGER NOT NULL PRIMARY KEY,
+                username VARCHAR(255) NOT NULL,
+                display_name VARCHAR(255) NOT NULL DEFAULT '',
+                auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
+                role VARCHAR(50) NOT NULL DEFAULT 'admin',
+                enterprise_access BOOLEAN NOT NULL DEFAULT 0,
+                password_hash TEXT NOT NULL,
+                must_change_password BOOLEAN NOT NULL,
+                is_provisioned BOOLEAN NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+        """))
+        connection.execute(text("""
+            INSERT INTO admin_users
+                (id, username, auth_provider, role, enterprise_access, password_hash, must_change_password, created_at, updated_at)
+            VALUES
+                (1, 'admin', 'local', 'admin', 1, 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                (2, 'another-admin', 'local', 'admin', 1, 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """))
+
+    ensure_admin_user_schema(engine)
+
+    with engine.connect() as connection:
+        users = connection.execute(text(
+            "SELECT username, is_system_admin FROM admin_users ORDER BY id"
+        )).all()
+    assert users == [("admin", 1), ("another-admin", 0)]
+
+
 def auth_headers(client: TestClient) -> dict[str, str]:
     token = login(client)["token"]
     change_password(client, token)
@@ -458,6 +568,7 @@ def user_headers(
     username: str = "client-user",
     *,
     enterprise_access: bool = False,
+    role: str = "user",
 ) -> dict[str, str]:
     token = f"{username}-token"
     with create_session() as session:
@@ -465,7 +576,7 @@ def user_headers(
             username=username,
             password_hash=hash_password("not-used"),
             must_change_password=False,
-            role="user",
+            role=role,
             enterprise_access=enterprise_access,
         )
         session.add(user)
@@ -475,12 +586,101 @@ def user_headers(
                 token_hash=hash_token(token),
                 user_id=user.id,
                 username=username,
-                role="user",
+                role=role,
                 auth_provider="local",
             )
         )
         session.commit()
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasources(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    headers = user_headers("unlicensed-admin", role="admin")
+    with create_session() as session:
+        session.add(
+            DatasourceConnector(
+                connector_key="excel-source",
+                name="Excel source",
+                database_type="duckdb-excel",
+                database_url="duckdb-excel:///restricted.xlsx",
+                sql_dialect="duckdb",
+                active=False,
+                updated_by="admin",
+            )
+        )
+        session.commit()
+
+    identities = admin_client.patch(
+        "/api/v1/admin/identities/local:1/enterprise-access",
+        headers=headers,
+        json={"enterprise_access": False},
+    )
+    extensions = admin_client.get("/api/v1/admin/extensions", headers=headers)
+    identity_list = admin_client.get("/api/v1/admin/identities", headers=headers)
+    datasources = admin_client.get("/api/v1/admin/datasources", headers=headers)
+    excel = next(item for item in datasources.json()["items"] if item["connector_key"] == "excel-source")
+    excel_mutation = admin_client.post(
+        f"/api/v1/admin/datasources/{excel['id']}/state",
+        headers=headers,
+        json={"active": True},
+    )
+
+    assert identities.status_code == 403
+    assert identity_list.json()["can_manage_identities"] is False
+    assert extensions.json()["admin_sections"] == []
+    assert extensions.json()["admin_frontend_modules"] == []
+    assert excel["enterprise_access_required"] is True
+    assert excel_mutation.status_code == 403
+
+
+def test_unlicensed_admin_cannot_generate_widget_sql_for_excel_datasource(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    headers = user_headers("widget-admin", role="admin")
+    with create_session() as session:
+        session.add(
+            DatasourceConnector(
+                connector_key="widget-excel-source",
+                name="Excel source",
+                database_type="duckdb-excel",
+                database_url="duckdb-excel:///restricted.xlsx",
+                sql_dialect="duckdb",
+                active=False,
+                updated_by="admin",
+            )
+        )
+        session.commit()
+
+    response = admin_client.post(
+        "/api/v1/admin/overview/widgets/generate-sql",
+        headers=headers,
+        json={
+            "widget_key": "restricted_widget",
+            "datasource_key": "widget-excel-source",
+            "question": "Show the rows.",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "assigned Enterprise user license" in response.json()["detail"]
 
 
 def test_admin_lists_datasource_types_from_connector_registry(admin_client: TestClient) -> None:
@@ -646,7 +846,17 @@ def test_query_endpoint_accepts_authenticated_user(admin_client: TestClient) -> 
     assert response.json()["answer"]
 
 
-def test_dashboards_are_scoped_to_authenticated_user(admin_client: TestClient) -> None:
+def test_dashboards_are_scoped_to_authenticated_user(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
     admin_headers = auth_headers(admin_client)
     add_local_user("analyst", "analyst-password")
     analyst_headers = login_as(admin_client, "analyst", "analyst-password")

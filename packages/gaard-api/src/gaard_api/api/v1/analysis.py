@@ -1376,7 +1376,7 @@ def analysis_stream(
             conversation=conversation,
             context_classification=context_classification if conversation is not None else None,
             original_request=effective_request,
-            enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
+            enterprise_access=_user.user.enterprise_access,
         ),
         media_type="application/x-ndjson",
     )
@@ -1441,7 +1441,7 @@ def analysis_message_stream(
             conversation=conversation,
             context_classification=context_classification,
             original_request=query_request.model_copy(update={"question": record.question}),
-            enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
+            enterprise_access=_user.user.enterprise_access,
         ),
         media_type="application/x-ndjson",
     )

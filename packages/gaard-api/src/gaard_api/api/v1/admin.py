@@ -1340,8 +1340,8 @@ def get_current_authenticated_session(
 
 
 def ensure_user_license_access(user: AdminUser) -> None:
-    """Keep non-admin accounts active only while global Enterprise is active."""
-    if user.role == "admin":
+    """Keep non-system accounts active only while global Enterprise is active."""
+    if user.is_system_admin:
         return
     state = license_service.refresh_if_due()
     if state.features.get("identity_management"):
@@ -1354,6 +1354,41 @@ def ensure_user_license_access(user: AdminUser) -> None:
 
 def has_enterprise_user_access(principal: AuthenticatedSession) -> bool:
     return bool(principal.user.enterprise_access)
+
+
+def ensure_admin_can_manage_datasource_type(user: AdminUser, database_type: str) -> None:
+    """Keep Excel/DuckDB datasource functionality behind an Enterprise seat."""
+    if database_type == "duckdb-excel" and not user.enterprise_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Excel datasources require an assigned Enterprise user license.",
+        )
+
+
+def ensure_admin_can_manage_datasource(user: AdminUser, connector: DatasourceConnector) -> None:
+    ensure_admin_can_manage_datasource_type(user, connector.database_type)
+
+
+def ensure_admin_can_use_widget_datasource(
+    user: AdminUser,
+    connector: DatasourceConnector,
+) -> None:
+    """Apply per-user datasource entitlements to overview widget execution."""
+    try:
+        license_service.ensure_datasource_contexts_allowed(
+            [(connector, None)],
+            enterprise_access=user.enterprise_access,
+        )
+    except LicenseAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+def admin_can_use_widget_datasource(user: AdminUser, connector: DatasourceConnector) -> bool:
+    try:
+        ensure_admin_can_use_widget_datasource(user, connector)
+    except HTTPException:
+        return False
+    return True
 
 
 
@@ -1381,6 +1416,20 @@ def get_current_api_user(
     return principal
 
 
+def get_current_datasource_viewer(
+    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
+) -> AuthenticatedSession:
+    """Allow administrators to manage datasource configuration without a seat."""
+    if principal.user.role == "admin":
+        if principal.user.must_change_password:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Password change is required before using the admin portal.",
+            )
+        return principal
+    return get_current_api_user(principal)
+
+
 def get_current_admin_allow_password_change(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AdminUser:
@@ -1401,6 +1450,18 @@ def get_current_admin(
             detail="Password change is required before using the admin portal.",
         )
 
+    return user
+
+
+def get_current_enterprise_admin(
+    user: AdminUser = Depends(get_current_admin),
+) -> AdminUser:
+    """Require an administrator with an assigned Enterprise user license."""
+    if not user.enterprise_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An assigned Enterprise user license is required.",
+        )
     return user
 
 
@@ -1609,6 +1670,7 @@ def list_identities(
                 "username": item.username,
                 "name": item.display_name or item.username,
                 "role": item.role,
+                "is_system_admin": item.is_system_admin,
                 "provider": "Built-in",
                 "provider_id": "local",
                 "editable_name": True,
@@ -1634,16 +1696,21 @@ def list_identities(
             )
             item["dashboards"] = dashboards_by_owner.get(owner_user_id or "", [])
             item["enterprise_access"] = bool(
-                item.get("role") == "admin"
+                item.get("is_system_admin")
                 or (account is not None and account.enterprise_access)
             )
             item["enterprise_access_editable"] = bool(
-                identity_management_allowed and item.get("role") != "admin"
+                identity_management_allowed and not item.get("is_system_admin")
             )
             if item.get("provider_id") != "local":
                 item["sessions_count"] = session_counts.get(account.id, 0) if account else 0
         mark_overshadowed_identities(items)
-        return {"items": items}
+        return {
+            "items": items,
+            "can_manage_identities": bool(
+                user.enterprise_access and identity_management_allowed
+            ),
+        }
 
 
 def identity_user_for_session_action(session: Session, identity_id: str) -> AdminUser:
@@ -1668,10 +1735,15 @@ def identity_user_for_session_action(session: Session, identity_id: str) -> Admi
 def clear_identity_sessions(
     identity_id: str,
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
-    user: AdminUser = Depends(get_current_admin),
+    user: AdminUser = Depends(get_current_enterprise_admin),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     target = identity_user_for_session_action(session, identity_id)
+    if target.is_system_admin and target.id != principal.user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The system administrator cannot be managed by another administrator.",
+        )
     result = session.execute(
         delete(AdminSession).where(
             AdminSession.user_id == target.id,
@@ -1695,7 +1767,7 @@ def clear_identity_sessions(
 def update_identity_enterprise_access(
     identity_id: str,
     request: IdentityEnterpriseAccessRequest,
-    actor: AdminUser = Depends(get_current_admin),
+    actor: AdminUser = Depends(get_current_enterprise_admin),
     session: Session = Depends(get_session),
 ) -> dict[str, bool]:
     try:
@@ -1724,10 +1796,10 @@ def update_identity_enterprise_access(
 
     if target is None:
         raise HTTPException(status_code=404, detail="Identity was not found.")
-    if target.role == "admin":
+    if target.is_system_admin:
         raise HTTPException(
             status_code=400,
-            detail="Enterprise access for administrator accounts cannot be changed.",
+            detail="Enterprise access for the system administrator cannot be changed.",
         )
 
     if request.enterprise_access and not target.enterprise_access:
@@ -1786,9 +1858,11 @@ def get_overview(
 ) -> dict[str, Any]:
     prompts = list_prompt_templates(session)
     retention_days = get_data_query_audit_retention_days(session)
-    widgets = [
-        serialize_overview_widget(session, widget) for widget in list_overview_widgets(session)
-    ]
+    widgets = []
+    for widget in list_overview_widgets(session):
+        datasource = get_datasource_connector_by_key(session, widget.datasource_key)
+        if datasource is not None and admin_can_use_widget_datasource(user, datasource):
+            widgets.append(serialize_overview_widget(session, widget))
 
     return {
         "admin": {
@@ -1808,6 +1882,7 @@ def get_overview(
                 "active": connector.active,
             }
             for connector in list_datasource_connectors(session)
+            if admin_can_use_widget_datasource(user, connector)
         ],
         "tags": list_assigned_widget_tags(session),
         "widgets": widgets,
@@ -1848,6 +1923,9 @@ def get_overview_widget_configs(
         "items": [
             serialize_overview_widget_config(session, widget)
             for widget in list_all_overview_widgets(session)
+            if (datasource := get_datasource_connector_by_key(session, widget.datasource_key))
+            is not None
+            and admin_can_use_widget_datasource(user, datasource)
         ],
         "datasources": [
             {
@@ -1858,6 +1936,7 @@ def get_overview_widget_configs(
                 "active": connector.active,
             }
             for connector in list_datasource_connectors(session)
+            if admin_can_use_widget_datasource(user, connector)
         ],
         "tags": list_assigned_widget_tags(session),
     }
@@ -1882,6 +1961,8 @@ def create_overview_widget(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Datasource does not exist.",
         )
+
+    ensure_admin_can_use_widget_datasource(user, datasource)
 
     query_request = build_overview_widget_query_request(
         connector=datasource,
@@ -2008,6 +2089,8 @@ def create_overview_widget_from_query(
             detail="Datasource does not exist.",
         )
 
+    ensure_admin_can_use_widget_datasource(principal.user, datasource)
+
     widget_key = build_client_widget_key(session, request.label, request.question)
     grid_width = normalize_overview_widget_grid_width(
         request.widget_type,
@@ -2116,6 +2199,8 @@ def generate_overview_widget_sql_preview(
             detail="Datasource does not exist.",
         )
 
+    ensure_admin_can_use_widget_datasource(user, datasource)
+
     query_request = build_overview_widget_query_request(
         connector=datasource,
         widget_key=request.widget_key,
@@ -2176,6 +2261,8 @@ def update_overview_widget(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Datasource does not exist.",
         )
+
+    ensure_admin_can_use_widget_datasource(user, datasource)
 
     query_request = build_overview_widget_query_request(
         connector=datasource,
@@ -2579,7 +2666,7 @@ def update_prompt(
 @router.get("/datasources")
 def get_datasources(
     available_only: bool = False,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_datasource_viewer),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     enterprise_access = has_enterprise_user_access(principal)
@@ -2592,16 +2679,15 @@ def get_datasources(
         ]
     if available_only or principal.user.role != "admin":
         connectors = filter_datasources_for_identity_privileges(session, principal, connectors)
-    if not enterprise_access:
-        connectors = [
-            connector
-            for connector in connectors
-            if connector.database_type != "duckdb-excel"
-        ]
-
     available_ids = {connector.connector_key for connector in connectors}
     return {
-        "items": [serialize_datasource(connector) for connector in connectors],
+        "items": [
+            {
+                **serialize_datasource(connector),
+                "enterprise_access_required": connector.database_type == "duckdb-excel",
+            }
+            for connector in connectors
+        ],
         "selected_datasource_ids": [
             source_id
             for source_id in selected_datasource_ids(session, principal)
@@ -2674,17 +2760,25 @@ def get_datasource_types(
 def get_extensions(
     user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
+    if not user.enterprise_access:
+        return {
+            "items": [serialize_extension_record(record) for record in get_extension_manager().records],
+            "admin_sections": [],
+            "admin_frontend_modules": [],
+            "viewer": user.username,
+        }
+    registry = get_api_registry()
     return {
         "items": [serialize_extension_record(record) for record in get_extension_manager().records],
         "admin_sections": [
-            section.serialize() for section in get_api_registry().list_admin_sections()
+            section.serialize() for section in registry.list_admin_sections()
         ],
         "admin_frontend_modules": [
             {
                 "extension_id": module.extension_id,
                 "module_path": module.module_path,
             }
-            for module in get_api_registry().list_admin_frontend_modules()
+            for module in registry.list_admin_frontend_modules()
         ],
         "viewer": user.username,
     }
@@ -2710,6 +2804,7 @@ def create_datasource(
         sql_dialect=request.sql_dialect,
     )
 
+    ensure_admin_can_manage_datasource_type(user, normalized_config.database_type)
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
     existing = session.scalar(
@@ -2867,6 +2962,8 @@ def update_datasource_state(
             detail="Datasource connector not found.",
         )
 
+    ensure_admin_can_manage_datasource(user, connector)
+
     if is_system_datasource_connector(connector):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2914,6 +3011,8 @@ def update_datasource(
             detail="Datasource connector not found.",
         )
 
+    ensure_admin_can_manage_datasource(user, connector)
+
     if is_system_datasource_connector(connector):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2928,6 +3027,7 @@ def update_datasource(
         sql_dialect=request.sql_dialect,
     )
 
+    ensure_admin_can_manage_datasource_type(user, normalized_config.database_type)
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
     connector.name = request.name
@@ -2973,6 +3073,8 @@ def delete_datasource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datasource connector not found.",
         )
+
+    ensure_admin_can_manage_datasource(user, connector)
 
     if is_system_datasource_connector(connector):
         raise HTTPException(
@@ -3020,6 +3122,8 @@ def activate_datasource(
             detail="Datasource connector not found.",
         )
 
+    ensure_admin_can_manage_datasource(user, connector)
+
     if is_system_datasource_connector(connector):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -3053,6 +3157,8 @@ def test_datasource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datasource connector not found.",
         )
+
+    ensure_admin_can_manage_datasource(user, connector)
 
     license_service.ensure_datasource_type_allowed(connector.database_type)
 
@@ -3088,6 +3194,7 @@ def test_datasource(
 @router.post("/datasources/test")
 def test_datasource_from_request(
     request: DatasourceConnectionTestRequest,
+    user: AdminUser = Depends(get_current_admin),
 ) -> dict[str, Any]:
     normalized_config = normalize_datasource_configuration_or_400(
         database_type=request.database_type,
@@ -3104,6 +3211,7 @@ def test_datasource_from_request(
         sql_dialect=normalized_config.sql_dialect,
         active=False,
     )
+    ensure_admin_can_manage_datasource_type(user, connector.database_type)
     license_service.ensure_datasource_type_allowed(connector.database_type)
     test_datasource_connection(connector)
     return {"status": "ok"}
@@ -3122,6 +3230,8 @@ def introspect_datasource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datasource connector not found.",
         )
+
+    ensure_admin_can_manage_datasource(user, connector)
 
     license_service.ensure_datasource_type_allowed(connector.database_type)
 
@@ -3159,6 +3269,8 @@ def get_datasource_schema(
             detail="Datasource connector not found.",
         )
 
+    ensure_admin_can_manage_datasource(user, connector)
+
     cache = get_datasource_schema_cache(session, connector.id)
 
     if cache is None:
@@ -3186,6 +3298,8 @@ def update_datasource_schema_tables(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datasource connector not found.",
         )
+
+    ensure_admin_can_manage_datasource(user, connector)
 
     cache = get_datasource_schema_cache(session, connector.id)
 

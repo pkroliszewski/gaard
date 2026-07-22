@@ -110,7 +110,12 @@ def clear_expired_admin_sessions(session: Session) -> int:
 
 
 def seed_admin_user(session: Session) -> None:
-    user = session.scalar(select(AdminUser).where(AdminUser.username == "admin"))
+    user = session.scalar(
+        select(AdminUser).where(
+            AdminUser.username == "admin",
+            AdminUser.auth_provider == "local",
+        )
+    )
 
     if user is not None:
         return
@@ -120,6 +125,7 @@ def seed_admin_user(session: Session) -> None:
             username="admin",
             password_hash=hash_password("admin"),
             must_change_password=True,
+            is_system_admin=True,
             enterprise_access=True,
         )
     )
@@ -131,6 +137,7 @@ def ensure_admin_user_schema(engine: Engine) -> None:
         "display_name": "ALTER TABLE admin_users ADD COLUMN display_name VARCHAR(255) NOT NULL DEFAULT ''",
         "auth_provider": "ALTER TABLE admin_users ADD COLUMN auth_provider VARCHAR(255) NOT NULL DEFAULT 'local'",
         "role": "ALTER TABLE admin_users ADD COLUMN role VARCHAR(50) NOT NULL DEFAULT 'admin'",
+        "is_system_admin": "ALTER TABLE admin_users ADD COLUMN is_system_admin BOOLEAN NOT NULL DEFAULT 0",
         "enterprise_access": "ALTER TABLE admin_users ADD COLUMN enterprise_access BOOLEAN NOT NULL DEFAULT 0",
         "is_provisioned": "ALTER TABLE admin_users ADD COLUMN is_provisioned BOOLEAN NOT NULL DEFAULT 0",
     }
@@ -138,9 +145,25 @@ def ensure_admin_user_schema(engine: Engine) -> None:
         for name, sql in additions.items():
             if name not in columns:
                 connection.execute(text(sql))
-        # Administrator accounts always retain Enterprise access and count toward the seat limit.
+        # Existing installations predate the explicit system-admin marker.  The
+        # first local administrator is the account created during initialization.
+        connection.execute(text("""
+            UPDATE admin_users
+            SET is_system_admin = 1
+            WHERE id = (
+                SELECT id FROM admin_users
+                WHERE auth_provider = 'local' AND role = 'admin'
+                ORDER BY id
+                LIMIT 1
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM admin_users WHERE is_system_admin = 1
+            )
+        """))
+        # The system administrator is the sole account with permanent Enterprise
+        # access. Other administrators receive a seat explicitly, like users.
         connection.execute(text(
-            "UPDATE admin_users SET enterprise_access = 1 WHERE role = 'admin'"
+            "UPDATE admin_users SET enterprise_access = 1 WHERE is_system_admin = 1"
         ))
         if engine.dialect.name == "sqlite" and (
             admin_user_has_global_username_constraint(engine)
@@ -195,6 +218,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
             display_name VARCHAR(255) NOT NULL DEFAULT '',
             auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
             role VARCHAR(50) NOT NULL DEFAULT 'admin',
+            is_system_admin BOOLEAN NOT NULL DEFAULT 0,
             enterprise_access BOOLEAN NOT NULL DEFAULT 0,
             password_hash TEXT NOT NULL,
             must_change_password BOOLEAN NOT NULL,
@@ -206,7 +230,7 @@ def rebuild_sqlite_admin_users(connection) -> None:
     """))
     connection.execute(text("""
         INSERT INTO admin_users__migrated
-            (id, username, display_name, auth_provider, role, enterprise_access, password_hash, must_change_password, is_provisioned, created_at, updated_at)
+            (id, username, display_name, auth_provider, role, is_system_admin, enterprise_access, password_hash, must_change_password, is_provisioned, created_at, updated_at)
         SELECT
             id,
             CASE WHEN password_hash = 'external$disabled' AND instr(username, ':') > 0
@@ -216,7 +240,8 @@ def rebuild_sqlite_admin_users(connection) -> None:
             CASE WHEN auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0
                 THEN substr(username, 1, instr(username, ':') - 1) ELSE auth_provider END,
             role,
-            CASE WHEN role = 'admin' THEN 1 ELSE 0 END,
+            is_system_admin,
+            enterprise_access,
             password_hash, must_change_password, 0, created_at, updated_at
         FROM admin_users
     """))

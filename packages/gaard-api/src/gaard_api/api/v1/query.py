@@ -1060,7 +1060,6 @@ def effective_query_request(
         enterprise_access=(
             principal is None
             or principal.user.enterprise_access
-            or principal.user.role == "admin"
         ),
     )
     return effective_context.request, contexts
@@ -1871,7 +1870,7 @@ def query(
         query_request,
         datasource_context,
         {"active_datasource_ids": active_datasource_ids} if active_datasource_ids else None,
-        enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
+        enterprise_access=_user.user.enterprise_access,
     )
     if conversation is not None:
         return add_conversation_to_response(
@@ -1951,7 +1950,7 @@ def query_stream(
                     datasource_context,
                     extra_metadata,
                     on_stage=lambda stage: events.put({"stage": stage, "final": None}),
-                    enterprise_access=_user.user.enterprise_access or _user.user.role == "admin",
+                    enterprise_access=_user.user.enterprise_access,
                 )
                 if conversation is not None:
                     response = add_conversation_to_response(

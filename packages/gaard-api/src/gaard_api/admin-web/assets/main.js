@@ -42,6 +42,7 @@ function persistOpenMenuGroups() {
 var state = {
   token: localStorage.getItem("gaard_admin_token"),
   username: localStorage.getItem("gaard_admin_username") || "",
+  enterpriseAccess: false,
   mustChangePassword: localStorage.getItem("gaard_admin_must_change") === "true",
   mobileMenuOpen: false,
   openMenuGroups: getInitialOpenMenuGroups(),
@@ -100,6 +101,7 @@ var state = {
   licensePackageUpdate: null
 };
 state.identities = [];
+state.canManageIdentities = false;
 var identityModule = createIdentityModule({ api, escapeHtml, state, render, setMessage });
 var packageUpdateStages = [
   { key: "downloading", label: "Downloading" },
@@ -380,10 +382,11 @@ function renderMessages() {
           ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
           ${state.success ? `<div class="success">${escapeHtml(state.success)}</div>` : ""}`;
 }
-function persistAuth(token, username, mustChangePassword) {
+function persistAuth(token, username, mustChangePassword, enterpriseAccess) {
   state.token = token;
   state.username = username;
   state.mustChangePassword = mustChangePassword;
+  state.enterpriseAccess = Boolean(enterpriseAccess);
   localStorage.setItem("gaard_admin_token", token);
   localStorage.setItem("gaard_admin_username", username);
   localStorage.setItem("gaard_admin_must_change", String(mustChangePassword));
@@ -400,6 +403,7 @@ function logout() {
   state.token = null;
   state.username = "";
   state.mustChangePassword = false;
+  state.enterpriseAccess = false;
   state.overviewLoading = false;
   state.overviewRefreshing = false;
   state.overviewEditorWidgetKey = null;
@@ -458,7 +462,7 @@ function renderLogin() {
         logout();
         throw new Error("Admin role is required.");
       }
-      persistAuth(result.token, result.username, result.must_change_password);
+      persistAuth(result.token, result.username, result.must_change_password, result.enterprise_access);
       state.overviewLoading = !result.must_change_password && state.section === "overview";
       setMessage("success", "");
       await loadShellLicense();
@@ -1388,7 +1392,7 @@ function renderDatasources() {
     <div class="split">
       <section class="panel">
         <div class="panel-header"><h2>Datasources</h2><button id="new-datasource">New</button></div>
-        <div class="panel-body list datasource-list">${state.datasources.map((connector) => `<button data-datasource="${connector.id}" class="${selected?.id === connector.id ? "active" : ""}"><strong>${escapeHtml(connector.name)}</strong><br /><span>${escapeHtml(connector.database_type)} ${connector.active ? "active" : ""}</span></button>`).join("")}</div>
+        <div class="panel-body list datasource-list">${state.datasources.map((connector) => `<button data-datasource="${connector.id}" class="${selected?.id === connector.id ? "active" : ""}${isEnterpriseDatasource(connector) && !state.enterpriseAccess ? " disabled" : ""}" ${isEnterpriseDatasource(connector) && !state.enterpriseAccess ? "disabled" : ""}><strong>${escapeHtml(connector.name)}</strong><br /><span>${escapeHtml(connector.database_type)} ${connector.active ? "active" : ""}</span></button>`).join("")}</div>
       </section>
       <section class="panel">
         <div class="panel-header"><h2>${selected ? escapeHtml(selected.name) : "New datasource"}</h2></div>
@@ -1399,15 +1403,22 @@ function renderDatasources() {
 }
 function getSelectedDatasource() {
   if (state.selectedDatasourceId === "new") return null;
-  return state.datasources.find((item) => item.id === state.selectedDatasourceId) || state.datasources[0] || null;
+  const selected = state.datasources.find((item) => item.id === state.selectedDatasourceId);
+  if (selected && (!isEnterpriseDatasource(selected) || state.enterpriseAccess)) return selected;
+  return state.datasources.find((item) => !isEnterpriseDatasource(item) || state.enterpriseAccess)
+    || state.datasources[0]
+    || null;
 }
 function renderDatasourceForm(connector) {
   const systemManaged = connector?.system_managed === true;
-  const selectedTypeKey = connector?.database_type || state.datasourceTypes[0]?.type_key || "";
+  const enterpriseRestricted = isEnterpriseDatasource(connector);
+  const selectedTypeKey = connector?.database_type
+    || state.datasourceTypes.find((item) => item.type_key !== "duckdb-excel" || state.enterpriseAccess)?.type_key
+    || "";
   const selectedType = getDatasourceType(selectedTypeKey);
   const selectedSqlDialect = connector?.sql_dialect || selectedType?.default_sql_dialect || "";
   const unavailableType = Boolean(selectedTypeKey && !selectedType);
-  const disabled = systemManaged || unavailableType || !selectedType ? "disabled" : "";
+  const disabled = systemManaged || enterpriseRestricted || unavailableType || !selectedType ? "disabled" : "";
   const connectorDescription = selectedType?.description || (unavailableType ? `Connector type '${selectedTypeKey}' is unavailable. Install or enable its plugin before editing this datasource.` : "No connector types are available. Install or enable a connector plugin.");
   const connectionValues = datasourceConnectionConfigDefaults(selectedType, connector);
   const extensionPanels = connector ? getDatasourceExtensionPanels("detail", { datasource: connector }) : [];
@@ -1443,6 +1454,9 @@ function renderDatasourceForm(connector) {
 function getDatasourceType(typeKey) {
   return state.datasourceTypes.find((item) => item.type_key === typeKey) || null;
 }
+function isEnterpriseDatasource(connector) {
+  return connector?.enterprise_access_required === true || connector?.database_type === "duckdb-excel";
+}
 function renderDatasourceTypeOptions(selected) {
   const datasourceTypes = [...state.datasourceTypes];
   if (selected && !getDatasourceType(selected)) {
@@ -1458,7 +1472,7 @@ function renderDatasourceTypeOptions(selected) {
   if (!datasourceTypes.length) {
     return `<option value="" selected>No connector types available</option>`;
   }
-  return datasourceTypes.map((item) => `<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  return datasourceTypes.map((item) => `<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""} ${item.type_key === "duckdb-excel" && !state.enterpriseAccess ? "disabled" : ""}>${escapeHtml(item.label)}</option>`).join("");
 }
 function renderSqlDialectOptions(datasourceType, selected) {
   const dialects = [...datasourceType?.sql_dialects || []];
@@ -3236,7 +3250,9 @@ async function loadDatasources() {
   state.datasources = datasources.items || [];
   state.datasourceTypes = datasourceTypes.items || [];
   if (!state.selectedDatasourceId || state.selectedDatasourceId === "new") {
-    state.selectedDatasourceId = state.datasources[0]?.id || null;
+    state.selectedDatasourceId = state.datasources.find(
+      (item) => !isEnterpriseDatasource(item) || state.enterpriseAccess
+    )?.id || state.datasources[0]?.id || null;
   }
   await loadDatasourceExtensions();
   render();
@@ -3334,6 +3350,7 @@ async function bootstrap() {
     const me = await api("/api/v1/admin/me");
     state.username = me.username;
     state.mustChangePassword = me.must_change_password;
+    state.enterpriseAccess = Boolean(me.enterprise_access);
     localStorage.setItem("gaard_admin_must_change", String(state.mustChangePassword));
     await loadShellLicense();
     render();

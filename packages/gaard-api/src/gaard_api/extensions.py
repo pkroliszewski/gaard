@@ -35,11 +35,11 @@ def get_connector_registry() -> ConnectorRegistry:
 def get_api_registry() -> ApiRegistry:
     from fastapi import Depends
 
-    from gaard_api.api.v1.admin import get_current_admin
+    from gaard_api.api.v1.admin import get_current_enterprise_admin
 
     registry = ApiRegistry(
         dependencies=[
-            Depends(get_current_admin),
+            Depends(get_current_enterprise_admin),
             Depends(enforce_extension_license_entitlements),
         ]
     )

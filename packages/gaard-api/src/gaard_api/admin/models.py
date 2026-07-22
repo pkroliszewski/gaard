@@ -36,7 +36,11 @@ class AdminUser(Base):
     display_name: Mapped[str] = mapped_column(String(255), default="")
     auth_provider: Mapped[str] = mapped_column(String(255), index=True, default="local")
     role: Mapped[str] = mapped_column(String(50), index=True, default="admin")
-    # Enterprise access is assigned explicitly to non-admin human identities.
+    # The administrator created while initializing a GAARD installation.
+    # This flag is immutable through identity management.
+    is_system_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Enterprise access is assigned explicitly to every human identity except
+    # the system administrator, which always retains it.
     enterprise_access: Mapped[bool] = mapped_column(Boolean, default=False)
     password_hash: Mapped[str] = mapped_column(Text)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)

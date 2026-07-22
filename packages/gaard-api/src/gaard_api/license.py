@@ -590,7 +590,7 @@ class LicenseService:
                 select(AdminUser)
                 .where(
                     AdminUser.enterprise_access.is_(True),
-                    AdminUser.role != "admin",
+                    AdminUser.is_system_admin.is_(False),
                 )
                 .order_by(AdminUser.created_at.desc(), AdminUser.id.desc())
             ).first()

@@ -115,7 +115,7 @@ def get_current_authenticated_session(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin session.",
         )
-    if user.role != "admin" and not license_service.identity_management_allowed():
+    if not user.is_system_admin and not license_service.identity_management_allowed():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This account is inactive because the Enterprise license is not active.",
