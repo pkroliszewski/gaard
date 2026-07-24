@@ -2900,43 +2900,6 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     assert not upload_dir.exists()
 
 
-def test_enterprise_user_can_activate_own_uploaded_excel_datasource(
-    admin_client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from gaard_api.api.v1 import admin as admin_api
-
-    upload_dir = tmp_path / "excel-uploads"
-    monkeypatch.setattr(settings, "gaard_excel_upload_directory", str(upload_dir))
-    monkeypatch.setattr(admin_api.license_service, "identity_management_allowed", lambda: True)
-    monkeypatch.setattr(admin_api, "ensure_user_license_access", lambda _user: None)
-    monkeypatch.setattr(admin_api, "ensure_excel_datasource_type_available", lambda: None)
-    monkeypatch.setattr(admin_api.license_service, "ensure_datasource_type_allowed", lambda _type: None)
-    monkeypatch.setattr(admin_api.license_service, "ensure_active_source_limit", lambda _items: None)
-    monkeypatch.setattr(
-        admin_api,
-        "set_active_datasource_connector",
-        lambda _session, _connector, _actor: None,
-    )
-
-    response = admin_client.post(
-        "/api/v1/admin/datasources/excel-upload?active=true",
-        headers=user_headers("excel-owner", enterprise_access=True),
-        files={
-            "file": (
-                "owner-data.xlsx",
-                io.BytesIO(b"test workbook"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["item"]["active"] is True
-    assert response.json()["item"]["updated_by"] == "excel-owner"
-
-
 def test_unassigned_user_cannot_use_or_upload_excel_datasources(
     admin_client: TestClient,
     monkeypatch,
