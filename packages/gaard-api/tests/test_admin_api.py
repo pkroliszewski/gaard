@@ -64,7 +64,7 @@ from gaard_api.example_database import (
     install_medical_poc_example_database,
 )
 from gaard_api.main import app
-from gaard_api.query_hooks import QueryHookRegistry
+from gaard_api.query_hooks import QueryHookRegistry, principal_identity_id
 from gaard_connectors import create_builtin_connector_registry
 
 

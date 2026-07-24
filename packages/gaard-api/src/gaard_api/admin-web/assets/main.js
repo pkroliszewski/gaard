@@ -713,10 +713,9 @@ async function handleExtensionAdminApiRequest(frame, data) {
   const method = String(request.method || "GET").toUpperCase();
   const path = String(request.path || "");
   const extensionId = extensionIdForFrame(frame);
-  const allowedRequests = allowedRequestsForExtension(extensionId);
   if (!requestId) return;
   try {
-    if (!allowedRequests.has(`${method} ${path}`)) {
+    if (!isExtensionRequestAllowed(extensionId, method, path)) {
       throw new Error("Extension request is not allowed.");
     }
     const options = { method };
@@ -768,9 +767,39 @@ function allowedRequestsForExtension(extensionId) {
     ]),
     "identity-privileges": new Set([
       "GET /api/v1/extensions/identity-privileges/license-status"
+    ]),
+    "gaard-external-api": new Set([
+      "GET /api/v1/extensions/gaard-external-api/health",
+      "GET /api/v1/extensions/gaard-external-api/info",
+      "POST /api/v1/extensions/gaard-external-api/openapi/introspect",
+      "POST /api/v1/extensions/gaard-external-api/llm/resource-suggestion",
+      "GET /api/v1/extensions/gaard-external-api/configs",
+      "POST /api/v1/extensions/gaard-external-api/configs"
     ])
   };
   return allowedRequestsByExtension[extensionId] || new Set();
+}
+function allowedRequestPatternsForExtension(extensionId) {
+  const allowedPatternsByExtension = {
+    "gaard-external-api": [
+      /^GET \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+$/,
+      /^PUT \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+$/,
+      /^DELETE \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+$/,
+      /^POST \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/llm-contract\/preview$/,
+      /^POST \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/refresh$/,
+      /^GET \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/jobs$/,
+      /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+$/,
+      /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/events$/
+    ]
+  };
+  return allowedPatternsByExtension[extensionId] || [];
+}
+function isExtensionRequestAllowed(extensionId, method, path) {
+  const requestKey = `${method} ${path}`;
+  if (allowedRequestsForExtension(extensionId).has(requestKey)) {
+    return true;
+  }
+  return allowedRequestPatternsForExtension(extensionId).some((pattern) => pattern.test(requestKey));
 }
 function renderOverview() {
   const overview = state.overview;

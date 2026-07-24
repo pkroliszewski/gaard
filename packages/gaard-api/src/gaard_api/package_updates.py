@@ -42,6 +42,7 @@ PACKS_BY_LICENSE_PLAN: dict[LicensePlan, tuple[str, ...]] = {
 PACKAGE_NAMES_BY_PACK: dict[str, tuple[str, ...]] = {
     "data-analyst": (
         "gaard-duckdb-excel-connector",
+        "gaard-external-api",
         "gaard-multi-datasource-access",
     ),
     "enterprise": ("gaard-extract",),
