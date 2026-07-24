@@ -27,33 +27,13 @@ from gaard_core.errors import GaardError
 from packaging.version import InvalidVersion, Version
 
 from gaard_api.core.settings import settings
-from gaard_api.license import LicensePlan, LicenseState, gaard_api_version
+from gaard_api.license import LicenseState, gaard_api_version
 from gaard_api.tls_http import get as tls_get
 from gaard_api.tls_http import http_error_summary, post as tls_post
 
 
 logger = logging.getLogger(__name__)
 
-PACKS_BY_LICENSE_PLAN: dict[LicensePlan, tuple[str, ...]] = {
-    "community": (),
-    "data_analyst": ("data-analyst",),
-    "enterprise": ("data-analyst", "enterprise"),
-}
-PACKAGE_NAMES_BY_PACK: dict[str, tuple[str, ...]] = {
-    "data-analyst": (
-        "gaard-duckdb-excel-connector",
-        "gaard-external-api",
-        "gaard-multi-datasource-access",
-    ),
-    "enterprise": ("gaard-extract",),
-}
-PRIVATE_PACKAGE_NAMES = tuple(
-    dict.fromkeys(
-        package_name
-        for package_names in PACKAGE_NAMES_BY_PACK.values()
-        for package_name in package_names
-    )
-)
 SAFE_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]+\.zip$")
 
 HttpRequest = Callable[..., Any]
@@ -233,7 +213,6 @@ class PackageUpdateService:
 
         try:
             package_root = self._package_root()
-            installed_versions = self._installed_versions(PRIVATE_PACKAGE_NAMES)
             self._report_progress(
                 progress,
                 "downloading",
@@ -246,9 +225,7 @@ class PackageUpdateService:
             )
             pack_results = self._process_archives(
                 archives=archives,
-                license_state=license_state,
                 package_root=package_root,
-                installed_versions=installed_versions,
                 progress=progress,
             )
             installed_count = sum(
@@ -274,9 +251,7 @@ class PackageUpdateService:
         self,
         *,
         archives: list[PackageArchive],
-        license_state: LicenseState,
         package_root: Path,
-        installed_versions: dict[str, str],
         progress: ProgressReporter | None = None,
     ) -> list[dict[str, Any]]:
         if not archives:
@@ -286,22 +261,7 @@ class PackageUpdateService:
                 100,
                 "Packages are already up to date.",
             )
-            return [
-                {
-                    "pack": pack,
-                    "status": "current",
-                    "packages": [
-                        {
-                            "name": package_name,
-                            "installed_version": installed_versions.get(package_name),
-                            "available_version": None,
-                            "action": "current",
-                        }
-                        for package_name in PACKAGE_NAMES_BY_PACK.get(pack, ())
-                    ],
-                }
-                for pack in PACKS_BY_LICENSE_PLAN[license_state.plan]
-            ]
+            return []
 
         self._report_progress(
             progress,
@@ -748,13 +708,6 @@ class PackageUpdateService:
             "installed_version": installed_version,
             "available_version": manifest_package.version,
             "action": action,
-        }
-
-    def _installed_versions(self, package_names: Iterable[str]) -> dict[str, str]:
-        return {
-            package_name: installed_version
-            for package_name in package_names
-            if (installed_version := self._installed_version(package_name)) is not None
         }
 
     def _installed_version(self, package_name: str) -> str | None:

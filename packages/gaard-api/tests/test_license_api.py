@@ -419,6 +419,43 @@ def test_paid_license_can_download_extract_and_install_package_updates(
     assert LICENSE_KEY not in audit_response.text
 
 
+def test_package_update_current_response_does_not_depend_on_hardcoded_inventory(
+    license_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = login(license_client)
+
+    monkeypatch.setattr(settings, "gaard_package_directory", str(tmp_path / "packages"))
+    monkeypatch.setattr(settings, "gaard_package_download_url", "https://packages.test/download")
+    license_service.set_http_post_for_tests(
+        lambda url, json, timeout: httpx.Response(200, json=enterprise_payload())
+    )
+    package_update_service.set_http_post_for_tests(
+        lambda url, json, headers, timeout: httpx.Response(204)
+    )
+
+    save_response = license_client.put(
+        "/api/v1/admin/license/key",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"license_key": LICENSE_KEY},
+    )
+    assert save_response.status_code == 200
+
+    update_response = license_client.post(
+        "/api/v1/admin/license/packages/update",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert update_response.status_code == 202
+    payload = wait_for_package_job(license_client, token, update_response.json()["job_id"])
+    assert payload["status"] == "succeeded"
+    assert payload["result"]["status"] == "current"
+    assert payload["result"]["packs"] == []
+    assert payload["result"]["installed_count"] == 0
+    assert payload["result"]["restart_required"] is False
+
+
 def test_package_update_surfaces_download_request_errors(
     license_client: TestClient,
     tmp_path: Path,
