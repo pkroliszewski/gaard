@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import threading
+import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -20,7 +21,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
-import zipfile
 
 import httpx2 as httpx
 from gaard_core.errors import GaardError
@@ -29,8 +29,8 @@ from packaging.version import InvalidVersion, Version
 from gaard_api.core.settings import settings
 from gaard_api.license import LicenseState, gaard_api_version
 from gaard_api.tls_http import get as tls_get
-from gaard_api.tls_http import http_error_summary, post as tls_post
-
+from gaard_api.tls_http import http_error_summary
+from gaard_api.tls_http import post as tls_post
 
 logger = logging.getLogger(__name__)
 
@@ -802,9 +802,10 @@ class PackageUpdateService:
 
     def _read_manifest(self, archive_content: bytes) -> dict[str, Any]:
         try:
-            with zipfile.ZipFile(io.BytesIO(archive_content)) as archive:
-                with archive.open("manifest.json") as handle:
-                    manifest = json.loads(handle.read().decode("utf-8"))
+            with zipfile.ZipFile(io.BytesIO(archive_content)) as archive, archive.open(
+                "manifest.json"
+            ) as handle:
+                manifest = json.loads(handle.read().decode("utf-8"))
         except (KeyError, json.JSONDecodeError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
             raise PackageUpdateError("Package archive is missing a valid manifest.json.") from exc
 

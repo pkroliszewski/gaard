@@ -80,5 +80,8 @@ gaard_api = [
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.param_functions.Depends", "fastapi.param_functions.File", "fastapi.params.Depends", "fastapi.params.File"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, ClassVar, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,7 @@ from gaard_core.query_pipeline.models import (
     QueryIntentDecision,
     QueryRequest,
 )
-from gaard_llm.providers.models import ChatCompletionResponse
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import make_url
 
@@ -67,11 +68,10 @@ from gaard_api.example_database import (
 )
 from gaard_api.main import app
 from gaard_api.query_hooks import QueryHookRegistry
-from gaard_connectors import create_builtin_connector_registry
 
 
 @pytest.fixture()
-def admin_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
+def admin_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     demo_db = tmp_path / "demo.db"
 
     monkeypatch.setattr(
@@ -92,7 +92,7 @@ def admin_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
     reset_metadata_store_for_tests()
 
 
-def login(client: TestClient) -> dict:
+def login(client: TestClient) -> dict[str, Any]:
     response = client.post(
         "/api/v1/admin/auth/login",
         json={
@@ -102,7 +102,7 @@ def login(client: TestClient) -> dict:
     )
 
     assert response.status_code == 200
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def change_password(client: TestClient, token: str) -> None:
@@ -191,7 +191,7 @@ def test_session_schema_backfills_last_seen_and_startup_cleanup_removes_stale_se
             token_hash="stale", user_id=user.id, last_seen=datetime.now(UTC) - timedelta(days=31)
         ))
         session.commit()
-        assert clear_expired_admin_sessions(session) >= 1
+        clear_expired_admin_sessions(session)
         session.commit()
         assert session.scalar(select(AdminSession).where(AdminSession.token_hash == "stale")) is None
 
@@ -228,12 +228,12 @@ def test_identity_sessions_can_be_cleared_without_revoking_the_requesting_sessio
 
 def test_login_does_not_query_extension_auth_without_identity_license(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
 
     class ExplodingAuthRegistry:
-        def authenticate(self, *args, **kwargs):
+        def authenticate(self, *args: Any, **kwargs: Any) -> None:
             raise AssertionError("extension auth provider should not be queried")
 
     monkeypatch.setattr(
@@ -491,7 +491,7 @@ def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) 
         users = connection.execute(text(
             "SELECT username, auth_provider FROM admin_users ORDER BY id"
         )).all()
-    assert users == [("ada", "ldap"), ("ada", "local"), ("grace", "ldap")]
+    assert [tuple(row) for row in users] == [("ada", "ldap"), ("ada", "local"), ("grace", "ldap")]
     assert any(
         constraint["column_names"] == ["auth_provider", "username"]
         for constraint in inspect(engine).get_unique_constraints("admin_users")
@@ -532,7 +532,7 @@ def test_admin_user_schema_marks_existing_first_local_administrator_as_system_ad
         users = connection.execute(text(
             "SELECT username, is_system_admin FROM admin_users ORDER BY id"
         )).all()
-    assert users == [("admin", 1), ("another-admin", 0)]
+    assert [tuple(row) for row in users] == [("admin", 1), ("another-admin", 0)]
 
 
 def auth_headers(client: TestClient) -> dict[str, str]:
@@ -1229,7 +1229,9 @@ def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
         query_config = get_query_runtime_config(session)
         assert query_config.sql_generation_mode == "llm"
         assert query_config.result_interpretation_mode == "llm"
-        assert session.get(AdminSetting, "gaard_sql_generation_mode").updated_by == "system"
+        sql_generation_mode = session.get(AdminSetting, "gaard_sql_generation_mode")
+        assert sql_generation_mode is not None
+        assert sql_generation_mode.updated_by == "system"
 
     reset_metadata_store_for_tests()
 
@@ -1340,7 +1342,9 @@ def test_candidate_business_knowledge_can_be_recorded(
     reset_metadata_store_for_tests()
 
 
-def stub_business_logic_learning_llm(monkeypatch, payload: dict) -> type:
+def stub_business_logic_learning_llm(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> Any:
     monkeypatch.setattr(settings, "gaard_llm_api_key", "test-key")
     monkeypatch.setattr(settings, "gaard_llm_model", "lesson-model")
     with create_session() as session:
@@ -1349,12 +1353,12 @@ def stub_business_logic_learning_llm(monkeypatch, payload: dict) -> type:
         session.commit()
 
     class FakeOpenAICompatibleClient:
-        requests = []
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(content=json.dumps(payload))
 
@@ -1566,19 +1570,19 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
 
 def test_llm_config_can_be_tested_without_saving(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
-        requests = []
+        init_kwargs: dict[str, Any] | None = None
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(content="OK", model=request.model)
 
@@ -1619,17 +1623,19 @@ def test_llm_config_can_be_tested_without_saving(
     assert runtime_config.model == "gpt-4.1-mini"
 
 
-def test_llm_models_are_listed_without_saving(admin_client: TestClient, monkeypatch) -> None:
+def test_llm_models_are_listed_without_saving(
+    admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
+        init_kwargs: dict[str, Any] | None = None
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def list_models(self):
+        def list_models(self) -> list[str]:
             return ["model-a", "model-b"]
 
     monkeypatch.setattr(
@@ -1658,16 +1664,16 @@ def test_llm_models_are_listed_without_saving(admin_client: TestClient, monkeypa
 
 
 def test_llm_models_can_fail_without_blocking_manual_model_entry(
-    admin_client: TestClient, monkeypatch
+    admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
     class FailingOpenAICompatibleClient:
-        def __init__(self, **_kwargs) -> None:
+        def __init__(self, **_kwargs: Any) -> None:
             pass
 
-        def list_models(self):
+        def list_models(self) -> list[str]:
             raise LlmProviderError("Connection refused")
 
     monkeypatch.setattr(
@@ -1692,7 +1698,7 @@ def test_llm_models_can_fail_without_blocking_manual_model_entry(
 
 def test_llm_config_test_can_reuse_saved_api_key(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -1712,12 +1718,12 @@ def test_llm_config_test_can_reuse_saved_api_key(
     assert update_response.status_code == 200
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
+        init_kwargs: dict[str, Any] | None = None
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             return ChatCompletionResponse(content="OK", model=request.model)
 
     monkeypatch.setattr(
@@ -2131,7 +2137,7 @@ def test_overview_widget_save_only_generates_sql_when_question_changes(
 
     generated_questions: list[str] = []
 
-    def generate_sql(*args, **kwargs) -> str:
+    def generate_sql(*args: Any, **kwargs: Any) -> str:
         generated_questions.append(kwargs["query_request"].question)
         return "SELECT 1 AS value"
 
@@ -2328,13 +2334,13 @@ def test_overview_widget_title_suggestion_uses_llm(
         session.commit()
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
-        requests = []
+        init_kwargs: dict[str, Any] | None = None
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(
                 content="```text\nDoctors by Specialty.\n```",
@@ -2413,12 +2419,12 @@ def test_overview_widget_from_query_strips_datasource_qualifier(
 
 def test_overview_widget_generation_strips_unquoted_datasource_qualifier(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
-    def generate_qualified_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_qualified_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql=(
                 "SELECT CAST(value AS INTEGER) AS retention_days "
@@ -2481,7 +2487,7 @@ def test_overview_widget_can_return_interpreted_result(
 
 def test_overview_widget_sql_error_creates_metadata_business_logic_suggestion(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -2504,7 +2510,7 @@ def test_overview_widget_sql_error_creates_metadata_business_logic_suggestion(
         },
     )
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql="SELECT COUNT(*) AS value FROM prompts",
             confidence=0.6,
@@ -2748,7 +2754,7 @@ def test_client_datasource_selection_is_per_user_and_requires_available_sources(
 
 def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
     from gaard_api.query_hooks import principal_identity_id as query_principal_identity_id
@@ -2970,7 +2976,7 @@ def test_datasource_connector_builds_sqlite_url_from_database_path(
 
 def test_excel_upload_without_duckdb_excel_connector_returns_400(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
@@ -3000,7 +3006,7 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
 
 def test_unassigned_user_cannot_use_or_upload_excel_datasources(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
 
@@ -3137,7 +3143,7 @@ def test_inactive_global_enterprise_allows_only_admin_login(
 
 def test_public_datasource_activation_keeps_single_active_datasource(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     import gaard_api.extensions
@@ -3786,7 +3792,7 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
 
 def test_query_explain_endpoint_uses_answer_explanation_prompt(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     monkeypatch.setattr(settings, "gaard_llm_api_key", "test-key")
@@ -3818,12 +3824,12 @@ def test_query_explain_endpoint_uses_answer_explanation_prompt(
         session.commit()
 
     class FakeOpenAICompatibleClient:
-        requests = []
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(
                 content="SQL liczy zakończone wizyty, bo o to pyta użytkownik.",
@@ -3972,7 +3978,7 @@ def test_query_stream_ignores_legacy_mode_field(
 
 def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     with create_session() as session:
@@ -4052,11 +4058,11 @@ def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
 
 def test_query_writes_access_audit_for_generated_non_select_sql(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
-    def generate_update_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_update_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql="UPDATE patients SET status = 'inactive'",
             confidence=0.6,
@@ -4100,7 +4106,7 @@ def test_query_writes_access_audit_for_generated_non_select_sql(
 
 def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
@@ -4113,7 +4119,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
             )
 
     class FailingPipeline:
-        def handle(self, request: QueryRequest):
+        def handle(self, request: QueryRequest) -> None:
             raise QueryPipelineStepError(
                 message="LLM provider returned HTTP 400. context length exceeded",
                 phase="sql_generation",
@@ -4162,7 +4168,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
 
 def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
@@ -4175,7 +4181,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
             )
 
     class FailingPipeline:
-        def handle(self, request: QueryRequest):
+        def handle(self, request: QueryRequest) -> None:
             raise QueryPipelineStepError(
                 message="LLM provider request failed.",
                 phase="result_interpretation",
@@ -4257,7 +4263,7 @@ def test_query_audit_uses_active_datasource_connector_key(admin_client: TestClie
 
 def test_query_without_active_datasources_returns_before_ai(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
@@ -4266,7 +4272,7 @@ def test_query_without_active_datasources_returns_before_ai(
             connector.active = False
         session.commit()
 
-    def fail_if_ai_is_touched(*args, **kwargs):
+    def fail_if_ai_is_touched(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("AI and query pipeline should not run without active datasources.")
 
     monkeypatch.setattr(
@@ -4372,7 +4378,7 @@ def test_query_endpoint_writes_sql_error_data_query_audit(
 def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     admin_client: TestClient,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     learning_llm = stub_business_logic_learning_llm(
@@ -4413,7 +4419,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     finally:
         connection.close()
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql="SELECT COUNT(*) AS liczba_projektow FROM zlecenia",
             confidence=0.6,
@@ -4528,7 +4534,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 def test_missing_column_sql_error_creates_business_logic_suggestion(
     admin_client: TestClient,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     stub_business_logic_learning_llm(
@@ -4572,7 +4578,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
     finally:
         connection.close()
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql=(
                 "SELECT imie, nazwisko, email, telefon, adres, kod, miasto, "
@@ -4649,7 +4655,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 def test_join_missing_column_sql_error_is_learned_by_llm(
     admin_client: TestClient,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     learning_llm = stub_business_logic_learning_llm(
@@ -4701,7 +4707,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
         "GROUP BY klient_nazwa ORDER BY ilosc DESC LIMIT 10"
     )
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql=bad_sql,
             confidence=0.6,

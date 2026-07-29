@@ -46,5 +46,11 @@ gaard_client = [
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.param_functions.Depends", "fastapi.param_functions.File", "fastapi.params.Depends", "fastapi.params.File"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["PYI034", "PYI036"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

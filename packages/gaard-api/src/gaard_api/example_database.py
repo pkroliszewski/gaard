@@ -1,9 +1,8 @@
+import sqlite3
 from importlib.resources import files
 from pathlib import Path
-import sqlite3
 
 from sqlalchemy import select
-
 
 MEDICAL_POC_RESOURCE_PACKAGE = "gaard_api.example_data.medical_poc"
 MEDICAL_POC_CONNECTOR_KEY = "default"

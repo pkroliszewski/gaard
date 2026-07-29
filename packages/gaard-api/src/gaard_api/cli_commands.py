@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import uvicorn
 from argparse import ArgumentParser, Namespace, _SubParsersAction
+
+import uvicorn
 
 
 def register(subparsers: _SubParsersAction[ArgumentParser]) -> None:

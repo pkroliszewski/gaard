@@ -1,10 +1,11 @@
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
 from gaard_core.result_interpreter.llm_interpreter import LlmResultInterpreter
-from gaard_llm.providers.models import ChatCompletionResponse
 
 
 class FakeLlmClient:
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         return ChatCompletionResponse(
             content="W bazie znajduje się 4 aktywnych pacjentów.",
             model="test-model",
@@ -14,9 +15,9 @@ class FakeLlmClient:
 
 class CapturingLlmClient:
     def __init__(self) -> None:
-        self.requests = []
+        self.requests: list[ChatCompletionRequest] = []
 
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         self.requests.append(request)
 
         return ChatCompletionResponse(
@@ -46,7 +47,7 @@ def test_llm_result_interpreter_returns_model_content() -> None:
 
 def test_llm_result_interpreter_removes_thinking_blocks() -> None:
     class ThinkingFakeLlmClient:
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             return ChatCompletionResponse(
                 content=(
                     "<think>\n"

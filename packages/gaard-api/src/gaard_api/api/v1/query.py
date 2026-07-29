@@ -1,15 +1,13 @@
-import json
+import json as json
 import logging
-import re
 import queue
+import re
 import threading
 from collections.abc import Iterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-
 from gaard_core.conversation_context.llm_classifier import LlmConversationContextClassifier
 from gaard_core.conversation_context.mock_classifier import MockConversationContextClassifier
 from gaard_core.errors import (
@@ -42,6 +40,7 @@ from gaard_core.result_interpreter.mock_interpreter import MockResultInterpreter
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
+from pydantic import BaseModel, Field
 
 from gaard_api.admin.database import create_session
 from gaard_api.admin.prompt_runtime import (
@@ -55,14 +54,14 @@ from gaard_api.admin.prompt_runtime import (
 from gaard_api.admin.services import (
     ACCESS_ERROR_INTENT_CLASSIFICATION,
     ACCESS_ERROR_SQL_VALIDATION,
+    LlmRuntimeConfig,
+    QueryRuntimeConfig,
     get_active_business_logic_prompt_safe,
     get_active_datasource_connectors,
     get_datasource_connector_by_key,
     get_llm_runtime_config_safe,
     get_query_runtime_config_safe,
     learn_business_logic_from_sql_error,
-    LlmRuntimeConfig,
-    QueryRuntimeConfig,
     record_data_query_access_error_audit,
     record_data_query_audit,
     record_data_query_pipeline_error_audit,
@@ -257,9 +256,7 @@ def extract_inference_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     extracted = {
         key: value
         for key, value in metadata.items()
-        if key in INFERENCE_METADATA_KEYS
-        or key.startswith("intent_")
-        or key.startswith("context_")
+        if key in INFERENCE_METADATA_KEYS or key.startswith(("intent_", "context_"))
     }
     conversation = metadata.get("conversation")
     if isinstance(conversation, dict):
@@ -1761,11 +1758,7 @@ def resolve_previous_period(
 
 
 def rewrite_is_too_close_to_original(original: str, standalone: str) -> bool:
-    if standalone == original:
-        return True
-    if len(standalone.split()) <= max(3, len(original.split()) + 1):
-        return True
-    return False
+    return standalone == original or len(standalone.split()) <= max(3, len(original.split()) + 1)
 
 
 def carries_previous_context(standalone: str, previous_question: str) -> bool:
@@ -1781,7 +1774,7 @@ def carries_previous_context(standalone: str, previous_question: str) -> bool:
 def ensure_existing_conversation(
     conversation_id: str,
     principal: ConversationPrincipal,
-):
+) -> Conversation:
     loaded = load_conversation_for_owner(conversation_id, principal)
     if loaded is not None:
         return loaded
@@ -1799,7 +1792,7 @@ def ensure_existing_conversation(
 def add_conversation_to_response(
     response: QueryResponse,
     *,
-    conversation,
+    conversation: Conversation,
     classification: ConversationContextClassification,
     original_request: QueryRequest,
     effective_request: QueryRequest,

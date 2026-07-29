@@ -1,12 +1,12 @@
-from datetime import date, datetime
+import sqlite3
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-import sqlite3
 
 import pytest
+from gaard_core.errors import QueryExecutionError
 
 from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
-from gaard_core.errors import QueryExecutionError
 
 
 def test_sqlalchemy_executor_wraps_database_errors(tmp_path: Path) -> None:
@@ -36,10 +36,10 @@ def test_sqlalchemy_executor_normalizes_database_values_to_jsonable_rows() -> No
 
     row = executor._normalize_row(
         {
-            "total_minutes": Decimal("42"),
+            "total_minutes": Decimal(42),
             "ratio": Decimal("12.5"),
             "created_on": date(2026, 5, 24),
-            "created_at": datetime(2026, 5, 24, 10, 15, 30),
+            "created_at": datetime(2026, 5, 24, 10, 15, 30, tzinfo=UTC).replace(tzinfo=None),
             "payload": b"hello",
             "binary_payload": b"\xff",
             "nested": {"amount": Decimal("7.25")},

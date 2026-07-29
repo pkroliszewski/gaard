@@ -3,9 +3,9 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
+from gaard_core.errors import LlmProviderError, QueryPipelineStepError
 from gaard_core.execution.mock_executor import MockQueryExecutor
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
-from gaard_core.errors import LlmProviderError, QueryPipelineStepError
 from gaard_core.query_pipeline.models import (
     GeneratedSql,
     OutputClassification,
@@ -16,7 +16,6 @@ from gaard_core.query_pipeline.models import (
 from gaard_core.result_classifier.mock_classifier import MockResultClassifier
 from gaard_core.result_interpreter.mock_interpreter import MockResultInterpreter
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
-
 
 logger = logging.getLogger(__name__)
 

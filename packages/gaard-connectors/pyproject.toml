@@ -40,5 +40,8 @@ dev = [
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.param_functions.Depends", "fastapi.params.Depends"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

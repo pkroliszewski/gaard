@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import logging
 import threading
-from typing import Any, Literal
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import httpx2 as httpx
+from gaard_core.errors import GaardError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from gaard_core.errors import GaardError
-
 from gaard_api.admin.models import AdminSetting, AdminUser, DatasourceConnector
 from gaard_api.core.settings import settings
-from gaard_api.tls_http import http_error_summary, post as tls_post
-
+from gaard_api.tls_http import http_error_summary
+from gaard_api.tls_http import post as tls_post
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +187,7 @@ def parse_datetime(value: Any) -> datetime | None:
 
 def normalize_plan(value: Any) -> LicensePlan | None:
     if value in PLAN_ENTITLEMENTS:
-        return value
+        return cast(LicensePlan, value)
     return None
 
 
@@ -520,11 +519,11 @@ class LicenseService:
             return
 
         raise LicenseAccessError(
-            (
+            
                 f"The current {state.plan} license allows {limit} active datasource"
                 f"{'' if limit == 1 else 's'}. Deactivate another datasource or "
                 "update the license before activating this source."
-            )
+            
         )
 
     def ensure_datasource_contexts_allowed(
@@ -567,10 +566,10 @@ class LicenseService:
 
         state = self.state
         raise LicenseAccessError(
-            (
+            
                 "Identity management is available with the Enterprise plan. "
                 f"Current plan: {state.plan}."
-            )
+            
         )
 
     def ensure_human_user_limit(self, session: Session) -> list[str]:

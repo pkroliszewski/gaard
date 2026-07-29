@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 import hashlib
 import io
-from importlib.metadata import PackageNotFoundError
-from pathlib import Path
 import subprocess
 import time
 import zipfile
+from collections.abc import Iterator
+from importlib.metadata import PackageNotFoundError
+from pathlib import Path
+from typing import Any, cast
 
 import httpx2 as httpx
 import pytest
@@ -18,7 +19,6 @@ from gaard_api.core.settings import settings
 from gaard_api.license import license_service
 from gaard_api.main import app
 from gaard_api.package_updates import package_update_jobs, package_update_service
-
 
 LICENSE_KEY = "gaard_live_abc123456789"
 
@@ -54,7 +54,7 @@ def login(client: TestClient) -> str:
         json={"username": "admin", "password": "admin"},
     )
     assert login_response.status_code == 200
-    token = login_response.json()["token"]
+    token = cast(str, login_response.json()["token"])
 
     password_response = client.post(
         "/api/v1/admin/auth/change-password",
@@ -68,12 +68,12 @@ def login(client: TestClient) -> str:
     return token
 
 
-def enterprise_payload(*, human_users: int | None = None) -> dict:
+def enterprise_payload(*, human_users: int | None = None) -> dict[str, Any]:
     limits = {} if human_users is None else {"human_users": human_users}
     return paid_payload("enterprise", limits=limits)
 
 
-def paid_payload(plan: str, *, limits: dict | None = None) -> dict:
+def paid_payload(plan: str, *, limits: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "valid": True,
         "status": "active",
@@ -165,13 +165,13 @@ def package_download_zip() -> bytes:
     return buffer.getvalue()
 
 
-def json_dumps(value: dict) -> str:
+def json_dumps(value: dict[str, Any]) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=True, sort_keys=True)
 
 
-def wait_for_package_job(client: TestClient, token: str, job_id: str) -> dict:
+def wait_for_package_job(client: TestClient, token: str, job_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         response = client.get(
@@ -181,7 +181,7 @@ def wait_for_package_job(client: TestClient, token: str, job_id: str) -> dict:
         assert response.status_code == 200
         payload = response.json()
         if payload["status"] != "running":
-            return payload
+            return cast(dict[str, Any], payload)
         time.sleep(0.05)
     raise AssertionError("Package update job did not finish.")
 
@@ -274,7 +274,7 @@ def test_admin_can_force_license_recheck(license_client: TestClient) -> None:
     token = login(license_client)
     calls = 0
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         nonlocal calls
         calls += 1
         return httpx.Response(200, json=enterprise_payload())
@@ -330,7 +330,7 @@ def test_paid_license_can_download_extract_and_install_package_updates(
     token = login(license_client)
     package_dir = tmp_path / "packages"
     pip_calls: list[list[str]] = []
-    download_requests: list[dict] = []
+    download_requests: list[dict[str, Any]] = []
 
     monkeypatch.setattr(settings, "gaard_package_directory", str(package_dir))
     monkeypatch.setattr(settings, "gaard_package_download_url", "https://packages.test/download")
@@ -343,7 +343,12 @@ def test_paid_license_can_download_extract_and_install_package_updates(
         else (_ for _ in ()).throw(PackageNotFoundError(package_name))
     )
 
-    def fake_download_post(url, json, headers, timeout):
+    def fake_download_post(
+        url: str,
+        json: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> httpx.Response:
         download_requests.append(
             {
                 "url": url,

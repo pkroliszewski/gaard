@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
 
 _EXTENSION_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _SECTION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,62}$")

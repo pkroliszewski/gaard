@@ -1,5 +1,6 @@
-import pytest
+from typing import cast
 
+import pytest
 from gaard_plugin_api import ExtensionContext, ExtensionManager, ExtensionManifest
 
 from gaard_connectors import (
@@ -9,6 +10,7 @@ from gaard_connectors import (
     DuplicateConnectorTypeError,
     create_builtin_connector_registry,
 )
+from gaard_connectors.registry import QueryExecutor, SchemaIntrospector
 
 
 class FakeEntryPoint:
@@ -74,8 +76,8 @@ def test_registry_rejects_duplicate_and_unknown_connector_types() -> None:
         label="Example",
         sql_dialects=("example",),
         url_prefixes=("example://",),
-        executor_factory=lambda database_url, max_rows: None,  # type: ignore[arg-type]
-        introspector_factory=lambda database_url: None,  # type: ignore[arg-type]
+        executor_factory=lambda database_url, max_rows: cast(QueryExecutor, None),
+        introspector_factory=lambda database_url: cast(SchemaIntrospector, None),
         connection_tester=lambda database_url: None,
     )
     registry.register(definition)
@@ -94,8 +96,8 @@ def test_private_connector_contribution_registers_through_extension_manager() ->
         label="Private Warehouse",
         sql_dialects=("postgres",),
         url_prefixes=("warehouse://",),
-        executor_factory=lambda database_url, max_rows: None,  # type: ignore[arg-type]
-        introspector_factory=lambda database_url: None,  # type: ignore[arg-type]
+        executor_factory=lambda database_url, max_rows: cast(QueryExecutor, None),
+        introspector_factory=lambda database_url: cast(SchemaIntrospector, None),
         connection_tester=lambda database_url: None,
         description="A connector supplied by a private extension package.",
     )

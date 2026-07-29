@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import sqlglot
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
@@ -29,6 +29,7 @@ from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlglot import expressions as exp
@@ -62,6 +63,7 @@ from gaard_api.admin.services import (
     OVERVIEW_WIDGET_SCALAR,
     OVERVIEW_WIDGET_TABLE,
     OVERVIEW_WIDGET_TIMESERIES,
+    NormalizedDatasourceConfiguration,
     apply_data_query_audit_retention,
     coerce_data_query_audit_type,
     delete_business_logic_suggestion,
@@ -123,7 +125,8 @@ from gaard_api.extensions import (
     get_connector_registry,
     get_extension_manager,
 )
-from gaard_api.license import LicenseAccessError, license_service, redact_license_key
+from gaard_api.license import LicenseAccessError, redact_license_key
+from gaard_api.license import license_service as license_service
 from gaard_api.package_updates import package_update_jobs, package_update_service
 from gaard_api.query_hooks import sqlglot_read_dialect
 
@@ -905,7 +908,7 @@ def normalize_datasource_configuration_or_400(
     database_url: str | None = None,
     sql_dialect: str | None = None,
     existing_database_url: str | None = None,
-):
+) -> NormalizedDatasourceConfiguration:
     try:
         return normalize_datasource_configuration(
             database_type=database_type,
@@ -1336,7 +1339,7 @@ def get_current_authenticated_session(
         .values(last_seen=datetime.now(UTC))
         .execution_options(synchronize_session=False)
     )
-    if result.rowcount:
+    if cast(CursorResult[Any], result).rowcount:
         session.commit()
     else:
         session.commit()
@@ -1652,11 +1655,12 @@ def list_identities(
 ) -> dict[str, Any]:
     with create_session() as session:
         identity_management_allowed = license_service.identity_management_allowed()
-        session_counts = dict(
-            session.execute(
+        session_counts: dict[int, int] = {
+            user_id: count
+            for user_id, count in session.execute(
                 select(AdminSession.user_id, func.count(AdminSession.id)).group_by(AdminSession.user_id)
-            ).all()
-        )
+            ).tuples()
+        }
         users_by_identity = {
             (
                 f"local:{item.id}"
@@ -1758,7 +1762,7 @@ def clear_identity_sessions(
             AdminSession.id != principal.session.id,
         )
     )
-    cleared = int(result.rowcount or 0)
+    cleared = int(cast(CursorResult[Any], result).rowcount or 0)
     record_admin_audit(
         session=session,
         actor=user.username,

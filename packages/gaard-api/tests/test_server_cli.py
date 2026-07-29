@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -56,7 +57,7 @@ def test_server_cli_parses_install_example_database_options() -> None:
     assert args.no_overwrite is True
 
 
-def test_install_medical_poc_database_creates_sqlite_demo_database(tmp_path) -> None:
+def test_install_medical_poc_database_creates_sqlite_demo_database(tmp_path: Path) -> None:
     database_path = tmp_path / "demo.db"
 
     installed_path = install_medical_poc_database(database_path)
@@ -127,8 +128,8 @@ def test_install_medical_poc_database_creates_sqlite_demo_database(tmp_path) -> 
 
 
 def test_install_medical_poc_example_database_registers_active_datasource(
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata_db = tmp_path / "metadata.db"
     database_path = tmp_path / "demo.db"

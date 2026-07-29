@@ -2,17 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import AdminSession, AdminUser
 from gaard_api.admin.security import hash_token
-from gaard_api.license import license_service
-
+from gaard_api.license import license_service as license_service
 
 SESSION_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=5)
 
@@ -130,7 +130,7 @@ def get_current_authenticated_session(
         .values(last_seen=datetime.now(UTC))
         .execution_options(synchronize_session=False)
     )
-    if result.rowcount:
+    if cast(CursorResult[Any], result).rowcount:
         session.commit()
     else:
         # End the read transaction before the endpoint opens another metadata

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from gaard_core.json_utils import json_dumps, to_jsonable
@@ -7,10 +7,10 @@ from gaard_core.json_utils import json_dumps, to_jsonable
 def test_to_jsonable_normalizes_common_database_values() -> None:
     assert to_jsonable(
         {
-            "integer_decimal": Decimal("30"),
+            "integer_decimal": Decimal(30),
             "fractional_decimal": Decimal("30.5"),
             "event_date": date(2026, 5, 24),
-            "event_time": datetime(2026, 5, 24, 9, 30),
+            "event_time": datetime(2026, 5, 24, 9, 30, tzinfo=UTC).replace(tzinfo=None),
             "payload": b"ok",
             "binary_payload": b"\xff",
         }
@@ -25,6 +25,6 @@ def test_to_jsonable_normalizes_common_database_values() -> None:
 
 
 def test_json_dumps_serializes_common_database_values() -> None:
-    payload = {"rows": [{"total_minutes": Decimal("42")}]}
+    payload = {"rows": [{"total_minutes": Decimal(42)}]}
 
     assert '"total_minutes": 42' in json_dumps(payload)

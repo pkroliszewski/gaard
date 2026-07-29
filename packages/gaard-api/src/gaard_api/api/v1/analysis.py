@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Iterator, Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import select
-
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import (
     ConversationContextClassification,
@@ -21,9 +19,11 @@ from gaard_core.query_pipeline.models import (
 )
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from gaard_api.admin.database import create_session
-from gaard_api.admin.models import AnalysisSessionRecord
+from gaard_api.admin.models import AnalysisSessionRecord, Conversation
 from gaard_api.admin.services import (
     get_active_business_logic_prompt_safe,
     get_llm_runtime_config_safe,
@@ -31,17 +31,17 @@ from gaard_api.admin.services import (
     json_dumps,
     upsert_analysis_business_logic_suggestion,
 )
-from gaard_api.auth_dependencies import AuthenticatedSession, get_current_enterprise_api_user
 from gaard_api.api.v1.query import (
     add_conversation_to_response,
     conversation_principal,
     create_llm_client,
     effective_query_request,
-    normalize_datasource_contexts,
     ndjson_line,
+    normalize_datasource_contexts,
     resolve_request_conversation,
     run_sql_request,
 )
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_enterprise_api_user
 from gaard_api.conversations import load_conversation_for_owner
 from gaard_api.query_hooks import DatasourceContext, DatasourceContexts
 from gaard_api.siem import build_analysis_event, dispatch_siem_event
@@ -469,13 +469,7 @@ def supporting_data_suppression_reason(
     decision: AnalysisPlannerDecision,
     answer: str,
 ) -> str:
-    final_text = "\n".join(
-        [
-            answer,
-            decision.visible_question,
-            decision.visible_reasoning,
-        ]
-    ).lower()
+    final_text = f"{answer}\n{decision.visible_question}\n{decision.visible_reasoning}".lower()
 
     if any(term in final_text for term in SUPPORTING_DATA_MISMATCH_TERMS):
         return "final_answer_says_supporting_data_is_not_applicable"
@@ -1005,7 +999,7 @@ def final_metadata(
 def finalize_analysis_response(
     response: QueryResponse,
     *,
-    conversation,
+    conversation: Conversation | None,
     context_classification: ConversationContextClassification | None,
     original_request: QueryRequest,
     effective_request: QueryRequest,
@@ -1028,7 +1022,7 @@ def run_analysis_loop(
     session_id: str,
     request: QueryRequest,
     datasource_context: DatasourceContext | DatasourceContexts | None,
-    conversation=None,
+    conversation: Conversation | None = None,
     context_classification: ConversationContextClassification | None = None,
     original_request: QueryRequest | None = None,
     enterprise_access: bool = True,
@@ -1281,7 +1275,7 @@ def start_stream_for_record(
     request: QueryRequest,
     datasource_context: DatasourceContexts,
     resumed: bool = False,
-    conversation=None,
+    conversation: Conversation | None = None,
     context_classification: ConversationContextClassification | None = None,
     original_request: QueryRequest | None = None,
     enterprise_access: bool = True,

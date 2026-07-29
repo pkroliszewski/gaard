@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from gaard_core.query_pipeline.models import OutputClassification
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum as SAEnum,
     Float,
     ForeignKey,
     Integer,
@@ -12,9 +12,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-from gaard_core.query_pipeline.models import OutputClassification
 
 
 def utc_now() -> datetime:

@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from gaard_api.admin.models import DataQueryAuditLog
 
-
 PENDING_SIEM_EVENTS_KEY = "gaard_pending_siem_events"
 
 

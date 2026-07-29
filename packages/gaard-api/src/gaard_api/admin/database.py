@@ -1,17 +1,17 @@
-from collections.abc import Iterator
 import json
 import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-from sqlalchemy import create_engine, delete, select
-from sqlalchemy.engine import Engine
-from sqlalchemy import inspect, text, Table
+from sqlalchemy import Table, create_engine, delete, inspect, select, text
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
 from gaard_api.admin.models import (
-    AdminSetting,
     AdminSession,
+    AdminSetting,
     AdminUser,
     Base,
     DataQueryAuditLog,
@@ -25,9 +25,6 @@ from gaard_api.admin.models import (
 )
 from gaard_api.admin.security import hash_password
 from gaard_api.core.settings import settings
-
-from typing import cast
-
 
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
@@ -98,15 +95,14 @@ def init_metadata_store() -> None:
             session.commit()
 
 
-def clear_expired_admin_sessions(session: Session) -> int:
+def clear_expired_admin_sessions(session: Session) -> None:
     """Remove sessions inactive for 30 days; called once during application startup."""
     cutoff = datetime.now(UTC) - timedelta(days=30)
-    result = session.execute(
+    session.execute(
         delete(AdminSession)
         .where(AdminSession.last_seen < cutoff)
         .execution_options(synchronize_session=False)
     )
-    return int(result.rowcount or 0)
 
 
 def seed_admin_user(session: Session) -> None:
@@ -197,7 +193,7 @@ def admin_user_unique_column_sets(engine: Engine) -> list[list[str]]:
 
     inspector = inspect(engine)
     return [
-        cast(list[str], constraint_column_names)
+        constraint_column_names
         for constraint in inspector.get_unique_constraints("admin_users")
         if isinstance((constraint_column_names := constraint.get("column_names")), list)
         and all(isinstance(column_name, str) for column_name in constraint_column_names)
@@ -210,7 +206,7 @@ def admin_user_unique_column_sets(engine: Engine) -> list[list[str]]:
     ]
 
 
-def rebuild_sqlite_admin_users(connection) -> None:
+def rebuild_sqlite_admin_users(connection: Connection) -> None:
     connection.execute(text("""
         CREATE TABLE admin_users__migrated (
             id INTEGER NOT NULL PRIMARY KEY,
@@ -251,17 +247,18 @@ def rebuild_sqlite_admin_users(connection) -> None:
     connection.execute(text("CREATE INDEX ix_admin_users_auth_provider ON admin_users (auth_provider)"))
 
 
-def drop_global_admin_username_constraint(connection, engine: Engine) -> None:
+def drop_global_admin_username_constraint(connection: Connection, engine: Engine) -> None:
     if engine.dialect.name != "postgresql":
         return
     inspector = inspect(engine)
     quote = connection.dialect.identifier_preparer.quote
     for constraint in inspector.get_unique_constraints("admin_users"):
-        if constraint.get("column_names") == ["username"]:
-            connection.execute(text(f"ALTER TABLE admin_users DROP CONSTRAINT {quote(constraint['name'])}"))
+        constraint_name = constraint.get("name")
+        if constraint.get("column_names") == ["username"] and isinstance(constraint_name, str):
+            connection.execute(text(f"ALTER TABLE admin_users DROP CONSTRAINT {quote(constraint_name)}"))
 
 
-def normalize_external_admin_usernames(connection, dialect_name: str) -> None:
+def normalize_external_admin_usernames(connection: Connection, dialect_name: str) -> None:
     if dialect_name == "sqlite":
         username = "substr(username, instr(username, ':') + 1)"
         provider = "substr(username, 1, instr(username, ':') - 1)"
@@ -282,7 +279,7 @@ def normalize_external_admin_usernames(connection, dialect_name: str) -> None:
     ))
 
 
-def ensure_admin_user_provider_username_constraint(connection, engine: Engine) -> None:
+def ensure_admin_user_provider_username_constraint(connection: Connection, engine: Engine) -> None:
     if engine.dialect.name != "postgresql":
         return
     constraints = inspect(engine).get_unique_constraints("admin_users")

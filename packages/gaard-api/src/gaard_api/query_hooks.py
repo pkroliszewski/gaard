@@ -6,16 +6,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar, cast
 
-from sqlglot import Dialects
-from sqlalchemy.orm import Session
-
 from gaard_core.errors import ConfigurationError, QueryExecutionError
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
+from sqlalchemy.orm import Session
+from sqlglot import Dialects
 
 from gaard_api.admin.models import DatasourceConnector, DatasourceSchemaCache
 from gaard_api.auth_dependencies import identity_id_for_principal
 from gaard_api.core.settings import settings
-
 
 DatasourceContext = tuple[DatasourceConnector, DatasourceSchemaCache]
 DatasourceContexts = list[DatasourceContext]

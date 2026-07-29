@@ -1,4 +1,6 @@
 import json
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx2 as httpx
 from fastapi.testclient import TestClient
@@ -6,7 +8,7 @@ from fastapi.testclient import TestClient
 from gaard_client.main import app
 
 
-def test_client_app_serves_index_and_config(monkeypatch) -> None:
+def test_client_app_serves_index_and_config(monkeypatch: Any) -> None:
     monkeypatch.setenv("GAARD_CLIENT_BACKEND_URL", "http://backend.example")
     client = TestClient(app)
 
@@ -138,20 +140,20 @@ def test_client_dashboard_mobile_styles() -> None:
     assert ".dashboard-widget-chart" in response.text
 
 
-def test_client_app_proxies_query(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_query(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url, json):
+        async def post(self, url: str, json: dict[str, Any]) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             request = httpx.Request("POST", url)
@@ -193,20 +195,20 @@ def test_client_app_proxies_query(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_password_change(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_password_change(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url, json, headers):
+        async def post(self, url: str, json: dict[str, Any], headers: Any) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
@@ -239,20 +241,20 @@ def test_client_app_proxies_password_change(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_current_user(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_current_user(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def get(self, url, headers):
+        async def get(self, url: str, headers: Any) -> httpx.Response:
             captured["url"] = url
             captured["headers"] = headers
             request = httpx.Request("GET", url)
@@ -276,20 +278,20 @@ def test_client_app_proxies_current_user(monkeypatch) -> None:
     assert captured["headers"] == {"Authorization": "Bearer token"}
 
 
-def test_client_app_proxies_query_conversation_id(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_query_conversation_id(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url, json):
+        async def post(self, url: str, json: dict[str, Any]) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             request = httpx.Request("POST", url)
@@ -331,20 +333,20 @@ def test_client_app_proxies_query_conversation_id(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_query_explanation(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_query_explanation(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url, json, headers=None):
+        async def post(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
@@ -400,19 +402,19 @@ def test_client_app_proxies_query_explanation(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_analysis_stream(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeStreamResponse:
         status_code = 200
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeStreamResponse":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def aiter_text(self):
+        async def aiter_text(self) -> AsyncIterator[str]:
             yield json.dumps(
                 {
                     "event": "analysis_step",
@@ -442,16 +444,16 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
             ) + "\n"
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        def stream(self, method, url, json):
+        def stream(self, method: str, url: str, json: dict[str, Any]) -> FakeStreamResponse:
             captured["method"] = method
             captured["url"] = url
             captured["json"] = json
@@ -480,20 +482,20 @@ def test_client_app_proxies_analysis_stream(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_widget_save_from_query(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url, json):
+        async def post(self, url: str, json: dict[str, Any]) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             request = httpx.Request("POST", url)
@@ -541,20 +543,20 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_widget_title_suggestion(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_widget_title_suggestion(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url, json, headers=None):
+        async def post(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
@@ -591,20 +593,20 @@ def test_client_app_proxies_widget_title_suggestion(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_saved_metric_update(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_saved_metric_update(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def patch(self, url, json, headers=None):
+        async def patch(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
@@ -637,20 +639,20 @@ def test_client_app_proxies_saved_metric_update(monkeypatch) -> None:
     assert captured["json"] == {"label": "New metric name"}
 
 
-def test_client_app_proxies_saved_metric_delete(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_saved_metric_delete(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def delete(self, url, headers=None):
+        async def delete(self, url: str, headers: Any = None) -> httpx.Response:
             captured["url"] = url
             captured["headers"] = headers
             request = httpx.Request("DELETE", url)
@@ -685,20 +687,20 @@ def test_client_app_proxies_saved_metric_delete(monkeypatch) -> None:
     assert captured["headers"] == {"Authorization": "Bearer token"}
 
 
-def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
+def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
     captured: list[dict[str, object]] = []
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def get(self, url, headers=None):
+        async def get(self, url: str, headers: Any = None) -> httpx.Response:
             captured.append({"method": "GET", "url": url, "headers": headers})
             request = httpx.Request("GET", url)
             return httpx.Response(
@@ -707,7 +709,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                 json={"items": [{"id": "dash-1", "name": "Operations"}]},
             )
 
-        async def post(self, url, json, headers=None):
+        async def post(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
             captured.append(
                 {"method": "POST", "url": url, "json": json, "headers": headers}
             )
@@ -724,7 +726,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                 json={"item": {"id": "dash-2", "name": json["name"]}},
             )
 
-        async def put(self, url, json, headers=None):
+        async def put(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
             captured.append(
                 {"method": "PUT", "url": url, "json": json, "headers": headers}
             )
@@ -744,7 +746,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                 },
             )
 
-        async def patch(self, url, json, headers=None):
+        async def patch(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
             captured.append(
                 {"method": "PATCH", "url": url, "json": json, "headers": headers}
             )
@@ -755,7 +757,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
                 json={"items": json["items"]},
             )
 
-        async def delete(self, url, headers=None):
+        async def delete(self, url: str, headers: Any = None) -> httpx.Response:
             captured.append({"method": "DELETE", "url": url, "headers": headers})
             request = httpx.Request("DELETE", url)
             return httpx.Response(
@@ -879,19 +881,19 @@ def test_client_app_proxies_dashboard_crud(monkeypatch) -> None:
     assert all(call["headers"] == headers for call in captured)
 
 
-def test_client_app_streams_analysis_user_question(monkeypatch) -> None:
-    captured = {}
+def test_client_app_streams_analysis_user_question(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeStreamResponse:
         status_code = 200
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeStreamResponse":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def aiter_text(self):
+        async def aiter_text(self) -> AsyncIterator[str]:
             yield json.dumps(
                 {
                     "event": "session_started",
@@ -911,16 +913,16 @@ def test_client_app_streams_analysis_user_question(monkeypatch) -> None:
             ) + "\n"
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        def stream(self, method, url, json):
+        def stream(self, method: str, url: str, json: dict[str, Any]) -> FakeStreamResponse:
             captured["method"] = method
             captured["url"] = url
             captured["json"] = json
@@ -950,19 +952,19 @@ def test_client_app_streams_analysis_user_question(monkeypatch) -> None:
     }
 
 
-def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
-    captured = {}
+def test_client_app_proxies_analysis_session_reply_stream(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
 
     class FakeStreamResponse:
         status_code = 200
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeStreamResponse":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def aiter_text(self):
+        async def aiter_text(self) -> AsyncIterator[str]:
             yield json.dumps(
                 {
                     "event": "final",
@@ -978,16 +980,16 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch) -> None:
             ) + "\n"
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FakeAsyncClient":
             return self
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        def stream(self, method, url, json):
+        def stream(self, method: str, url: str, json: dict[str, Any]) -> FakeStreamResponse:
             captured["method"] = method
             captured["url"] = url
             captured["json"] = json

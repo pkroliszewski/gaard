@@ -1,5 +1,5 @@
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
 

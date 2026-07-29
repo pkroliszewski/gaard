@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import os
+import os as os
 from argparse import ArgumentParser, ArgumentTypeError, Namespace, _SubParsersAction
 from urllib.parse import urlparse
 
-import uvicorn
+import uvicorn as uvicorn
 
 
 def normalize_api_url(value: str) -> str:

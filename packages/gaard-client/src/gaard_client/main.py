@@ -1,10 +1,8 @@
 import json
 import os
-
 from collections.abc import AsyncIterator
 from importlib.resources import as_file, files
 from pathlib import Path
-
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -13,7 +11,6 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-
 
 with as_file(files("gaard_client").joinpath("client-web")) as _path:
     CLIENT_WEB_DIR: Path = Path(_path).absolute()
@@ -1065,29 +1062,28 @@ async def query_backend_stream(
 
     async def stream_backend() -> AsyncIterator[str]:
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream(
-                    "POST",
-                    query_url,
-                    **backend_request_kwargs(authorization, query_payload(request)),
-                ) as response:
-                    if response.status_code >= 400:
-                        body = await response.aread()
-                        detail = body.decode("utf-8", errors="replace")
-                        yield json.dumps(
-                            {
-                                "error": {
-                                    "code": "BACKEND_REQUEST_FAILED",
-                                    "message": detail,
-                                }
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
-                        return
+            async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
+                "POST",
+                query_url,
+                **backend_request_kwargs(authorization, query_payload(request)),
+            ) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    detail = body.decode("utf-8", errors="replace")
+                    yield json.dumps(
+                        {
+                            "error": {
+                                "code": "BACKEND_REQUEST_FAILED",
+                                "message": detail,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                    return
 
-                    async for chunk in response.aiter_text():
-                        if chunk:
-                            yield chunk
+                async for chunk in response.aiter_text():
+                    if chunk:
+                        yield chunk
         except httpx.HTTPError as exc:
             yield json.dumps(
                 {
@@ -1149,29 +1145,28 @@ async def proxy_stream(
     authorization: str | None,
 ) -> AsyncIterator[str]:
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                url,
-                **backend_request_kwargs(authorization, payload),
-            ) as response:
-                if response.status_code >= 400:
-                    body = await response.aread()
-                    detail = body.decode("utf-8", errors="replace")
-                    yield json.dumps(
-                        {
-                            "error": {
-                                "code": "BACKEND_REQUEST_FAILED",
-                                "message": detail,
-                            }
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                    return
+        async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
+            "POST",
+            url,
+            **backend_request_kwargs(authorization, payload),
+        ) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                detail = body.decode("utf-8", errors="replace")
+                yield json.dumps(
+                    {
+                        "error": {
+                            "code": "BACKEND_REQUEST_FAILED",
+                            "message": detail,
+                        }
+                    },
+                    ensure_ascii=False,
+                ) + "\n"
+                return
 
-                async for chunk in response.aiter_text():
-                    if chunk:
-                        yield chunk
+            async for chunk in response.aiter_text():
+                if chunk:
+                    yield chunk
     except httpx.HTTPError as exc:
         yield json.dumps(
             {

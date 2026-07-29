@@ -2,7 +2,6 @@ import hashlib
 import hmac
 import secrets
 
-
 PASSWORD_ITERATIONS = 260_000
 
 

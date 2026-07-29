@@ -1,7 +1,9 @@
+import pytest
+
 from gaard_api.core.settings import Settings
 
 
-def test_settings_use_llm_defaults_and_ignore_metadata_env(monkeypatch) -> None:
+def test_settings_use_llm_defaults_and_ignore_metadata_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "GAARD_METADATA_DATABASE_URL",
         "postgresql+psycopg://gaard:gaard@localhost:5432/gaard",
@@ -16,7 +18,7 @@ def test_settings_use_llm_defaults_and_ignore_metadata_env(monkeypatch) -> None:
     assert settings.gaard_package_directory == "extensions"
 
 
-def test_settings_can_seed_runtime_defaults_from_process_env(monkeypatch) -> None:
+def test_settings_can_seed_runtime_defaults_from_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GAARD_SQL_GENERATION_MODE", "mock")
     monkeypatch.setenv("GAARD_RESULT_INTERPRETATION_MODE", "mock")
     monkeypatch.setenv(

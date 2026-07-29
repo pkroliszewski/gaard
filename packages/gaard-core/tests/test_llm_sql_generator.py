@@ -1,13 +1,14 @@
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+
 from gaard_core.query_pipeline.llm_sql_generator import LlmSqlGenerator
 from gaard_core.query_pipeline.models import QueryRequest
-from gaard_llm.providers.models import ChatCompletionResponse
 
 
 class CapturingClient:
     def __init__(self) -> None:
-        self.requests = []
+        self.requests: list[ChatCompletionRequest] = []
 
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         self.requests.append(request)
 
         return ChatCompletionResponse(

@@ -1,4 +1,5 @@
 from argparse import ArgumentParser, Namespace
+from typing import Any
 
 import pytest
 
@@ -54,9 +55,9 @@ def test_client_cli_rejects_relative_api_url() -> None:
 
 
 def test_run_client_sets_backend_url_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = {}
+    captured: dict[str, Any] = {}
 
-    def fake_run(app, **kwargs) -> None:
+    def fake_run(app: str, **kwargs: Any) -> None:
         captured["app"] = app
         captured["kwargs"] = kwargs
 

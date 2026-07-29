@@ -1,5 +1,5 @@
-from gaard_core.schema.context import SchemaContextService
 from gaard_core.schema.cache import SchemaContextCache
+from gaard_core.schema.context import SchemaContextService
 from gaard_core.schema.models import ColumnInfo, DatabaseSchema, TableInfo
 
 

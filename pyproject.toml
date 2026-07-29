@@ -12,6 +12,16 @@ testpaths = [
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.param_functions.Depends",
+    "fastapi.param_functions.File",
+    "fastapi.params.Depends",
+    "fastapi.params.File",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
