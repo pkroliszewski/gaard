@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 oracle = ["oracledb>=2.0.0"]
 mssql = ["pyodbc>=5.0.0"]
+odbc = ["pyodbc>=5.0.0"]
 ibm_db2 = ["ibm-db-sa>=0.4.4"]
 teradata = ["teradatasqlalchemy>=20.0.0.9"]
 all-datasources = [

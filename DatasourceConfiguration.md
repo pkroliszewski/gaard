@@ -184,6 +184,70 @@ GRANT SELECT ON SCHEMA::reporting TO gaard_reader;
 GRANT SELECT ON OBJECT::dbo.orders TO gaard_reader;
 ```
 
+## ODBC / unixODBC
+
+W panelu admina ustaw:
+
+```text
+Database type: odbc
+Connection mode: dsn albo dsnless
+SQLAlchemy dialect: mssql+pyodbc
+```
+
+ODBC nie jest dialektem SQL. Pole `SQLAlchemy dialect` musi wskazywać właściwy
+dialekt bazy oraz sterownik DBAPI, np. `mssql+pyodbc`. Osobno podaje się DSN
+unixODBC albo nazwę sterownika ODBC producenta.
+
+Tryb DSN:
+
+```text
+Connection mode: dsn
+DSN: hospital_reporting
+Username: gaard_reader
+Password: ********
+```
+
+Tryb bez DSN:
+
+```text
+Connection mode: dsnless
+ODBC driver: ODBC Driver 18 for SQL Server
+Host: sql01.internal
+Port: 1433
+Database: ERP
+Username: gaard_reader
+Password: ********
+Additional ODBC options:
+Encrypt=yes
+TrustServerCertificate=yes
+```
+
+Zależności:
+
+- Python: `gaard-api[odbc]` lub `gaard-connectors[odbc]`, czyli `pyodbc`,
+- system: `unixODBC` i pliki `odbc.ini` / `odbcinst.ini`,
+- vendor: sterownik ODBC konkretnej bazy danych.
+
+Na Oracle Linux 8/9:
+
+```bash
+dnf install -y unixODBC unixODBC-devel
+```
+
+Diagnostyka:
+
+```bash
+odbcinst -j
+odbcinst -q -d
+python -c "import pyodbc; print(pyodbc.drivers())"
+```
+
+Jeśli unixODBC jest na maszynie zdalnej względem instalacji GAARD, lokalny
+proces GAARD nie zobaczy automatycznie zdalnego DSN. Użyj konfiguracji bez DSN
+do hosta/endpointu osiągalnego z GAARD albo uruchom komponent GAARD przy tej
+instalacji unixODBC. Samo podanie nazwy DSN z innego hosta nie wystarcza, bo
+`pyodbc` ładuje unixODBC w procesie GAARD.
+
 ## PostgreSQL
 
 W panelu admina ustaw:

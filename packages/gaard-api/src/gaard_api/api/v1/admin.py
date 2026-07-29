@@ -4,9 +4,12 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Annotated
+from typing import Annotated, Any
 
+import sqlglot
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from gaard_connectors import ConnectorRegistryError
+from gaard_connectors.odbc import collect_diagnostics, list_configured_dsns, list_odbc_drivers
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -21,7 +24,6 @@ from gaard_core.query_pipeline.models import (
     QueryResult,
 )
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
-from gaard_connectors import ConnectorRegistryError
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
@@ -29,7 +31,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-import sqlglot
 from sqlglot import expressions as exp
 
 from gaard_api.admin.database import create_session, get_session
@@ -71,19 +72,20 @@ from gaard_api.admin.services import (
     get_data_query_audit_type,
     get_datasource_connector,
     get_datasource_connector_by_key,
-    get_or_create_datasource_schema_cache,
     get_datasource_schema_cache,
     get_governance_policy_config,
     get_governance_policy_sources,
     get_llm_config_sources,
     get_llm_runtime_config,
-    get_query_runtime_config,
+    get_or_create_datasource_schema_cache,
     get_overview_widget,
     get_prompt_template,
+    get_query_runtime_config,
     get_setting,
     introspect_datasource_connector,
     is_system_datasource_connector,
     json_loads,
+    learn_business_logic_from_sql_error,
     list_admin_audit_logs,
     list_all_overview_widgets,
     list_business_logic_suggestions_for_connectors,
@@ -91,19 +93,18 @@ from gaard_api.admin.services import (
     list_datasource_connectors,
     list_overview_widgets,
     list_prompt_templates,
-    learn_business_logic_from_sql_error,
     mask_database_url,
     normalize_datasource_configuration,
     record_admin_audit,
     record_data_query_audit,
     record_data_query_sql_error_audit,
     selected_schema_from_cache,
+    set_active_datasource_connector,
     set_business_logic_suggestion_enabled,
     set_governance_policy_config,
     set_llm_runtime_config,
     set_query_runtime_config,
     set_setting,
-    set_active_datasource_connector,
     test_datasource_connection,
     test_llm_runtime_config,
     update_business_logic_suggestion_content,
@@ -384,12 +385,17 @@ def serialize_prompt(prompt: PromptTemplate) -> dict[str, Any]:
 
 
 def serialize_datasource(connector: DatasourceConnector) -> dict[str, Any]:
+    database_url = (
+        mask_database_url(connector.database_url)
+        if connector.database_type == "odbc"
+        else connector.database_url
+    )
     return {
         "id": connector.id,
         "connector_key": connector.connector_key,
         "name": connector.name,
         "database_type": connector.database_type,
-        "database_url": connector.database_url,
+        "database_url": database_url,
         "masked_database_url": mask_database_url(connector.database_url),
         "sql_dialect": connector.sql_dialect,
         "active": connector.active,
@@ -898,6 +904,7 @@ def normalize_datasource_configuration_or_400(
     database_path: str | None = None,
     database_url: str | None = None,
     sql_dialect: str | None = None,
+    existing_database_url: str | None = None,
 ):
     try:
         return normalize_datasource_configuration(
@@ -906,6 +913,7 @@ def normalize_datasource_configuration_or_400(
             database_path=database_path,
             database_url=database_url,
             sql_dialect=sql_dialect,
+            existing_database_url=existing_database_url,
         )
     except (ConnectorRegistryError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -2756,6 +2764,38 @@ def get_datasource_types(
     }
 
 
+@router.get("/connectors/odbc/drivers")
+def get_odbc_drivers(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "drivers": list_odbc_drivers(),
+        "viewer": user.username,
+    }
+
+
+@router.get("/connectors/odbc/dsns")
+def get_odbc_dsns(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    dsns = list_configured_dsns()
+    return {
+        "system": dsns["system"],
+        "user": dsns["user"],
+        "viewer": user.username,
+    }
+
+
+@router.get("/connectors/odbc/diagnostics")
+def get_odbc_diagnostics(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "item": collect_diagnostics().serialize(),
+        "viewer": user.username,
+    }
+
+
 @router.get("/extensions")
 def get_extensions(
     user: AdminUser = Depends(get_current_admin),
@@ -3025,6 +3065,7 @@ def update_datasource(
         database_path=request.database_path,
         database_url=request.database_url,
         sql_dialect=request.sql_dialect,
+        existing_database_url=connector.database_url,
     )
 
     ensure_admin_can_manage_datasource_type(user, normalized_config.database_type)

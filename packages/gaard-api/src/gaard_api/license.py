@@ -36,6 +36,7 @@ SQL_SOURCE_TYPES = {
     "mysql",
     "oracle",
     "mssql",
+    "odbc",
     "ibm_db2",
     "teradata",
 }

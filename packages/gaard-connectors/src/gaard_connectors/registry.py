@@ -20,6 +20,7 @@ class SchemaIntrospector(Protocol):
 ExecutorFactory = Callable[[str, int], QueryExecutor]
 IntrospectorFactory = Callable[[str], SchemaIntrospector]
 ConnectionTester = Callable[[str], None]
+DatabaseUrlValidator = Callable[[str], None]
 
 
 class ConnectorRegistryError(RuntimeError):
@@ -45,6 +46,7 @@ class ConnectorDefinition:
     executor_factory: ExecutorFactory
     introspector_factory: IntrospectorFactory
     connection_tester: ConnectionTester
+    database_url_validator: DatabaseUrlValidator | None = None
     config_schema: Mapping[str, Any] = field(default_factory=dict)
     description: str = ""
 
@@ -63,6 +65,10 @@ class ConnectorDefinition:
         return self.sql_dialects[0]
 
     def validate_database_url(self, database_url: str) -> None:
+        if self.database_url_validator is not None:
+            self.database_url_validator(database_url)
+            return
+
         if database_url.startswith(self.url_prefixes):
             return
 

@@ -1536,6 +1536,9 @@ function parseDatasourceUrl(databaseType, databaseUrl) {
   if (databaseType === "sqlite") {
     return { database_path: databaseUrl.replace(/^sqlite:\/\/\/?/, "") };
   }
+  if (databaseType === "odbc") {
+    return parseOdbcDatasourceUrl(databaseUrl);
+  }
   try {
     const parsed = new URL(databaseUrl);
     const query = Object.fromEntries(parsed.searchParams.entries());
@@ -1551,25 +1554,170 @@ function parseDatasourceUrl(databaseType, databaseUrl) {
     return {};
   }
 }
+function parseOdbcDatasourceUrl(databaseUrl) {
+  try {
+    const parsed = new URL(databaseUrl);
+    const odbcConnect = parsed.searchParams.get("odbc_connect") || "";
+    const options = parseOdbcConnectionString(odbcConnect);
+    const driver = getOdbcOption(options, "DRIVER");
+    const server = getOdbcOption(options, "SERVER");
+    const [host, rawPort] = server.includes(",") ? server.split(",", 2) : [server, ""];
+    const extras = Object.fromEntries(Object.entries(options).filter(([key]) => !["DSN", "DRIVER", "SERVER", "PORT", "DATABASE", "UID", "PWD"].includes(key.toUpperCase())));
+    const password = getOdbcOption(options, "PWD");
+    return {
+      connection_mode: getOdbcOption(options, "DSN") ? "dsn" : "dsnless",
+      sqlalchemy_drivername: parsed.protocol.replace(/:$/, ""),
+      dsn: getOdbcOption(options, "DSN"),
+      odbc_driver: driver,
+      host,
+      port: rawPort || getOdbcOption(options, "PORT"),
+      database: getOdbcOption(options, "DATABASE"),
+      username: getOdbcOption(options, "UID"),
+      password: password && password !== "***" ? password : "",
+      extra_odbc_options: extras,
+      connect_timeout_seconds: parsed.searchParams.get("gaard_connect_timeout_seconds") || "",
+      query_timeout_seconds: parsed.searchParams.get("gaard_query_timeout_seconds") || "",
+      pool_recycle_seconds: parsed.searchParams.get("gaard_pool_recycle_seconds") || "",
+      pool_pre_ping: parsed.searchParams.get("gaard_pool_pre_ping") !== "false",
+      pyodbc_pooling: parsed.searchParams.get("gaard_pyodbc_pooling") === "true"
+    };
+  } catch {
+    return {};
+  }
+}
+function getOdbcOption(options, key) {
+  const match = Object.entries(options).find(([candidate]) => candidate.toUpperCase() === key);
+  return match?.[1] || "";
+}
+function parseOdbcConnectionString(value) {
+  const result = {};
+  let key = "";
+  let currentValue = "";
+  let readingKey = true;
+  let inBraces = false;
+  const flush = () => {
+    const normalizedKey = key.trim();
+    if (normalizedKey) result[normalizedKey] = currentValue;
+    key = "";
+    currentValue = "";
+    readingKey = true;
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (readingKey) {
+      if (char === "=") readingKey = false;
+      else if (char === ";") flush();
+      else key += char;
+      continue;
+    }
+    if (inBraces) {
+      if (char === "}") {
+        if (value[index + 1] === "}") {
+          currentValue += "}";
+          index += 1;
+        } else {
+          inBraces = false;
+        }
+      } else {
+        currentValue += char;
+      }
+      continue;
+    }
+    if (char === "{" && currentValue === "") inBraces = true;
+    else if (char === ";") flush();
+    else currentValue += char;
+  }
+  flush();
+  return result;
+}
 function renderDatasourceConnectionFields(datasourceType, values = {}, disabled = "") {
+  if (datasourceType?.type_key === "odbc") {
+    return renderOdbcConnectionFields(datasourceType, values, disabled);
+  }
   const properties = datasourceType?.config_schema?.properties || {};
   const usesGeneratedFields = datasourceUsesGeneratedConnectionFields(datasourceType);
   return Object.entries(properties)
     .filter(([key]) => key !== "database_url" || !usesGeneratedFields)
     .map(([key, schema]) => {
-      const type = schema?.format === "password" ? "password" : schema?.type === "integer" ? "number" : "text";
-      const value = values[key] ?? schema?.default ?? "";
-      const placeholder = schema?.description || "";
-      const inputName = key === "database_url" ? "database_url" : `connection_${key}`;
-      const dataAttribute = key === "database_url" ? "" : `data-connection-field="${escapeHtml(key)}"`;
-      return `<label>${escapeHtml(schema?.title || key)}<input ${dataAttribute} name="${escapeHtml(inputName)}" type="${type}" ${disabled} placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" /></label>`;
+      return renderConnectionField(key, schema, values[key] ?? schema?.default ?? "", disabled);
     })
     .join("");
+}
+function renderConnectionField(key, schema, value, disabled = "") {
+  const placeholder = schema?.description || "";
+  const inputName = key === "database_url" ? "database_url" : `connection_${key}`;
+  const dataAttribute = key === "database_url" ? "" : `data-connection-field="${escapeHtml(key)}"`;
+  if (schema?.enum?.length) {
+    return `<label>${escapeHtml(schema?.title || key)}<select ${dataAttribute} name="${escapeHtml(inputName)}" ${disabled}>${schema.enum.map((option) => `<option value="${escapeHtml(option)}" ${String(value || schema?.default || "") === String(option) ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select></label>`;
+  }
+  if (schema?.type === "boolean") {
+    return `<label class="inline-check"><input ${dataAttribute} name="${escapeHtml(inputName)}" type="checkbox" ${value === true || value === "true" || value === "on" ? "checked" : ""} ${disabled} /> ${escapeHtml(schema?.title || key)}</label>`;
+  }
+  if (schema?.type === "object") {
+    return `<label>${escapeHtml(schema?.title || key)}<textarea ${dataAttribute} data-connection-type="object" class="textarea-small" name="${escapeHtml(inputName)}" ${disabled} placeholder="${escapeHtml(placeholder)}">${escapeHtml(formatConnectionObjectValue(value))}</textarea></label>`;
+  }
+  const type = schema?.format === "password" ? "password" : schema?.type === "integer" ? "number" : "text";
+  return `<label>${escapeHtml(schema?.title || key)}<input ${dataAttribute} name="${escapeHtml(inputName)}" type="${type}" ${disabled} placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" /></label>`;
+}
+function renderOdbcConnectionFields(datasourceType, values = {}, disabled = "") {
+  const properties = datasourceType?.config_schema?.properties || {};
+  const mode = values.connection_mode || properties.connection_mode?.default || "dsn";
+  const fields = [
+    renderConnectionField("connection_mode", properties.connection_mode, mode, disabled),
+    renderConnectionField("sqlalchemy_drivername", properties.sqlalchemy_drivername, values.sqlalchemy_drivername ?? properties.sqlalchemy_drivername?.default ?? "mssql+pyodbc", disabled),
+    ...(mode === "dsn"
+      ? [
+          renderConnectionField("dsn", properties.dsn, values.dsn || "", disabled),
+          renderConnectionField("username", properties.username, values.username || "", disabled),
+          renderConnectionField("password", properties.password, "", disabled)
+        ]
+      : [
+          renderConnectionField("odbc_driver", properties.odbc_driver, values.odbc_driver ?? properties.odbc_driver?.default ?? "", disabled),
+          renderConnectionField("host", properties.host, values.host || "", disabled),
+          renderConnectionField("port", properties.port, values.port ?? properties.port?.default ?? "", disabled),
+          renderConnectionField("database", properties.database, values.database || "", disabled),
+          renderConnectionField("username", properties.username, values.username || "", disabled),
+          renderConnectionField("password", properties.password, "", disabled)
+        ]),
+    renderConnectionField("extra_odbc_options", properties.extra_odbc_options, values.extra_odbc_options || {}, disabled),
+    renderConnectionField("connect_timeout_seconds", properties.connect_timeout_seconds, values.connect_timeout_seconds ?? properties.connect_timeout_seconds?.default ?? "", disabled),
+    renderConnectionField("query_timeout_seconds", properties.query_timeout_seconds, values.query_timeout_seconds || "", disabled),
+    renderConnectionField("pool_recycle_seconds", properties.pool_recycle_seconds, values.pool_recycle_seconds ?? properties.pool_recycle_seconds?.default ?? "", disabled),
+    renderConnectionField("pool_pre_ping", properties.pool_pre_ping, values.pool_pre_ping ?? properties.pool_pre_ping?.default ?? true, disabled),
+    renderConnectionField("pyodbc_pooling", properties.pyodbc_pooling, values.pyodbc_pooling ?? properties.pyodbc_pooling?.default ?? false, disabled),
+    renderConnectionField("raw_odbc_connection_string", properties.raw_odbc_connection_string, "", disabled)
+  ];
+  return fields.join("");
+}
+function formatConnectionObjectValue(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  return Object.entries(value).map(([key, optionValue]) => `${key}=${optionValue ?? ""}`).join("\n");
+}
+function parseConnectionObjectValue(value) {
+  return Object.fromEntries(
+    String(value || "")
+      .split(/\n|;/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separatorIndex = line.includes("=") ? line.indexOf("=") : line.indexOf(":");
+        if (separatorIndex < 0) return [line, ""];
+        return [line.slice(0, separatorIndex).trim(), line.slice(separatorIndex + 1).trim()];
+      })
+      .filter(([key]) => key)
+  );
 }
 function collectDatasourceConnectionConfig(form) {
   const config = {};
   form.querySelectorAll("[data-connection-field]").forEach((input) => {
-    config[input.dataset.connectionField] = input.value;
+    if (input.type === "checkbox") {
+      config[input.dataset.connectionField] = input.checked;
+    } else if (input.dataset.connectionType === "object") {
+      config[input.dataset.connectionField] = parseConnectionObjectValue(input.value);
+    } else {
+      config[input.dataset.connectionField] = input.value;
+    }
   });
   return config;
 }
@@ -1591,7 +1739,18 @@ function syncDatasourceTypeFields(event) {
       datasourceConnectionConfigDefaults(datasourceType),
       ""
     );
+    document.querySelector("[data-connection-field='connection_mode']")?.addEventListener("change", syncOdbcConnectionModeFields);
   }
+}
+function syncOdbcConnectionModeFields(event) {
+  const form = event.currentTarget.closest("form");
+  const connectionFields = document.querySelector("#datasource-connection-fields");
+  const datasourceType = getDatasourceType(form?.querySelector("[name='database_type']")?.value || "");
+  if (!form || !connectionFields || datasourceType?.type_key !== "odbc") return;
+  const values = collectDatasourceConnectionConfig(form);
+  values.connection_mode = event.currentTarget.value;
+  connectionFields.innerHTML = renderDatasourceConnectionFields(datasourceType, values, "");
+  document.querySelector("[data-connection-field='connection_mode']")?.addEventListener("change", syncOdbcConnectionModeFields);
 }
 function renderModeOptions(selected, values) {
   return values.map((value) => `<option value="${value}" ${selected === value ? "selected" : ""}>${value}</option>`).join("");
@@ -2088,6 +2247,7 @@ function attachSectionHandlers() {
   document.querySelector("#governance-policy-form")?.addEventListener("submit", saveGovernancePolicy);
   document.querySelector("#datasource-form")?.addEventListener("submit", saveDatasource);
   document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
+  document.querySelector("[data-connection-field='connection_mode']")?.addEventListener("change", syncOdbcConnectionModeFields);
   document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
   document.querySelectorAll("[data-datasource-detail-tab]").forEach((button) => button.addEventListener("click", () => {
     state.datasourceDetailTab = button.dataset.datasourceDetailTab || "config";

@@ -5,25 +5,31 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy.engine import URL
-from sqlalchemy import delete, desc, select
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
-
+from gaard_connectors.odbc.config import (
+    build_odbc_sqlalchemy_url_from_config,
+    parse_odbc_sqlalchemy_url,
+    sql_dialect_for_sqlalchemy_drivername,
+)
+from gaard_connectors.odbc.exceptions import OdbcConnectorError
+from gaard_connectors.odbc.security import redact_odbc_connection_string
 from gaard_core.errors import LlmProviderError
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import OutputClassification, QueryRequest, QueryResponse
 from gaard_core.schema.models import ColumnInfo, DatabaseSchema, TableInfo
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
+from sqlalchemy import delete, desc, select
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG
 from gaard_api.admin.database import create_session
+from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG
 from gaard_api.admin.models import (
     AdminAuditLog,
     AdminSetting,
-    BusinessLogicSuggestion,
     BusinessKnowledgeClaim,
+    BusinessLogicSuggestion,
     DataQueryAuditLog,
     DataQueryAuditType,
     DatasourceConnector,
@@ -74,6 +80,7 @@ def normalize_datasource_configuration(
     database_path: str | None = None,
     database_url: str | None = None,
     sql_dialect: str | None = None,
+    existing_database_url: str | None = None,
 ) -> NormalizedDatasourceConfiguration:
     registry = get_connector_registry()
     normalized_url = (database_url or "").strip()
@@ -83,6 +90,7 @@ def normalize_datasource_configuration(
         normalized_url = build_sqlalchemy_url_from_connection_config(
             database_type,
             connection_config,
+            existing_database_url=existing_database_url,
         )
 
     if not normalized_url and normalized_path:
@@ -96,7 +104,18 @@ def normalize_datasource_configuration(
     else:
         definition = registry.detect_from_database_url(normalized_url)
 
-    resolved_dialect = (sql_dialect or "").strip() or definition.default_sql_dialect
+    resolved_dialect = (sql_dialect or "").strip()
+    if not resolved_dialect and definition.type_key == "odbc":
+        try:
+            drivername, _odbc_connection_string = parse_odbc_sqlalchemy_url(normalized_url)
+        except OdbcConnectorError:
+            drivername = (
+                str(connection_config.get("sqlalchemy_drivername") or "")
+                if connection_config
+                else definition.default_sql_dialect
+            )
+        resolved_dialect = sql_dialect_for_sqlalchemy_drivername(drivername)
+    resolved_dialect = resolved_dialect or definition.default_sql_dialect
     registry.validate(definition.type_key, normalized_url, resolved_dialect)
 
     return NormalizedDatasourceConfiguration(
@@ -122,6 +141,8 @@ def build_sqlalchemy_url_from_path(database_type: str, database_path: str) -> st
 def build_sqlalchemy_url_from_connection_config(
     database_type: str,
     connection_config: dict[str, Any],
+    *,
+    existing_database_url: str | None = None,
 ) -> str:
     if database_type == "sqlite":
         database_path = str(connection_config.get("database_path") or "").strip()
@@ -174,6 +195,12 @@ def build_sqlalchemy_url_from_connection_config(
 
     if database_type == "teradata":
         return build_teradata_database_url(connection_config)
+
+    if database_type == "odbc":
+        return build_odbc_sqlalchemy_url_from_config(
+            connection_config,
+            existing_database_url=existing_database_url,
+        )
 
     raise ValueError(f"Datasource type {database_type!r} does not support generated URLs.")
 
@@ -265,6 +292,21 @@ def build_teradata_database_url(connection_config: dict[str, Any]) -> str:
 
 
 def mask_database_url(database_url: str) -> str:
+    try:
+        drivername, odbc_connection_string = parse_odbc_sqlalchemy_url(database_url)
+    except OdbcConnectorError:
+        pass
+    else:
+        query = dict(make_url(database_url).query)
+        query["odbc_connect"] = redact_odbc_connection_string(odbc_connection_string)
+        return (
+            URL.create(
+                drivername=drivername,
+                query=query,
+            )
+            .render_as_string(hide_password=False)
+        )
+
     if "://" not in database_url or "@" not in database_url:
         return database_url
 

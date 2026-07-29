@@ -1,15 +1,15 @@
-from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
 import io
 import json
-from pathlib import Path
 import sqlite3
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select, text
-
+from gaard_connectors import create_builtin_connector_registry
+from gaard_connectors.odbc.connection_string import parse_odbc_connection_string
 from gaard_core.errors import LlmProviderError, QueryPipelineStepError
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
 from gaard_core.query_pipeline.models import (
@@ -20,6 +20,8 @@ from gaard_core.query_pipeline.models import (
     QueryRequest,
 )
 from gaard_llm.providers.models import ChatCompletionResponse
+from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.engine import make_url
 
 from gaard_api.admin.database import (
     clear_expired_admin_sessions,
@@ -30,14 +32,14 @@ from gaard_api.admin.database import (
     seed_prompts,
 )
 from gaard_api.admin.models import (
-    AdminSetting,
     AdminSession,
+    AdminSetting,
     AdminUser,
     BusinessKnowledgeClaim,
     BusinessLogicSuggestion,
     Dashboard,
-    DashboardWidget,
     DashboardUserState,
+    DashboardWidget,
     DataQueryAuditLog,
     DataQueryAuditType,
     DatasourceConnector,
@@ -64,8 +66,7 @@ from gaard_api.example_database import (
     install_medical_poc_example_database,
 )
 from gaard_api.main import app
-from gaard_api.query_hooks import QueryHookRegistry, principal_identity_id
-from gaard_connectors import create_builtin_connector_registry
+from gaard_api.query_hooks import QueryHookRegistry
 
 
 @pytest.fixture()
@@ -3218,6 +3219,158 @@ def test_datasource_connector_builds_mssql_url_from_connection_fields(
         "?Encrypt=yes&TrustServerCertificate=no&driver=ODBC+Driver+18+for+SQL+Server"
     )
     assert item["sql_dialect"] == "tsql"
+
+
+def test_datasource_connector_builds_odbc_dsn_url_without_returning_password(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    password = "P@ss:w/ord;ąćę% + {}"
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "odbc_dsn",
+            "name": "ODBC DSN",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsn",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "dsn": "hospital_reporting",
+                "username": "gaard_reader",
+                "password": password,
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "odbc"
+    assert item["sql_dialect"] == "tsql"
+    assert password not in item["database_url"]
+    assert "%2A%2A%2A" in item["database_url"]
+
+    with create_session() as session:
+        connector = session.scalar(
+            select(DatasourceConnector).where(DatasourceConnector.connector_key == "odbc_dsn")
+        )
+        assert connector is not None
+        parsed = make_url(connector.database_url)
+
+    assert parsed.drivername == "mssql+pyodbc"
+    odbc_options = dict(parse_odbc_connection_string(str(parsed.query["odbc_connect"])))
+    assert odbc_options["DSN"] == "hospital_reporting"
+    assert odbc_options["UID"] == "gaard_reader"
+    assert odbc_options["PWD"] == password
+
+
+def test_datasource_connector_builds_odbc_dsnless_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "odbc_dsnless",
+            "name": "ODBC DSN-less",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsnless",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "odbc_driver": "ODBC Driver 18 for SQL Server",
+                "host": "unixodbc-bridge.internal",
+                "port": 1433,
+                "database": "ERP",
+                "username": "gaard_reader",
+                "password": "secret",
+                "extra_odbc_options": {
+                    "TrustServerCertificate": "yes",
+                    "Encrypt": "yes",
+                },
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    with create_session() as session:
+        connector = session.scalar(
+            select(DatasourceConnector).where(
+                DatasourceConnector.connector_key == "odbc_dsnless"
+            )
+        )
+        assert connector is not None
+        parsed = make_url(connector.database_url)
+
+    assert parsed.query["odbc_connect"] == (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        "SERVER=unixodbc-bridge.internal,1433;"
+        "DATABASE=ERP;"
+        "UID=gaard_reader;"
+        "PWD=secret;"
+        "Encrypt=yes;"
+        "TrustServerCertificate=yes;"
+    )
+
+
+def test_datasource_connector_update_preserves_odbc_password_when_left_blank(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "odbc_keep_secret",
+            "name": "ODBC keep secret",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsn",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "dsn": "hospital_reporting",
+                "username": "gaard_reader",
+                "password": "secret",
+            },
+            "active": False,
+        },
+    )
+    assert create_response.status_code == 200
+    datasource_id = create_response.json()["item"]["id"]
+
+    update_response = admin_client.put(
+        f"/api/v1/admin/datasources/{datasource_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "ODBC renamed",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsn",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "dsn": "hospital_reporting",
+                "username": "gaard_reader",
+                "password": "",
+            },
+            "active": False,
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert "secret" not in update_response.json()["item"]["database_url"]
+
+    with create_session() as session:
+        connector = session.get(DatasourceConnector, datasource_id)
+        assert connector is not None
+        parsed = make_url(connector.database_url)
+
+    assert parsed.query["odbc_connect"] == "DSN=hospital_reporting;UID=gaard_reader;PWD=secret;"
 
 
 def test_datasource_connector_builds_ibm_db2_url_from_connection_fields(

@@ -29,6 +29,7 @@ def test_builtin_registry_exposes_existing_datasource_types() -> None:
         "ibm_db2",
         "mssql",
         "mysql",
+        "odbc",
         "oracle",
         "postgresql",
         "sqlite",
