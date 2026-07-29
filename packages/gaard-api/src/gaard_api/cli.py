@@ -2,18 +2,26 @@ import argparse
 from importlib.metadata import entry_points
 
 
-def main() -> None:
+def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gaard")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    commands = {}
+    registered_commands: set[str] = set()
 
     for ep in entry_points(group="gaard.commands"):
+        if ep.name in registered_commands:
+            continue
+
         command_func = ep.load()
-        commands[ep.name] = command_func
         command_func(subparsers)
+        registered_commands.add(ep.name)
+
+    return parser
+
+
+def main() -> None:
+    parser = create_parser()
 
     args = parser.parse_args()
 
-    if args.command in commands:
-        args.func(args)
+    args.func(args)
