@@ -64,7 +64,7 @@ from gaard_api.example_database import (
     install_medical_poc_example_database,
 )
 from gaard_api.main import app
-from gaard_api.query_hooks import QueryHookRegistry, principal_identity_id
+from gaard_api.query_hooks import QueryHookRegistry
 from gaard_connectors import create_builtin_connector_registry
 
 
@@ -614,7 +614,18 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
                 database_type="duckdb-excel",
                 database_url="duckdb-excel:///restricted.xlsx",
                 sql_dialect="duckdb",
-                active=False,
+                active=True,
+                updated_by="admin",
+            )
+        )
+        session.add(
+            DatasourceConnector(
+                connector_key="restricted-sql-source",
+                name="Restricted SQL source",
+                database_type="sqlite",
+                database_url="sqlite:///:memory:",
+                sql_dialect="sqlite",
+                active=True,
                 updated_by="admin",
             )
         )
@@ -629,10 +640,25 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
     identity_list = admin_client.get("/api/v1/admin/identities", headers=headers)
     datasources = admin_client.get("/api/v1/admin/datasources", headers=headers)
     excel = next(item for item in datasources.json()["items"] if item["connector_key"] == "excel-source")
+    sql_source = next(
+        item
+        for item in datasources.json()["items"]
+        if item["connector_key"] == "restricted-sql-source"
+    )
     excel_mutation = admin_client.post(
         f"/api/v1/admin/datasources/{excel['id']}/state",
         headers=headers,
         json={"active": True},
+    )
+    excel_deactivation = admin_client.post(
+        f"/api/v1/admin/datasources/{excel['id']}/state",
+        headers=headers,
+        json={"active": False},
+    )
+    sql_deactivation = admin_client.post(
+        f"/api/v1/admin/datasources/{sql_source['id']}/state",
+        headers=headers,
+        json={"active": False},
     )
 
     assert identities.status_code == 403
@@ -641,6 +667,10 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
     assert extensions.json()["admin_frontend_modules"] == []
     assert excel["enterprise_access_required"] is True
     assert excel_mutation.status_code == 403
+    assert excel_deactivation.status_code == 200
+    assert excel_deactivation.json()["item"]["active"] is False
+    assert sql_deactivation.status_code == 200
+    assert sql_deactivation.json()["item"]["active"] is False
 
 
 def test_unlicensed_admin_cannot_generate_widget_sql_for_excel_datasource(
@@ -2567,6 +2597,72 @@ def test_default_datasource_can_be_tested_and_introspected(admin_client: TestCli
         "appointments",
         "doctors",
     }
+
+
+def test_datasource_schema_returns_introspection_error(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    with create_session() as session:
+        connector = DatasourceConnector(
+            connector_key="broken-schema",
+            name="Broken schema",
+            database_type="sqlite",
+            database_url="sqlite:///:memory:",
+            sql_dialect="sqlite",
+            active=False,
+            updated_by="admin",
+        )
+        session.add(connector)
+        session.commit()
+        connector_id = connector.id
+
+    def fail_introspection(
+        _session: object,
+        _connector: DatasourceConnector,
+        _actor: str,
+    ) -> DatasourceSchemaCache:
+        raise ValueError("SQLAlchemy could not infer a common column type.")
+
+    monkeypatch.setattr(admin_api, "introspect_datasource_connector", fail_introspection)
+
+    response = admin_client.get(
+        f"/api/v1/admin/datasources/{connector_id}/schema",
+        headers=auth_headers(admin_client),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Schema introspection failed: SQLAlchemy could not infer a common column type."
+    )
+
+
+def test_unsaved_datasource_test_returns_connector_error(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    def fail_connection_test(_: DatasourceConnector) -> None:
+        raise ValueError("SQLAlchemy could not infer a common column type.")
+
+    monkeypatch.setattr(admin_api, "test_datasource_connection", fail_connection_test)
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/test",
+        headers=auth_headers(admin_client),
+        json={
+            "database_type": "sqlite",
+            "database_url": "sqlite:///:memory:",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Connection test failed: SQLAlchemy could not infer a common column type."
+    )
 
 
 def test_user_can_list_datasources_but_cannot_create_them(

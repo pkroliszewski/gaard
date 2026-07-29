@@ -1440,6 +1440,7 @@ function getSelectedDatasource() {
 }
 function renderDatasourceForm(connector) {
   const systemManaged = connector?.system_managed === true;
+  const metadataDatasource = connector?.connector_key === "metadata-db";
   const enterpriseRestricted = isEnterpriseDatasource(connector);
   const selectedTypeKey = connector?.database_type
     || state.datasourceTypes.find((item) => item.type_key !== "duckdb-excel" || state.enterpriseAccess)?.type_key
@@ -1468,13 +1469,13 @@ function renderDatasourceForm(connector) {
           <div id="datasource-connection-fields" class="subgrid">
             ${renderDatasourceConnectionFields(selectedType, connectionValues, disabled)}
           </div>
-          <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${disabled} /> Active datasource</label>
+          <label class="inline-check"><input name="active" type="checkbox" ${connector?.active ? "checked" : ""} ${metadataDatasource ? "disabled" : ""} /> Active datasource</label>
       </div>
       ${extensionPanels.length ? `<div class="datasource-extension-detail-panels">${extensionPanels.map((panel) => `<section class="datasource-extension-panel ${activeTab === panel.id ? "mobile-active" : ""}">${panel.content}</section>`).join("")}</div>` : ""}
       <div class="button-row datasource-form-actions">
-        <button type="button" id="test-datasource" ${disabled}>Test</button>
+        <button type="button" id="test-datasource" ${metadataDatasource ? "disabled" : ""}>Test</button>
         <button type="button" id="introspect-datasource" ${connector ? "" : "disabled"}>Schema introspection</button>
-        <button type="button" id="activate-datasource" ${connector && !connector.active && !systemManaged ? "" : "disabled"}>Activate</button>
+        <button type="button" id="activate-datasource" ${connector && !metadataDatasource ? "" : "disabled"}>Activate</button>
         ${connector && !systemManaged ? `<button type="button" class="danger" id="delete-datasource">Delete</button>` : ""}
         <button class="primary" type="submit" ${systemManaged ? "disabled" : ""}>${connector ? "Save" : "Create"}</button>
       </div>
@@ -2964,10 +2965,15 @@ async function saveDatasource(event) {
     active: form.get("active") === "on"
   };
   try {
-    const result = await api(id ? `/api/v1/admin/datasources/${id}` : "/api/v1/admin/datasources", {
-      method: id ? "PUT" : "POST",
-      body: JSON.stringify(id ? { ...payload, connector_key: void 0 } : payload)
-    });
+    const result = selected && payload.active !== selected.active
+      ? await api(`/api/v1/admin/datasources/${selected.id}/state`, {
+        method: "POST",
+        body: JSON.stringify({ active: payload.active })
+      })
+      : await api(id ? `/api/v1/admin/datasources/${id}` : "/api/v1/admin/datasources", {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify(id ? { ...payload, connector_key: void 0 } : payload)
+      });
     await commitDatasourceExtensions(result.item);
     state.selectedDatasourceId = result.item.id;
     setMessage("success", "Datasource saved.");

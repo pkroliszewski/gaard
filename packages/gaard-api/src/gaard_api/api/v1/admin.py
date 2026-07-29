@@ -2962,15 +2962,16 @@ def update_datasource_state(
             detail="Datasource connector not found.",
         )
 
-    ensure_admin_can_manage_datasource(user, connector)
-
     if is_system_datasource_connector(connector):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The metadata datasource is managed by GAARD.",
         )
 
-    license_service.ensure_datasource_type_allowed(connector.database_type)
+    is_deactivation = not request.active
+    if not is_deactivation:
+        ensure_admin_can_manage_datasource(user, connector)
+        license_service.ensure_datasource_type_allowed(connector.database_type)
 
     if request.active:
         set_active_datasource_connector(session, connector, user.username)
@@ -2979,7 +2980,8 @@ def update_datasource_state(
         connector.updated_by = user.username
         remove_datasource_from_selections(session, connector.connector_key)
 
-    license_service.ensure_active_source_limit(list_datasource_connectors(session))
+    if not is_deactivation:
+        license_service.ensure_active_source_limit(list_datasource_connectors(session))
     record_admin_audit(
         session=session,
         actor=user.username,
@@ -3144,6 +3146,13 @@ def activate_datasource(
     return {"item": serialize_datasource(connector)}
 
 
+def connection_test_failed_http_exception(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Connection test failed: {exc}",
+    )
+
+
 @router.post("/datasources/{connector_id}/test")
 def test_datasource(
     connector_id: int,
@@ -3174,10 +3183,7 @@ def test_datasource(
             details={"error": str(exc)},
         )
         session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Connection test failed: {exc}",
-        ) from exc
+        raise connection_test_failed_http_exception(exc) from exc
 
     record_admin_audit(
         session=session,
@@ -3213,7 +3219,10 @@ def test_datasource_from_request(
     )
     ensure_admin_can_manage_datasource_type(user, connector.database_type)
     license_service.ensure_datasource_type_allowed(connector.database_type)
-    test_datasource_connection(connector)
+    try:
+        test_datasource_connection(connector)
+    except Exception as exc:
+        raise connection_test_failed_http_exception(exc) from exc
     return {"status": "ok"}
 
 
@@ -3275,7 +3284,13 @@ def get_datasource_schema(
 
     if cache is None:
         license_service.ensure_datasource_type_allowed(connector.database_type)
-        cache = introspect_datasource_connector(session, connector, user.username)
+        try:
+            cache = introspect_datasource_connector(session, connector, user.username)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Schema introspection failed: {exc}",
+            ) from exc
         session.commit()
 
     return {
