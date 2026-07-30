@@ -90,7 +90,7 @@ def get_authorization_token(authorization: str | None) -> str:
 
     return token
 
-
+#w admin.py zdublowana ale w starej wersji 
 def get_current_authenticated_session(
     authorization: Annotated[str | None, Header()] = None,
     session: Session = Depends(get_session),
@@ -138,10 +138,12 @@ def get_current_authenticated_session(
         # commit; the activity row itself remains untouched.
         session.commit()
 
+    ensure_user_license_access(user)
 
     return AuthenticatedSession(session=admin_session, user=user)
 
 
+#wersja z auth_dependencies.py
 def get_current_api_user(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AuthenticatedSession:
@@ -193,3 +195,30 @@ def get_current_admin(
         )
 
     return user
+
+def get_current_enterprise_admin(
+    user: AdminUser = Depends(get_current_admin),
+) -> AdminUser:
+    """Require an administrator with an assigned Enterprise user license."""
+    if not user.enterprise_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An assigned Enterprise user license is required.",
+        )
+    return user
+    
+    
+def has_enterprise_user_access(principal: AuthenticatedSession) -> bool:
+    return bool(principal.user.enterprise_access)
+
+def ensure_user_license_access(user: AdminUser) -> None:
+    """Keep non-system accounts active only while global Enterprise is active."""
+    if user.is_system_admin:
+        return
+    state = license_service.refresh_if_due()
+    if state.features.get("identity_management"):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This account does not have an active Enterprise user license.",
+    )

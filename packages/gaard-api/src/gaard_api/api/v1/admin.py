@@ -2,12 +2,12 @@ import json
 import re
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
 import sqlglot
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from gaard_connectors import ConnectorRegistryError
 from gaard_connectors.odbc import collect_diagnostics, list_configured_dsns, list_odbc_drivers
 from gaard_core.errors import (
@@ -28,7 +28,7 @@ from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table, update
+from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -114,6 +114,12 @@ from gaard_api.admin.services import (
 )
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.auth_dependencies import (
+    ensure_user_license_access,
+    get_current_admin,
+    get_current_authenticated_session,
+    get_current_enterprise_admin,
+    get_current_enterprise_api_user,
+    has_enterprise_user_access,
     identity_id_for_principal,
     identity_ids_for_principal,
 )
@@ -1288,85 +1294,6 @@ def serialize_business_logic_suggestion(
         "updated_by": suggestion.updated_by,
     }
 
-
-def get_authorization_token(authorization: str | None) -> str:
-    if authorization is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header.",
-        )
-
-    scheme, _, token = authorization.partition(" ")
-
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Authorization header.",
-        )
-
-    return token
-
-
-def get_current_authenticated_session(
-    authorization: Annotated[str | None, Header()] = None,
-    session: Session = Depends(get_session),
-) -> AuthenticatedSession:
-    token = get_authorization_token(authorization)
-    token_hash = hash_token(token)
-
-    admin_session = session.scalar(
-        select(AdminSession).where(AdminSession.token_hash == token_hash)
-    )
-
-    if admin_session is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin session.",
-        )
-
-    user = session.get(AdminUser, admin_session.user_id)
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin session.",
-        )
-
-    activity_cutoff = datetime.now(UTC) - SESSION_ACTIVITY_WRITE_INTERVAL
-    result = session.execute(
-        update(AdminSession)
-        .where(AdminSession.id == admin_session.id, AdminSession.last_seen < activity_cutoff)
-        .values(last_seen=datetime.now(UTC))
-        .execution_options(synchronize_session=False)
-    )
-    if cast(CursorResult[Any], result).rowcount:
-        session.commit()
-    else:
-        session.commit()
-
-    ensure_user_license_access(user)
-
-
-    return AuthenticatedSession(session=admin_session, user=user)
-
-
-def ensure_user_license_access(user: AdminUser) -> None:
-    """Keep non-system accounts active only while global Enterprise is active."""
-    if user.is_system_admin:
-        return
-    state = license_service.refresh_if_due()
-    if state.features.get("identity_management"):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="This account does not have an active Enterprise user license.",
-    )
-
-
-def has_enterprise_user_access(principal: AuthenticatedSession) -> bool:
-    return bool(principal.user.enterprise_access)
-
-
 def ensure_admin_can_manage_datasource_type(user: AdminUser, database_type: str) -> None:
     """Keep Excel/DuckDB datasource functionality behind an Enterprise seat."""
     if database_type == "duckdb-excel" and not user.enterprise_access:
@@ -1402,31 +1329,6 @@ def admin_can_use_widget_datasource(user: AdminUser, connector: DatasourceConnec
     return True
 
 
-
-def get_current_api_user(
-    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
-) -> AuthenticatedSession:
-    if principal.user.role not in {"user", "admin"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated user does not have API access.",
-        )
-    if principal.user.must_change_password:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password change is required before using the application.",
-        )
-    if not has_enterprise_user_access(principal):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "This account has dashboard-only access because no Enterprise user "
-                "license is assigned."
-            ),
-        )
-    return principal
-
-
 def get_current_datasource_viewer(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AuthenticatedSession:
@@ -1438,43 +1340,7 @@ def get_current_datasource_viewer(
                 detail="Password change is required before using the admin portal.",
             )
         return principal
-    return get_current_api_user(principal)
-
-
-def get_current_admin_allow_password_change(
-    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
-) -> AdminUser:
-    if principal.user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role is required.",
-        )
-    return principal.user
-
-
-def get_current_admin(
-    user: AdminUser = Depends(get_current_admin_allow_password_change),
-) -> AdminUser:
-    if user.must_change_password:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password change is required before using the admin portal.",
-        )
-
-    return user
-
-
-def get_current_enterprise_admin(
-    user: AdminUser = Depends(get_current_admin),
-) -> AdminUser:
-    """Require an administrator with an assigned Enterprise user license."""
-    if not user.enterprise_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="An assigned Enterprise user license is required.",
-        )
-    return user
-
+    return get_current_enterprise_api_user(principal)
 
 @router.post("/auth/login", response_model=LoginResponse)
 def login(request: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
@@ -2090,7 +1956,7 @@ def create_overview_widget(
 @router.post("/overview/widgets/from-query")
 def create_overview_widget_from_query(
     request: OverviewWidgetFromQueryRequest,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     datasource = get_datasource_connector_by_key(session, request.datasource_key)
@@ -2237,7 +2103,7 @@ def generate_overview_widget_sql_preview(
 @router.post("/overview/widgets/title-suggestion")
 def suggest_overview_widget_title(
     request: OverviewWidgetTitleSuggestionRequest,
-    _principal: AuthenticatedSession = Depends(get_current_api_user),
+    _principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     try:
@@ -2714,7 +2580,7 @@ def get_datasources(
 @router.api_route("/datasources/selection", methods=["PUT", "POST"])
 def update_datasource_selection(
     request: DatasourceSelectionRequest,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
     selected_ids = list(
@@ -2900,7 +2766,7 @@ def create_datasource(
 async def upload_excel_datasource(
     file: UploadFile = File(...),
     active: bool = False,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     if not has_enterprise_user_access(principal):

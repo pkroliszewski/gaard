@@ -9,13 +9,13 @@ from fastapi.staticfiles import StaticFiles
 
 from gaard_api.admin.database import clear_expired_admin_sessions, create_session
 from gaard_api.admin.models import AdminUser
-from gaard_api.api.v1.admin import get_current_admin
 from gaard_api.api.v1.admin import router as admin_router
 from gaard_api.api.v1.analysis import router as analysis_router
 from gaard_api.api.v1.dashboards import router as dashboards_router
 from gaard_api.api.v1.prompts import router as prompts_router
 from gaard_api.api.v1.query import router as query_router
 from gaard_api.api.v1.schema import router as schema_router
+from gaard_api.auth_dependencies import get_current_admin
 from gaard_api.core.error_handlers import register_error_handlers
 from gaard_api.extensions import get_api_registry
 from gaard_api.license import license_service
