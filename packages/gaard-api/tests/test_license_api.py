@@ -100,7 +100,7 @@ def package_bundle_zip(
         "version": package_version,
         "plan": pack,
         "file_name": f"gaard-{pack}-pack-{package_version}.zip",
-        "gaard_version": ">=0.2.9",
+        "gaard_version": ">=0.2.10",
         "description": "Test package bundle",
         "packages": [
             {
@@ -226,7 +226,7 @@ def test_admin_can_set_license_key_without_key_leaking_to_response_or_audit(
 ) -> None:
     token = login(license_client)
     license_service.set_http_post_for_tests(
-        lambda url, json, timeout: httpx.Response(200, json=enterprise_payload())
+        lambda url, json, timeout: httpx.Response(200, json=enterprise_payload(human_users=1))
     )
 
     response = license_client.put(

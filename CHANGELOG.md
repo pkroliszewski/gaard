@@ -1,3 +1,10 @@
+### v0.2.10 - Client conversation history and external API refresh management
+- Added API-backed client conversation history so saved chat threads and queries survive page reloads without a local client database.
+- Added client query copy actions and preserved chat scroll position during save, retry, show/hide, copy, and streaming updates.
+- Improved client/admin labels and English result-mode translations.
+- Improved external API configuration, endpoint selection, custom endpoints, request diagnostics, job controls, stale job handling, and refresh job layout.
+- Bumped all public packages, private extensions, package manifests, and local GAARD package references to `0.2.10`.
+
 ### v0.2.9 - Package metadata and private bundle release
 - Bumped all public packages, private extensions, package manifests, and local GAARD package references to `0.2.9`.
 - Moved private package bundle membership into each extension's `pyproject.toml` under `[tool.gaard.package]`.

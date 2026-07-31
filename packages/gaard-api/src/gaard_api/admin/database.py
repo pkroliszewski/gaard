@@ -15,6 +15,7 @@ from gaard_api.admin.migration_runner import (
     as_table,
     execute_initial_sql,
     execute_legacy_sql_phase,
+    has_applicable_legacy_repairs,
     parse_initial_sql,
     parse_legacy_sql,
     parse_sql_updates,
@@ -114,7 +115,11 @@ def init_metadata_store() -> None:
                         migration_tags.c.tag == updates[0].tag
                     )
                 )
-            if first_tag_applied is None:
+            legacy_repair_needed = first_tag_applied is None or has_applicable_legacy_repairs(
+                engine,
+                legacy_commands,
+            )
+            if legacy_repair_needed:
                 execute_legacy_sql_phase(
                     engine,
                     legacy_commands,

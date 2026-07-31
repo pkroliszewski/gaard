@@ -250,7 +250,17 @@ def execute_legacy_sql_phase(
             connection.exec_driver_sql(command.sql)
 
 
-
+def has_applicable_legacy_repairs(
+    engine: Engine,
+    commands: Sequence[ConditionalSqlCommand],
+) -> bool:
+    """Return whether any column-conditional legacy repair still applies."""
+    with engine.connect() as connection:
+        return any(
+            (command.required_columns or command.missing_columns)
+            and _conditional_command_applies(connection, command)
+            for command in commands
+        )
 
 def apply_pending_sql_updates(
     engine: Engine,
