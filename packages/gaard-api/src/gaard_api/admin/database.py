@@ -2,25 +2,33 @@ import json
 import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from importlib.resources import files
 from typing import cast
 
-from sqlalchemy import Table, create_engine, delete, inspect, select, text
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy import create_engine, delete, inspect, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from gaard_api.admin.defaults import DEFAULT_GOVERNANCE_POLICY_CONFIG, DEFAULT_PROMPTS
+from gaard_api.admin.migration_runner import (
+    apply_pending_sql_updates,
+    as_table,
+    execute_initial_sql,
+    execute_legacy_sql_phase,
+    parse_initial_sql,
+    parse_legacy_sql,
+    parse_sql_updates,
+    stamp_sql_updates,
+)
 from gaard_api.admin.models import (
     AdminSession,
     AdminSetting,
     AdminUser,
-    Base,
-    DataQueryAuditLog,
-    DataQueryAuditType,
+    DatabaseMigrationTag,
     DatasourceConnector,
     OverviewWidget,
     OverviewWidgetTag,
     PromptTemplate,
-    UserSavedMetric,
     WidgetTag,
 )
 from gaard_api.admin.security import hash_password
@@ -29,6 +37,7 @@ from gaard_api.core.settings import settings
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
 _engine_url: str | None = None
+_initialized_url: str | None = None
 _init_lock = threading.RLock()
 LEGACY_PROMPT_KEYS = {"investigation_readiness"}
 
@@ -72,13 +81,52 @@ def create_session() -> Session:
 
 
 def init_metadata_store() -> None:
+    global _initialized_url
+
     with _init_lock:
         engine = get_engine()
-        Base.metadata.create_all(engine)
-        ensure_admin_session_schema(engine)
-        ensure_admin_user_schema(engine)
-        ensure_data_query_audit_schema(engine)
-        ensure_overview_widget_schema(engine)
+        if _initialized_url == _engine_url:
+            return
+
+        updates = parse_sql_updates(
+            files("gaard_api.admin").joinpath("database_updates.sql").read_text("utf-8")
+        )
+        if not updates:
+            raise RuntimeError("The database update file must contain its baseline tag.")
+        initial_commands = parse_initial_sql(
+            files("gaard_api.admin").joinpath("database_initial.sql").read_text("utf-8")
+        )
+        existing_tables = set(inspect(engine).get_table_names())
+        migration_tags = as_table(DatabaseMigrationTag.__table__)
+        if not existing_tables:
+            execute_initial_sql(engine, initial_commands)
+            stamp_sql_updates(engine, updates, migration_tags)
+        else:
+            migration_tags.create(engine, checkfirst=True)
+            legacy_commands = parse_legacy_sql(
+                files("gaard_api.admin")
+                .joinpath("database_legacy_updates.sql")
+                .read_text("utf-8")
+            )
+            with engine.connect() as connection:
+                first_tag_applied = connection.scalar(
+                    select(migration_tags.c.tag).where(
+                        migration_tags.c.tag == updates[0].tag
+                    )
+                )
+            if first_tag_applied is None:
+                execute_legacy_sql_phase(
+                    engine,
+                    legacy_commands,
+                    "before-initial",
+                )
+                execute_initial_sql(engine, initial_commands)
+                execute_legacy_sql_phase(
+                    engine,
+                    legacy_commands,
+                    "after-initial",
+                )
+            apply_pending_sql_updates(engine, updates, migration_tags)
 
         if _session_factory is None:
             raise RuntimeError("Admin metadata session factory is not initialized.")
@@ -90,9 +138,8 @@ def init_metadata_store() -> None:
             seed_prompts(session)
             seed_datasource_connectors(session)
             seed_overview_widgets(session)
-            backfill_overview_widget_tags(session)
-            backfill_data_query_audit_types(session)
             session.commit()
+        _initialized_url = _engine_url
 
 
 def clear_expired_admin_sessions(session: Session) -> None:
@@ -125,172 +172,6 @@ def seed_admin_user(session: Session) -> None:
             enterprise_access=True,
         )
     )
-
-
-def ensure_admin_user_schema(engine: Engine) -> None:
-    columns = {column["name"] for column in inspect(engine).get_columns("admin_users")}
-    additions = {
-        "display_name": "ALTER TABLE admin_users ADD COLUMN display_name VARCHAR(255) NOT NULL DEFAULT ''",
-        "auth_provider": "ALTER TABLE admin_users ADD COLUMN auth_provider VARCHAR(255) NOT NULL DEFAULT 'local'",
-        "role": "ALTER TABLE admin_users ADD COLUMN role VARCHAR(50) NOT NULL DEFAULT 'admin'",
-        "is_system_admin": "ALTER TABLE admin_users ADD COLUMN is_system_admin BOOLEAN NOT NULL DEFAULT 0",
-        "enterprise_access": "ALTER TABLE admin_users ADD COLUMN enterprise_access BOOLEAN NOT NULL DEFAULT 0",
-        "is_provisioned": "ALTER TABLE admin_users ADD COLUMN is_provisioned BOOLEAN NOT NULL DEFAULT 0",
-    }
-    with engine.begin() as connection:
-        for name, sql in additions.items():
-            if name not in columns:
-                connection.execute(text(sql))
-        # Existing installations predate the explicit system-admin marker.  The
-        # first local administrator is the account created during initialization.
-        connection.execute(text("""
-            UPDATE admin_users
-            SET is_system_admin = 1
-            WHERE id = (
-                SELECT id FROM admin_users
-                WHERE auth_provider = 'local' AND role = 'admin'
-                ORDER BY id
-                LIMIT 1
-            )
-            AND NOT EXISTS (
-                SELECT 1 FROM admin_users WHERE is_system_admin = 1
-            )
-        """))
-        # The system administrator is the sole account with permanent Enterprise
-        # access. Other administrators receive a seat explicitly, like users.
-        connection.execute(text(
-            "UPDATE admin_users SET enterprise_access = 1 WHERE is_system_admin = 1"
-        ))
-        if engine.dialect.name == "sqlite" and (
-            admin_user_has_global_username_constraint(engine)
-            or not admin_user_has_provider_username_constraint(engine)
-        ):
-            rebuild_sqlite_admin_users(connection)
-        else:
-            drop_global_admin_username_constraint(connection, engine)
-            normalize_external_admin_usernames(connection, engine.dialect.name)
-            ensure_admin_user_provider_username_constraint(connection, engine)
-
-
-def admin_user_has_global_username_constraint(engine: Engine) -> bool:
-    return ["username"] in admin_user_unique_column_sets(engine)
-
-
-def admin_user_has_provider_username_constraint(engine: Engine) -> bool:
-    return ["auth_provider", "username"] in admin_user_unique_column_sets(engine)
-
-
-def admin_user_unique_column_sets(engine: Engine) -> list[list[str]]:
-    if engine.dialect.name == "sqlite":
-        with engine.connect() as connection:
-            return [
-                [row[2] for row in connection.execute(text(f"PRAGMA index_info({index_name!r})"))]
-                for _sequence, index_name, is_unique, *_rest in connection.execute(
-                    text("PRAGMA index_list('admin_users')")
-                )
-                if is_unique
-            ]
-
-    inspector = inspect(engine)
-    return [
-        constraint_column_names
-        for constraint in inspector.get_unique_constraints("admin_users")
-        if isinstance((constraint_column_names := constraint.get("column_names")), list)
-        and all(isinstance(column_name, str) for column_name in constraint_column_names)
-    ] + [
-        cast(list[str], index_column_names)
-        for index in inspector.get_indexes("admin_users")
-        if index.get("unique")
-        and isinstance((index_column_names := index.get("column_names")), list)
-        and all(isinstance(column_name, str) for column_name in index_column_names)
-    ]
-
-
-def rebuild_sqlite_admin_users(connection: Connection) -> None:
-    connection.execute(text("""
-        CREATE TABLE admin_users__migrated (
-            id INTEGER NOT NULL PRIMARY KEY,
-            username VARCHAR(255) NOT NULL,
-            display_name VARCHAR(255) NOT NULL DEFAULT '',
-            auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
-            role VARCHAR(50) NOT NULL DEFAULT 'admin',
-            is_system_admin BOOLEAN NOT NULL DEFAULT 0,
-            enterprise_access BOOLEAN NOT NULL DEFAULT 0,
-            password_hash TEXT NOT NULL,
-            must_change_password BOOLEAN NOT NULL,
-            is_provisioned BOOLEAN NOT NULL DEFAULT 0,
-            created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL,
-            CONSTRAINT uq_admin_users_auth_provider_username UNIQUE (auth_provider, username)
-        )
-    """))
-    connection.execute(text("""
-        INSERT INTO admin_users__migrated
-            (id, username, display_name, auth_provider, role, is_system_admin, enterprise_access, password_hash, must_change_password, is_provisioned, created_at, updated_at)
-        SELECT
-            id,
-            CASE WHEN password_hash = 'external$disabled' AND instr(username, ':') > 0
-                    AND (auth_provider = 'local' OR substr(username, 1, instr(username, ':') - 1) = auth_provider)
-                THEN substr(username, instr(username, ':') + 1) ELSE username END,
-            display_name,
-            CASE WHEN auth_provider = 'local' AND password_hash = 'external$disabled' AND instr(username, ':') > 0
-                THEN substr(username, 1, instr(username, ':') - 1) ELSE auth_provider END,
-            role,
-            is_system_admin,
-            enterprise_access,
-            password_hash, must_change_password, 0, created_at, updated_at
-        FROM admin_users
-    """))
-    connection.execute(text("DROP TABLE admin_users"))
-    connection.execute(text("ALTER TABLE admin_users__migrated RENAME TO admin_users"))
-    connection.execute(text("CREATE INDEX ix_admin_users_username ON admin_users (username)"))
-    connection.execute(text("CREATE INDEX ix_admin_users_auth_provider ON admin_users (auth_provider)"))
-
-
-def drop_global_admin_username_constraint(connection: Connection, engine: Engine) -> None:
-    if engine.dialect.name != "postgresql":
-        return
-    inspector = inspect(engine)
-    quote = connection.dialect.identifier_preparer.quote
-    for constraint in inspector.get_unique_constraints("admin_users"):
-        constraint_name = constraint.get("name")
-        if constraint.get("column_names") == ["username"] and isinstance(constraint_name, str):
-            connection.execute(text(f"ALTER TABLE admin_users DROP CONSTRAINT {quote(constraint_name)}"))
-
-
-def normalize_external_admin_usernames(connection: Connection, dialect_name: str) -> None:
-    if dialect_name == "sqlite":
-        username = "substr(username, instr(username, ':') + 1)"
-        provider = "substr(username, 1, instr(username, ':') - 1)"
-        has_prefix = "instr(username, ':') > 0"
-        prefix_matches_provider = "substr(username, 1, instr(username, ':') - 1) = auth_provider"
-    elif dialect_name == "postgresql":
-        username = "substring(username from position(':' in username) + 1)"
-        provider = "substring(username from 1 for position(':' in username) - 1)"
-        has_prefix = "position(':' in username) > 0"
-        prefix_matches_provider = "substring(username from 1 for position(':' in username) - 1) = auth_provider"
-    else:
-        return
-    connection.execute(text(
-        "UPDATE admin_users "
-        f"SET username = {username}, auth_provider = CASE WHEN auth_provider = 'local' THEN {provider} ELSE auth_provider END "
-        "WHERE password_hash = 'external$disabled' "
-        f"AND {has_prefix} AND (auth_provider = 'local' OR {prefix_matches_provider})"
-    ))
-
-
-def ensure_admin_user_provider_username_constraint(connection: Connection, engine: Engine) -> None:
-    if engine.dialect.name != "postgresql":
-        return
-    constraints = inspect(engine).get_unique_constraints("admin_users")
-    if not any(
-        constraint.get("column_names") == ["auth_provider", "username"]
-        for constraint in constraints
-    ):
-        connection.execute(text(
-            "ALTER TABLE admin_users ADD CONSTRAINT uq_admin_users_auth_provider_username "
-            "UNIQUE (auth_provider, username)"
-        ))
 
 
 def seed_settings(session: Session) -> None:
@@ -390,8 +271,6 @@ def seed_prompts(session: Session) -> None:
 
 
 def seed_datasource_connectors(session: Session) -> None:
-    migrate_postgres_sql_dialect(session)
-
     metadata_connector = session.scalar(
         select(DatasourceConnector).where(DatasourceConnector.connector_key == "metadata-db")
     )
@@ -428,13 +307,6 @@ def infer_datasource_type(database_url: str) -> tuple[str, str]:
         return "mysql", "mysql"
 
     return "postgresql", "postgres"
-
-
-def migrate_postgres_sql_dialect(session: Session) -> None:
-    for connector in session.scalars(
-        select(DatasourceConnector).where(DatasourceConnector.sql_dialect == "postgresql")
-    ):
-        connector.sql_dialect = "postgres"
 
 
 def seed_overview_widgets(session: Session) -> None:
@@ -557,13 +429,20 @@ def seed_overview_widgets(session: Session) -> None:
         },
     ]
 
+    public_tag = session.get(WidgetTag, "public")
+    if public_tag is None:
+        session.add(WidgetTag(name="public"))
+        session.flush()
+
     for item in defaults:
         existing = session.scalar(
             select(OverviewWidget).where(OverviewWidget.widget_key == item["widget_key"])
         )
 
         if existing is None:
-            session.add(OverviewWidget(**item))
+            existing = OverviewWidget(**item)
+            session.add(existing)
+            session.flush()
         elif not existing.sql and existing.updated_by == "system":
             existing.sql = str(item["sql"])
 
@@ -575,202 +454,24 @@ def seed_overview_widgets(session: Session) -> None:
             existing.active = False
 
         if existing is not None and existing.updated_by == "system":
-            existing.position = int(cast(int,item["position"])) 
-            existing.grid_width = int(cast(int,item["grid_width"]))
+            existing.position = int(cast(int, item["position"]))
+            existing.grid_width = int(cast(int, item["grid_width"]))
             existing.result_mode = str(item["result_mode"])
 
-
-def ensure_data_query_audit_schema(engine: Engine) -> None:
-    inspector = inspect(engine)
-
-    if "data_query_audit_logs" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"] for column in inspector.get_columns("data_query_audit_logs")}
-
-    if "type" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE data_query_audit_logs "
-                    "ADD COLUMN type VARCHAR(50) NOT NULL DEFAULT 'info'"
-                )
-            )
-
-    if "output_classification" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE data_query_audit_logs "
-                    "ADD COLUMN output_classification VARCHAR(50) "
-                    "NOT NULL DEFAULT 'unknown'"
-                )
-            )
-
-    if "llm_sql_language" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE data_query_audit_logs "
-                    "ADD COLUMN llm_sql_language VARCHAR(50) DEFAULT ''"
-                )
-            )
-
-    with engine.begin() as connection:
-
-        audit_log_table = cast(Table, DataQueryAuditLog.__table__)
-
-        for index in audit_log_table.indexes:
-            index.create(bind=connection, checkfirst=True)
-
-
-def ensure_admin_session_schema(engine: Engine) -> None:
-    inspector = inspect(engine)
-
-    if "admin_sessions" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"] for column in inspector.get_columns("admin_sessions")}
-
-    additions = {
-        "username": "ALTER TABLE admin_sessions ADD COLUMN username VARCHAR(255) DEFAULT ''",
-        "role": "ALTER TABLE admin_sessions ADD COLUMN role VARCHAR(50) DEFAULT 'admin'",
-        "auth_provider": (
-            "ALTER TABLE admin_sessions ADD COLUMN auth_provider VARCHAR(255) DEFAULT 'local'"
-        ),
-        # SQLite cannot add a column with CURRENT_TIMESTAMP as its default.  Backfill
-        # legacy rows below, while newly created sessions use the ORM default.
-        "last_seen": "ALTER TABLE admin_sessions ADD COLUMN last_seen DATETIME",
-    }
-    with engine.begin() as connection:
-        for column_name, sql in additions.items():
-            if column_name not in columns:
-                connection.execute(text(sql))
-
-        if "last_seen" not in columns:
-            connection.execute(
-                text("UPDATE admin_sessions SET last_seen = created_at WHERE last_seen IS NULL")
-            )
-
-        session_table = cast(Table, AdminSession.__table__)
-        for index in session_table.indexes:
-            index.create(bind=connection, checkfirst=True)
-
-
-def backfill_data_query_audit_types(session: Session) -> None:
-    logs = session.scalars(
-        select(DataQueryAuditLog).where(
-            DataQueryAuditLog.metadata_json.like('%"audit_type"%')
-        )
-    )
-
-    for log in logs:
-        try:
-            metadata = json.loads(log.metadata_json or "{}")
-        except json.JSONDecodeError:
-            continue
-
-        if not isinstance(metadata, dict):
-            continue
-
-        audit_type = coerce_legacy_data_query_audit_type(metadata.get("audit_type"))
-
-        if audit_type is None:
-            continue
-
-        metadata.pop("audit_type", None)
-        log.type = audit_type
-        log.metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
-
-
-def coerce_legacy_data_query_audit_type(value: object) -> DataQueryAuditType | None:
-    if isinstance(value, DataQueryAuditType):
-        return value
-
-    if not isinstance(value, str):
-        return None
-
-    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
-    aliases = {item.value: item for item in DataQueryAuditType}
-
-    return aliases.get(normalized)
-
-
-def ensure_overview_widget_schema(engine: Engine) -> None:
-    inspector = inspect(engine)
-
-    if "overview_widgets" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"] for column in inspector.get_columns("overview_widgets")}
-
-    if "sql" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE overview_widgets ADD COLUMN sql TEXT DEFAULT ''")
-            )
-
-    if "grid_width" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE overview_widgets ADD COLUMN grid_width INTEGER DEFAULT 1")
-            )
-
-    if "grid_height" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE overview_widgets ADD COLUMN grid_height INTEGER DEFAULT 2")
-            )
-            connection.execute(
-                text(
-                    "UPDATE overview_widgets SET grid_height = 4 "
-                    "WHERE widget_type <> 'scalar'"
-                )
-            )
-
-    if "result_mode" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE overview_widgets "
-                    "ADD COLUMN result_mode VARCHAR(50) DEFAULT 'data'"
-                )
-            )
-
-def backfill_overview_widget_tags(session: Session) -> None:
-    """Give legacy widgets public and saved-metric owner tags."""
-    if session.scalar(select(WidgetTag).where(WidgetTag.name == "public")) is None:
-        session.add(WidgetTag(name="public"))
-        session.flush()
-    widget_ids_with_tags = set(session.scalars(select(OverviewWidgetTag.widget_id)))
-    for widget_id in session.scalars(select(OverviewWidget.id)):
-        if widget_id not in widget_ids_with_tags:
-            session.add(OverviewWidgetTag(widget_id=widget_id, tag_name="public"))
-
-    existing_assignments = set(
-        session.execute(select(OverviewWidgetTag.widget_id, OverviewWidgetTag.tag_name))
-    )
-    for widget_id, owner_username in session.execute(
-        select(OverviewWidget.id, UserSavedMetric.owner_username).join(
-            UserSavedMetric,
-            UserSavedMetric.widget_key == OverviewWidget.widget_key,
-        )
-    ):
-        if not owner_username:
-            continue
-        if session.get(WidgetTag, owner_username) is None:
-            session.add(WidgetTag(name=owner_username))
-            session.flush()
-        if (widget_id, owner_username) not in existing_assignments:
-            session.add(OverviewWidgetTag(widget_id=widget_id, tag_name=owner_username))
+        if session.get(
+            OverviewWidgetTag,
+            {"widget_id": existing.id, "tag_name": "public"},
+        ) is None:
+            session.add(OverviewWidgetTag(widget_id=existing.id, tag_name="public"))
 
 
 def reset_metadata_store_for_tests() -> None:
-    global _engine, _engine_url, _session_factory
+    global _engine, _engine_url, _initialized_url, _session_factory
 
     if _engine is not None:
         _engine.dispose()
 
     _engine = None
     _engine_url = None
+    _initialized_url = None
     _session_factory = None

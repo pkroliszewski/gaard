@@ -21,14 +21,12 @@ from gaard_core.query_pipeline.models import (
     QueryRequest,
 )
 from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 
 from gaard_api.admin.database import (
     clear_expired_admin_sessions,
     create_session,
-    ensure_admin_session_schema,
-    ensure_admin_user_schema,
     reset_metadata_store_for_tests,
     seed_prompts,
 )
@@ -61,6 +59,7 @@ from gaard_api.admin.services import (
     record_candidate_business_knowledge,
     set_setting,
 )
+from gaard_api.auth_dependencies import AuthenticatedSession, identity_id_for_principal
 from gaard_api.core.settings import settings
 from gaard_api.example_database import (
     MEDICAL_POC_DASHBOARD_ID,
@@ -161,29 +160,9 @@ def test_authenticated_request_updates_last_seen_without_writing_every_request(
         assert second_seen == first_seen
 
 
-def test_session_schema_backfills_last_seen_and_startup_cleanup_removes_stale_sessions(
-    tmp_path: Path,
+def test_startup_cleanup_removes_stale_sessions(
     admin_client: TestClient,
 ) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-sessions.db'}")
-    with engine.begin() as connection:
-        connection.execute(text("""
-            CREATE TABLE admin_sessions (
-                id INTEGER NOT NULL PRIMARY KEY,
-                token_hash VARCHAR(128) NOT NULL,
-                user_id INTEGER NOT NULL,
-                created_at DATETIME NOT NULL
-            )
-        """))
-        connection.execute(text("""
-            INSERT INTO admin_sessions (id, token_hash, user_id, created_at)
-            VALUES (1, 'legacy', 1, CURRENT_TIMESTAMP)
-        """))
-    ensure_admin_session_schema(engine)
-    with engine.connect() as connection:
-        assert connection.execute(text("SELECT last_seen FROM admin_sessions WHERE id = 1")).scalar() is not None
-
-    # Exercise the cleanup independently of the app lifespan.
     with create_session() as session:
         user = session.scalar(select(AdminUser).where(AdminUser.username == "admin"))
         assert user is not None
@@ -314,7 +293,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     admin_headers = auth_headers(admin_client)
     identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
     assert identities.json()["can_manage_identities"] is True
-    item = next(identity for identity in identities.json()["items"] if identity["id"] == f"local:{analyst_id}")
+    item = next(identity for identity in identities.json()["items"] if identity["id"] == str(analyst_id))
     assert item["enterprise_access"] is False
     assert item["enterprise_access_editable"] is True
 
@@ -322,7 +301,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     assert login_as(admin_client, "analyst", "analyst-password")
 
     response = admin_client.patch(
-        f"/api/v1/admin/identities/local:{analyst_id}/enterprise-access",
+        f"/api/v1/admin/identities/{analyst_id}/enterprise-access",
         headers=admin_headers,
         json={"enterprise_access": True},
     )
@@ -334,7 +313,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     refreshed_item = next(
         identity
         for identity in refreshed_identities.json()["items"]
-        if identity["id"] == f"local:{analyst_id}"
+        if identity["id"] == str(analyst_id)
     )
     assert refreshed_item["enterprise_access"] is True
 
@@ -362,7 +341,7 @@ def test_admin_enterprise_access_is_not_editable(
     admin_headers = auth_headers(admin_client)
 
     response = admin_client.patch(
-        "/api/v1/admin/identities/local:1/enterprise-access",
+        "/api/v1/admin/identities/1/enterprise-access",
         headers=admin_headers,
         json={"enterprise_access": False},
     )
@@ -396,7 +375,7 @@ def test_additional_administrator_enterprise_access_is_assigned_like_a_user(
         additional_admin_id = additional_admin.id
 
     response = admin_client.patch(
-        f"/api/v1/admin/identities/local:{additional_admin_id}/enterprise-access",
+        f"/api/v1/admin/identities/{additional_admin_id}/enterprise-access",
         headers=admin_headers,
         json={"enterprise_access": True},
     )
@@ -432,7 +411,7 @@ def test_additional_administrator_cannot_clear_system_administrator_sessions(
 
     second_admin_headers = login_as(admin_client, "second-admin", "second-admin-password")
     response = admin_client.delete(
-        f"/api/v1/admin/identities/local:{system_admin.id}/sessions",
+        f"/api/v1/admin/identities/{system_admin.id}/sessions",
         headers=second_admin_headers,
     )
 
@@ -459,80 +438,6 @@ def test_core_does_not_expose_built_in_identity_management(
     )
 
     assert response.status_code == 405
-
-
-def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
-    with engine.begin() as connection:
-        connection.execute(text("""
-            CREATE TABLE admin_users (
-                id INTEGER NOT NULL PRIMARY KEY,
-                username VARCHAR(255) NOT NULL UNIQUE,
-                display_name VARCHAR(255) NOT NULL DEFAULT '',
-                auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
-                password_hash TEXT NOT NULL,
-                must_change_password BOOLEAN NOT NULL,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-        """))
-        connection.execute(text("""
-            INSERT INTO admin_users
-                (id, username, display_name, auth_provider, password_hash, must_change_password, created_at, updated_at)
-            VALUES
-                (1, 'ldap:ada', '', 'local', 'external$disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                (2, 'ada', '', 'local', 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                (3, 'ldap:grace', '', 'ldap', 'external$disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """))
-
-    ensure_admin_user_schema(engine)
-
-    with engine.connect() as connection:
-        users = connection.execute(text(
-            "SELECT username, auth_provider FROM admin_users ORDER BY id"
-        )).all()
-    assert [tuple(row) for row in users] == [("ada", "ldap"), ("ada", "local"), ("grace", "ldap")]
-    assert any(
-        constraint["column_names"] == ["auth_provider", "username"]
-        for constraint in inspect(engine).get_unique_constraints("admin_users")
-    )
-
-
-def test_admin_user_schema_marks_existing_first_local_administrator_as_system_admin(
-    tmp_path: Path,
-) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
-    with engine.begin() as connection:
-        connection.execute(text("""
-            CREATE TABLE admin_users (
-                id INTEGER NOT NULL PRIMARY KEY,
-                username VARCHAR(255) NOT NULL,
-                display_name VARCHAR(255) NOT NULL DEFAULT '',
-                auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
-                role VARCHAR(50) NOT NULL DEFAULT 'admin',
-                enterprise_access BOOLEAN NOT NULL DEFAULT 0,
-                password_hash TEXT NOT NULL,
-                must_change_password BOOLEAN NOT NULL,
-                is_provisioned BOOLEAN NOT NULL DEFAULT 0,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-        """))
-        connection.execute(text("""
-            INSERT INTO admin_users
-                (id, username, auth_provider, role, enterprise_access, password_hash, must_change_password, created_at, updated_at)
-            VALUES
-                (1, 'admin', 'local', 'admin', 1, 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                (2, 'another-admin', 'local', 'admin', 1, 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """))
-
-    ensure_admin_user_schema(engine)
-
-    with engine.connect() as connection:
-        users = connection.execute(text(
-            "SELECT username, is_system_admin FROM admin_users ORDER BY id"
-        )).all()
-    assert [tuple(row) for row in users] == [("admin", 1), ("another-admin", 0)]
 
 
 def auth_headers(client: TestClient) -> dict[str, str]:
@@ -634,7 +539,7 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
         session.commit()
 
     identities = admin_client.patch(
-        "/api/v1/admin/identities/local:1/enterprise-access",
+        "/api/v1/admin/identities/1/enterprise-access",
         headers=headers,
         json={"enterprise_access": False},
     )
@@ -2757,7 +2662,6 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
-    from gaard_api.query_hooks import principal_identity_id as query_principal_identity_id
 
     monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: True)
     monkeypatch.setattr(
@@ -2775,6 +2679,10 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
         assert user is not None
         assert connector is not None
         user_id = user.id
+        admin_session = session.scalar(
+            select(AdminSession).where(AdminSession.user_id == user_id)
+        )
+        assert admin_session is not None
         session.execute(text("""
             CREATE TABLE IF NOT EXISTS identity_privilege_datasource_permissions (
                 id INTEGER PRIMARY KEY,
@@ -2791,7 +2699,7 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
             """),
             {
                 "connector_id": connector.id,
-                "identity_id": f"local:{user_id}",
+                "identity_id": str(user_id),
             },
         )
         session.commit()
@@ -2803,11 +2711,28 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
 
     assert response.status_code == 200
     assert [item["connector_key"] for item in response.json()["items"]] == ["default"]
-    principal = SimpleNamespace(
-        session=SimpleNamespace(auth_provider="local", username="client-user"),
-        user=SimpleNamespace(id=user_id, username="client-user", auth_provider="local"),
+    principal = AuthenticatedSession(
+        session=admin_session,
+        user=user,
     )
-    assert query_principal_identity_id(principal) == f"local:{user_id}"
+    assert identity_id_for_principal(principal) == str(user_id)
+
+    received_identity_ids: list[str | None] = []
+
+    class CapturingHook:
+        def filter_datasource_keys(
+            self, identity_id: str | None, datasource_keys: list[str]
+        ) -> list[str]:
+            received_identity_ids.append(identity_id)
+            return []
+
+    registry = QueryHookRegistry()
+    registry.register(CapturingHook())
+    assert registry.filter_datasource_contexts(
+        principal,
+        [(connector, cast(DatasourceSchemaCache, object()))],
+    ) == []
+    assert received_identity_ids == [str(user_id)]
 
 
 def test_deleting_datasource_removes_identity_privilege_permissions(
@@ -2844,7 +2769,7 @@ def test_deleting_datasource_removes_identity_privilege_permissions(
             text("""
                 INSERT INTO identity_privilege_datasource_permissions
                     (connector_id, identity_id, allowed)
-                VALUES (:connector_id, 'local:1', 1)
+                VALUES (:connector_id, '1', 1)
             """),
             {"connector_id": connector.id},
         )

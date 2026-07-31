@@ -7,7 +7,11 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from gaard_api.admin.database import clear_expired_admin_sessions, create_session
+from gaard_api.admin.database import (
+    clear_expired_admin_sessions,
+    create_session,
+    init_metadata_store,
+)
 from gaard_api.admin.models import AdminUser
 from gaard_api.api.v1.admin import router as admin_router
 from gaard_api.api.v1.analysis import router as analysis_router
@@ -23,6 +27,7 @@ from gaard_api.license import license_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_metadata_store()
     license_service.start()
     try:
         with create_session() as session:

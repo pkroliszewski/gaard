@@ -1,7 +1,6 @@
 import json
 import re
 import threading
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -114,6 +113,7 @@ from gaard_api.admin.services import (
 )
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.auth_dependencies import (
+    AuthenticatedSession,
     ensure_user_license_access,
     get_current_admin,
     get_current_authenticated_session,
@@ -121,7 +121,6 @@ from gaard_api.auth_dependencies import (
     get_current_enterprise_api_user,
     has_enterprise_user_access,
     identity_id_for_principal,
-    identity_ids_for_principal,
 )
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
@@ -179,12 +178,6 @@ class MeResponse(BaseModel):
     must_change_password: bool
     role: str = "admin"
     enterprise_access: bool
-
-
-@dataclass(frozen=True)
-class AuthenticatedSession:
-    session: AdminSession
-    user: AdminUser
 
 
 class PromptUpdateRequest(BaseModel):
@@ -424,10 +417,6 @@ def identity_privileges_are_active() -> bool:
     )
 
 
-def principal_identity_id(principal: AuthenticatedSession) -> str:
-    return identity_id_for_principal(principal) or ""
-
-
 def filter_datasources_for_identity_privileges(
     session: Session,
     principal: AuthenticatedSession,
@@ -437,16 +426,12 @@ def filter_datasources_for_identity_privileges(
     if not identity_privileges_are_active():
         return connectors
 
-    identity_ids = identity_ids_for_principal(principal)
-    if not identity_ids:
-        return []
+    identity_id = identity_id_for_principal(principal)
 
     allowed_ids = set(
         session.scalars(
             select(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.connector_id).where(
-                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id.in_(
-                    identity_ids,
-                ),
+                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id == identity_id,
                 IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.allowed.is_(True),
             )
         )
@@ -466,7 +451,7 @@ def grant_client_excel_datasource_permission(
     session.execute(
         insert(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS).values(
             connector_id=connector_id,
-            identity_id=principal_identity_id(principal),
+            identity_id=identity_id_for_principal(principal),
             allowed=True,
         )
     )
@@ -1528,12 +1513,7 @@ def list_identities(
             ).tuples()
         }
         users_by_identity = {
-            (
-                f"local:{item.id}"
-                if item.auth_provider == "local"
-                else f"{item.auth_provider}:{item.username}"
-            ): item
-            for item in session.scalars(select(AdminUser)).all()
+            str(item.id): item for item in session.scalars(select(AdminUser)).all()
         }
         dashboards_by_owner: dict[str, list[dict[str, Any]]] = {}
         for dashboard in session.scalars(
@@ -1544,7 +1524,7 @@ def list_identities(
             )
         items = [
             {
-                "id": f"local:{item.id}",
+                "id": str(item.id),
                 "username": item.username,
                 "name": item.display_name or item.username,
                 "role": item.role,
@@ -1567,11 +1547,7 @@ def list_identities(
                 items.extend(provider.list_users(session, refresh=refresh))
         for item in items:
             account = users_by_identity.get(str(item["id"]))
-            owner_user_id = (
-                str(item["id"]).removeprefix("local:")
-                if item.get("provider_id") == "local"
-                else str(account.id) if account is not None else None
-            )
+            owner_user_id = str(item["id"]) if account is not None else None
             item["dashboards"] = dashboards_by_owner.get(owner_user_id or "", [])
             item["enterprise_access"] = bool(
                 item.get("is_system_admin")
@@ -1592,18 +1568,10 @@ def list_identities(
 
 
 def identity_user_for_session_action(session: Session, identity_id: str) -> AdminUser:
-    if identity_id.startswith("local:"):
-        try:
-            user_id = int(identity_id.removeprefix("local:"))
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="Identity not found.") from exc
-        user = session.get(AdminUser, user_id)
-    else:
-        user = session.scalar(
-            select(AdminUser).where(
-                (AdminUser.auth_provider + ":" + AdminUser.username) == identity_id
-            )
-        )
+    try:
+        user = session.get(AdminUser, int(identity_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Identity not found.") from exc
     if user is None:
         raise HTTPException(status_code=404, detail="Identity not found.")
     return user
@@ -1653,24 +1621,10 @@ def update_identity_enterprise_access(
     except LicenseAccessError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-    provider_id, separator, identity_value = identity_id.partition(":")
-    if not separator or not provider_id or not identity_value:
+    try:
+        target = session.get(AdminUser, int(identity_id))
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid identity id.")
-
-    if provider_id == "local":
-        try:
-            target = session.get(AdminUser, int(identity_value))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid built-in identity id.") from exc
-        if target is not None and target.auth_provider != "local":
-            target = None
-    else:
-        target = session.scalar(
-            select(AdminUser).where(
-                AdminUser.auth_provider == provider_id,
-                AdminUser.username == identity_value,
-            )
-        )
 
     if target is None:
         raise HTTPException(status_code=404, detail="Identity was not found.")

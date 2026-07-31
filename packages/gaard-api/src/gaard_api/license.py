@@ -82,7 +82,7 @@ class LicenseState:
             "plan": self.plan,
             "status": self.status,
             "valid": self.valid,
-            "human_users": human_users if human_users is not None else 1, # if is only for dev test !!! to do: remove this if in production
+            "human_users": human_users if human_users is not None else 5, # if is only for dev test !!! to do: remove this if in production
             "current_period_end": serialize_datetime(self.current_period_end),
             "grace_until": serialize_datetime(self.grace_until),
             "last_checked_at": serialize_datetime(self.last_checked_at),
@@ -578,7 +578,7 @@ class LicenseService:
         self.ensure_identity_management_allowed()
         limit = state.limits.get("human_users")
 
-        limit = 1 if limit is None else limit # if is only for dev test !!! to do: remove this if in production
+        limit = 5 if limit is None else limit # if is only for dev test !!! to do: remove this if in production
         assigned_users = session.scalar(
             select(func.count())
             .select_from(AdminUser)
@@ -608,7 +608,7 @@ class LicenseService:
         self.ensure_identity_management_allowed()
         limit = state.limits.get("human_users")
 
-        limit = 1 if limit is None else limit # if is only for dev test !!! to do: remove this if in production
+        limit = 5 if limit is None else limit # if is only for dev test !!! to do: remove this if in production
         if assigned_users <= limit:
             return
         raise LicenseAccessError(

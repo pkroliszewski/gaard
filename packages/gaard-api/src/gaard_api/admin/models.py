@@ -26,6 +26,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class DatabaseMigrationTag(Base):
+    """A durable marker for one successfully applied database migration."""
+
+    __tablename__ = "database_migration_tags"
+
+    tag: Mapped[str] = mapped_column(String(255), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class AdminUser(Base):
     __tablename__ = "admin_users"
     __table_args__ = (

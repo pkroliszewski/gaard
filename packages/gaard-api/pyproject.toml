@@ -66,6 +66,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 gaard_api = [
     "admin-web/**/*",
+    "admin/*.sql",
     "example_data/medical_poc/*.sql",
 ]
 
