@@ -16,8 +16,7 @@ from gaard_core.query_pipeline.models import (
 from sqlalchemy import desc, select
 
 from gaard_api.admin.database import create_session
-from gaard_api.admin.models import Conversation as Conversation
-from gaard_api.admin.models import ConversationTurn
+from gaard_api.admin.models import Conversation, ConversationTurn
 
 CONTEXT_TURN_LIMIT = 4
 SAFE_ANSWER_CLASSIFICATIONS = {
@@ -43,6 +42,10 @@ def json_loads(value: str, default: Any) -> Any:
         return default
 
     return payload if payload is not None else default
+
+
+def iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 def create_conversation(
@@ -137,6 +140,42 @@ def build_compact_conversation_context(
         "conversation_id": conversation_id,
         "turns": [compact_turn_context(turn) for turn in reversed(turns)],
     }
+
+
+def list_conversations_for_owner(
+    principal: ConversationPrincipal,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    bounded_limit = max(1, min(int(limit), 100))
+    with create_session() as session:
+        rows = list(
+            session.scalars(
+                select(Conversation)
+                .where(Conversation.owner_user_id == principal.owner_user_id)
+                .order_by(desc(Conversation.updated_at), desc(Conversation.id))
+                .limit(bounded_limit)
+            )
+        )
+    return [serialize_conversation(row) for row in rows]
+
+
+def list_conversation_turns(
+    conversation_id: str,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    bounded_limit = max(1, min(int(limit), 200))
+    with create_session() as session:
+        rows = list(
+            session.scalars(
+                select(ConversationTurn)
+                .where(ConversationTurn.conversation_id == conversation_id)
+                .order_by(desc(ConversationTurn.id))
+                .limit(bounded_limit)
+            )
+        )
+    return [serialize_conversation_turn(row) for row in reversed(rows)]
 
 
 def record_conversation_turn(
@@ -447,6 +486,49 @@ def build_title(question: str) -> str:
     if not compact:
         return "GAARD conversation"
     return compact[:252] + "..." if len(compact) > 255 else compact
+
+
+def serialize_conversation(record: Conversation) -> dict[str, Any]:
+    summary = json_loads(record.summary_json, {})
+    if not isinstance(summary, dict):
+        summary = {}
+    datasource_ids = json_loads(record.datasource_ids_json, [])
+    if not isinstance(datasource_ids, list):
+        datasource_ids = []
+    return {
+        "id": record.conversation_id,
+        "title": record.title or "GAARD conversation",
+        "status": record.status,
+        "datasource_id": record.datasource_id,
+        "datasource_ids": datasource_ids,
+        "turn_count": int(summary.get("turn_count") or 0),
+        "latest_question": str(summary.get("latest_question") or ""),
+        "summary": summary,
+        "created_at": iso(record.created_at),
+        "updated_at": iso(record.updated_at),
+    }
+
+
+def serialize_conversation_turn(record: ConversationTurn) -> dict[str, Any]:
+    metadata = json_loads(record.metadata_json, {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return {
+        "id": record.turn_id,
+        "conversation_id": record.conversation_id,
+        "mode": record.mode,
+        "status": record.status,
+        "question": record.original_question,
+        "standalone_question": record.standalone_question,
+        "answer": record.answer,
+        "sql": record.sql,
+        "metadata": metadata,
+        "data_query_audit_id": record.data_query_audit_id,
+        "analysis_session_id": record.analysis_session_id,
+        "context_decision": record.context_decision,
+        "context_confidence": record.context_confidence,
+        "created_at": iso(record.created_at),
+    }
 
 
 def detach_conversation(record: Conversation) -> Conversation:

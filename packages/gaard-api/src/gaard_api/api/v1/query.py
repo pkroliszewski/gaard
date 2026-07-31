@@ -77,8 +77,11 @@ from gaard_api.conversations import (
     conversation_exists,
     ensure_conversation,
     load_conversation_for_owner,
+    list_conversation_turns,
+    list_conversations_for_owner,
     new_topic_classification,
     record_conversation_turn,
+    serialize_conversation,
 )
 from gaard_api.extensions import get_query_hook_registry
 from gaard_api.license import license_service
@@ -108,8 +111,8 @@ ALLOWLIST_REFUSAL_ANSWER = (
 )
 
 SQL_SYNTAX_REFUSAL_ANSWER = (
-    "Nie mogę wykonać tego zapytania, ponieważ wygenerowany SQL nie przeszedł "
-    "walidacji składni lub zasad pojedynczego zapytania."
+    "I can't run this query because the generated SQL did not pass syntax "
+    "validation or the single-query rules."
 )
 
 CLARIFICATION_REFUSAL_ANSWER = "Potrzebuję doprecyzowania, zanim bezpiecznie rozpocznę tę analizę."
@@ -1825,6 +1828,35 @@ def add_conversation_to_response(
 
 def ndjson_line(payload: dict[str, Any]) -> str:
     return f"{json.dumps(payload, ensure_ascii=False)}\n"
+
+
+@router.get("/conversations")
+def list_conversations(
+    limit: int = 50,
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
+) -> dict[str, Any]:
+    return {
+        "items": list_conversations_for_owner(
+            conversation_principal(_user),
+            limit=limit,
+        )
+    }
+
+
+@router.get("/conversations/{conversation_id}")
+def get_conversation(
+    conversation_id: str,
+    limit: int = 100,
+    _user: AuthenticatedSession = Depends(get_current_enterprise_api_user),
+) -> dict[str, Any]:
+    conversation = ensure_existing_conversation(
+        conversation_id,
+        conversation_principal(_user),
+    )
+    return {
+        "item": serialize_conversation(conversation),
+        "turns": list_conversation_turns(conversation.conversation_id, limit=limit),
+    }
 
 
 @router.post("/query", response_model=QueryResponse)

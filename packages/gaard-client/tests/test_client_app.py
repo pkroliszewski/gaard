@@ -278,6 +278,65 @@ def test_client_app_proxies_current_user(monkeypatch: Any) -> None:
     assert captured["headers"] == {"Authorization": "Bearer token"}
 
 
+def test_client_app_proxies_conversation_history(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def get(self, url: str, headers: Any) -> httpx.Response:
+            captured.append({"url": url, "headers": headers})
+            request = httpx.Request("GET", url)
+            if url.endswith("/api/v1/conversations?limit=50"):
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    json={"items": [{"id": "conversation-1", "title": "Active patients"}]},
+                )
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={
+                    "item": {"id": "conversation-1", "title": "Active patients"},
+                    "turns": [{"id": "turn-1", "question": "How many active patients?"}],
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    list_response = client.get(
+        "/api/conversations?backend_url=http://backend.example/",
+        headers={"Authorization": "Bearer token"},
+    )
+    detail_response = client.get(
+        "/api/conversations/conversation-1?backend_url=http://backend.example/",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    assert list_response.status_code == 200
+    assert detail_response.status_code == 200
+    assert list_response.json()["items"][0]["id"] == "conversation-1"
+    assert detail_response.json()["turns"][0]["id"] == "turn-1"
+    assert captured == [
+        {
+            "url": "http://backend.example/api/v1/conversations?limit=50",
+            "headers": {"Authorization": "Bearer token"},
+        },
+        {
+            "url": "http://backend.example/api/v1/conversations/conversation-1?limit=100",
+            "headers": {"Authorization": "Bearer token"},
+        },
+    ]
+
+
 def test_client_app_proxies_query_conversation_id(monkeypatch: Any) -> None:
     captured: dict[str, Any] = {}
 

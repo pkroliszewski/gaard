@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx2 as httpx
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
@@ -247,6 +247,74 @@ async def query_backend(
             response = await client.post(
                 query_url,
                 **backend_request_kwargs(authorization, query_payload(request)),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.get("/api/conversations")
+async def list_conversations_backend(
+    backend_url: str | None = None,
+    limit: int = 50,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    conversations_url = f"{resolved_backend_url}/api/v1/conversations?{urlencode({'limit': limit})}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                conversations_url,
+                headers=backend_auth_headers(authorization),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation_backend(
+    conversation_id: str,
+    backend_url: str | None = None,
+    limit: int = 100,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    conversation_url = (
+        f"{resolved_backend_url}/api/v1/conversations/{conversation_id}?"
+        f"{urlencode({'limit': limit})}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                conversation_url,
+                headers=backend_auth_headers(authorization),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(

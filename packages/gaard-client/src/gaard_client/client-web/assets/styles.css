@@ -634,6 +634,7 @@ label {
 }
 
 .retry-button,
+.copy-query-button,
 .explain-answer-button,
 .save-widget-button,
 .icon-button {
@@ -650,6 +651,8 @@ label {
 
 .retry-button:hover,
 .retry-button:focus-visible,
+.copy-query-button:hover,
+.copy-query-button:focus-visible,
 .explain-answer-button:hover,
 .explain-answer-button:focus-visible,
 .save-widget-button:hover,
@@ -662,12 +665,14 @@ label {
 }
 
 .retry-button:disabled,
+.copy-query-button:disabled,
 .explain-answer-button:disabled,
 .save-widget-button:disabled {
   opacity: 0.3;
 }
 
 .retry-button svg,
+.copy-query-button svg,
 .explain-answer-button svg,
 .save-widget-button svg,
 .icon-button svg {
@@ -2881,6 +2886,11 @@ button.primary {
 
 button.placeholder-item {
   cursor: pointer;
+}
+
+button.placeholder-item.active {
+  border-color: rgba(8, 120, 111, 0.36);
+  background: rgba(8, 120, 111, 0.08);
 }
 
 .placeholder-item.muted {

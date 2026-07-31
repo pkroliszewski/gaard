@@ -8,6 +8,7 @@ var storedRole = localStorage.getItem("gaard_client_role") || "";
 var storedMustChangePassword = localStorage.getItem("gaard_client_must_change_password") === "true";
 var storedEnterpriseAccess = localStorage.getItem("gaard_client_enterprise_access") === "true";
 var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
+var storedConversationId = localStorage.getItem("gaard_client_active_conversation_id") || "";
 var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
@@ -20,7 +21,11 @@ var state = {
   queryMode: normalizeQueryMode(params.get("mode")),
   messages: [],
   nextMessageId: 1,
-  conversationId: "",
+  conversationId: storedConversationId,
+  conversations: [],
+  conversationsLoaded: false,
+  conversationsLoading: false,
+  conversationsError: "",
   pending: false,
   error: "",
   apiError: null,
@@ -287,6 +292,11 @@ function renderIcon(name) {
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 20h9" />
         <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </svg>`,
+    copy: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="9" y="9" width="11" height="11" rx="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
       </svg>`,
     chevronDown: `
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -974,27 +984,34 @@ function renderIssuesTable() {
     <button class="link-button" type="button" aria-disabled="true">View all issues</button>`;
 }
 function renderQueriesView() {
-  const recent = state.messages.slice(-6).reverse();
+  const conversations = state.conversations;
   return `
     <section class="placeholder-view">
       <div class="placeholder-intro">
         <span>Marked feature</span>
         <h1>My Queries</h1>
-        <p>Full chat history will appear here. For now, this shows recent questions from the current browser session.</p>
+        <p>Saved chat threads and their queries are loaded from the GAARD API.</p>
       </div>
+      ${state.conversationsError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.conversationsError)}</div>` : ""}
       <div class="placeholder-list query-list">
-        ${recent.length ? recent.map((message) => `
-          <button type="button" data-view="home" class="placeholder-item">
-            ${renderIcon(message.mode === "analysis" ? "analysis" : "queries")}
+        ${state.conversationsLoading ? `
+          <div class="placeholder-item muted">
+            ${renderIcon("history")}
+            <span><strong>Loading conversations...</strong><small>Please wait.</small></span>
+          </div>` : ""}
+        ${!state.conversationsLoading && conversations.length ? conversations.map((conversation) => `
+          <button type="button" data-open-conversation="${escapeHtml(conversation.id)}" class="placeholder-item ${conversation.id === state.conversationId ? "active" : ""}">
+            ${renderIcon("history")}
             <span>
-              <strong>${escapeHtml(message.question)}</strong>
-              <small>${escapeHtml(formatMode(message.mode))} · ${escapeHtml(message.status)}</small>
+              <strong>${escapeHtml(conversation.title || conversation.latest_question || "GAARD conversation")}</strong>
+              <small>${escapeHtml(conversation.latest_question || "No queries yet")} · ${Number(conversation.turn_count || 0).toLocaleString()} quer${Number(conversation.turn_count || 0) === 1 ? "y" : "ies"} · ${escapeHtml(formatDateTime(conversation.updated_at))}</small>
             </span>
-          </button>`).join("") : `
+          </button>`).join("") : ""}
+        ${!state.conversationsLoading && !conversations.length ? `
           <div class="placeholder-item muted">
             ${renderIcon("queries")}
-            <span><strong>No local queries yet</strong><small>Ask your data on Home to start a session.</small></span>
-          </div>`}
+            <span><strong>No saved queries yet</strong><small>Ask your data on Home to start a chat.</small></span>
+          </div>` : ""}
       </div>
     </section>`;
 }
@@ -1188,6 +1205,7 @@ function renderPlaceholderView({ title, description, items }) {
 }
 function render(options = {}) {
   if (!app) return;
+  const historyScroll = captureHistoryScroll();
   app.innerHTML = `
     <main class="app-shell">
       ${renderSidebar()}
@@ -1211,6 +1229,9 @@ function render(options = {}) {
     </main>`;
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", changeView);
+  });
+  document.querySelectorAll("[data-open-conversation]").forEach((button) => {
+    button.addEventListener("click", openConversation);
   });
   document.querySelector("#query-form")?.addEventListener("submit", submitQuestion);
   document.querySelector("[data-logout]")?.addEventListener("click", logout);
@@ -1272,6 +1293,9 @@ function render(options = {}) {
   document.querySelectorAll("[data-retry-question]").forEach((button) => {
     button.addEventListener("click", retryQuestion);
   });
+  document.querySelectorAll("[data-copy-query]").forEach((button) => {
+    button.addEventListener("click", copyQuery);
+  });
   document.querySelectorAll("[data-save-widget]").forEach((button) => {
     button.addEventListener("click", saveWidgetFromMessage);
   });
@@ -1306,12 +1330,11 @@ function render(options = {}) {
     input?.focus();
   }
   initAnalysisDashboard();
+  maybeLoadConversationsForActiveView();
   maybeLoadDatasourcesForActiveView();
   maybeLoadDashboardsForActiveView();
   maybeLoadSavedMetricsForActiveView();
-  if (options.scrollToLatest) {
-    scrollToLatest();
-  }
+  restoreHistoryScroll(historyScroll, options);
 }
 var apiErrorTimer = null;
 function apiErrorMessage(error, fallback = "Request failed.") {
@@ -1355,6 +1378,93 @@ function formatApiResponseError(response, message) {
 function maybeLoadDatasourcesForActiveView() {
     if (state.enterpriseAccess && ["home", "datasources", "metrics"].includes(state.activeView) && state.token && !state.datasourcesLoaded && !state.datasourcesLoading) {
         void loadDatasources();
+    }
+}
+function maybeLoadConversationsForActiveView() {
+    if (state.token && ["home", "queries"].includes(state.activeView) && !state.conversationsLoaded && !state.conversationsLoading) {
+        void loadConversations({ selectActive: state.activeView === "home" });
+    }
+}
+async function loadConversations(options = {}) {
+    if (!state.token) {
+        state.conversations = [];
+        state.conversationsLoaded = false;
+        state.conversationsLoading = false;
+        state.conversationsError = "";
+        return;
+    }
+    state.conversationsLoading = true;
+    state.conversationsError = "";
+    if (!options.silent) render();
+    try {
+        const response = await fetch(`/api/conversations?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.conversations = payload.items || [];
+        state.conversationsLoaded = true;
+        if (options.selectActive) {
+            const preferredId = state.conversationId || localStorage.getItem("gaard_client_active_conversation_id") || "";
+            const conversation =
+                state.conversations.find((item) => item.id === preferredId) ||
+                state.conversations[0] ||
+                null;
+            if (conversation) {
+                await loadConversation(conversation.id, { silent: true });
+            } else {
+                state.messages = [];
+                state.nextMessageId = 1;
+                state.conversationId = "";
+                rememberActiveConversation("");
+            }
+        }
+    } catch (error) {
+        state.conversationsError = error.message || "Could not load conversation history.";
+        state.conversationsLoaded = true;
+        reportApiError(error, "Could not load conversation history.");
+    } finally {
+        state.conversationsLoading = false;
+        if (!options.silent) render();
+    }
+}
+async function loadConversation(conversationId, options = {}) {
+    if (!state.token || !conversationId) return;
+    state.conversationsError = "";
+    if (!options.silent) {
+        state.conversationsLoading = true;
+        render();
+    }
+    try {
+        const response = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}?backend_url=${encodeURIComponent(state.backendUrl)}`,
+            { headers: authHeaders() }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        if (payload.item) {
+            state.conversations = [
+                payload.item,
+                ...state.conversations.filter((item) => item.id !== payload.item.id)
+            ];
+        }
+        state.conversationsLoaded = true;
+        state.conversationId = payload.item?.id || conversationId;
+        rememberActiveConversation(state.conversationId);
+        state.messages = messagesFromConversationTurns(payload.turns || []);
+        state.nextMessageId = Math.max(1, ...state.messages.map((message) => Number(message.id) || 0)) + 1;
+        state.activeView = "home";
+        rememberActiveView(state.activeView);
+    } catch (error) {
+        state.conversationsError = error.message || "Could not load conversation.";
+        reportApiError(error, "Could not load conversation.");
+    } finally {
+        state.conversationsLoading = false;
+        if (!options.silent) render({ scrollToLatest: true });
     }
 }
 function maybeLoadDashboardsForActiveView() {
@@ -2260,6 +2370,11 @@ async function changeView(event) {
   state.dashboardEditId = "";
   render();
 }
+function openConversation(event) {
+  const conversationId = event.currentTarget.dataset.openConversation || "";
+  if (!conversationId || state.pending) return;
+  void loadConversation(conversationId);
+}
 function initAnalysisDashboard() {
   if (state.activeView !== "analysis") return;
   state.dashboardGrid = null;
@@ -2595,6 +2710,7 @@ function newChat() {
   if (state.pending) return;
   state.messages = [];
   state.conversationId = "";
+  rememberActiveConversation("");
   state.error = "";
   state.activeView = "home";
   rememberActiveView(state.activeView);
@@ -2611,7 +2727,7 @@ function renderMessage(message) {
   const progress = message.mode === "analysis" ? renderAnalysisProgress(message) : "";
   const analysisReply = message.status === "waiting" ? renderAnalysisReply(message) : "";
   return `
-    <article class="exchange ${message.status}">
+    <article class="exchange ${message.status}" data-message-id="${escapeHtml(message.id)}">
       <div class="exchange-top">
         <div class="question">
           <span>Question \xB7 ${escapeHtml(formatMode(message.mode))}</span>
@@ -2638,6 +2754,7 @@ function renderMessageActions(message) {
   const saveTitle = message.saveStatus === "saved" ? "Saved as widget" : saveDialogOpen || message.saveStatus === "saving" ? "Saving widget" : "Save as widget";
   const explainDisabled = state.pending || message.explanationStatus === "loading";
   const explainTitle = message.explanationStatus === "ok" ? "Refresh explanation" : message.explanationStatus === "loading" ? "Explaining answer" : "Explain answer";
+  const copyTitle = message.copyStatus === "copied" ? "Copied" : message.copyStatus === "error" ? "Copy failed" : "Copy query";
   return `
     <div class="message-actions">
       <button class="retry-button" type="button" data-retry-question="${message.id}" aria-label="Copy question to input" title="Retry question" ${state.pending ? "disabled" : ""}>
@@ -2645,6 +2762,9 @@ function renderMessageActions(message) {
           <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
           <path d="M3 3v5h5" />
         </svg>
+      </button>
+      <button class="copy-query-button" type="button" data-copy-query="${message.id}" aria-label="${escapeHtml(copyTitle)}" title="${escapeHtml(copyTitle)}">
+        ${renderIcon("copy")}
       </button>
       ${canSaveWidget(message) ? `
         <button class="save-widget-button" type="button" data-save-widget="${message.id}" aria-label="Save question as widget" title="${escapeHtml(saveTitle)}" ${saveDisabled ? "disabled" : ""}>
@@ -2788,6 +2908,65 @@ function normalizeView(value) {
 function rememberActiveView(value) {
   localStorage.setItem("gaard_client_active_view", normalizeView(value));
 }
+function formatDateTime(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+function rememberActiveConversation(value) {
+  const conversationId = String(value || "");
+  if (conversationId) {
+    localStorage.setItem("gaard_client_active_conversation_id", conversationId);
+  } else {
+    localStorage.removeItem("gaard_client_active_conversation_id");
+  }
+}
+function messagesFromConversationTurns(turns) {
+  return turns.map((turn, index) => {
+    const status = turn.status === "failed" ? "error" : "ok";
+    const response = {
+      question: turn.question || "",
+      answer: turn.answer || "",
+      sql: turn.sql || "",
+      rows: [],
+      metadata: {
+        ...(turn.metadata || {}),
+        conversation: {
+          ...(turn.metadata?.conversation || {}),
+          id: turn.conversation_id,
+          turn_id: turn.id
+        }
+      }
+    };
+    return {
+      id: index + 1,
+      question: turn.question || "",
+      mode: normalizeQueryMode(turn.mode),
+      status,
+      response: status === "ok" ? response : null,
+      error: status === "error" ? turn.answer || "Query failed." : "",
+      dataOpen: false,
+      saveStatus: "idle",
+      saveError: "",
+      explanationStatus: "idle",
+      explanation: "",
+      explanationError: "",
+      explanationMetadata: {},
+      copyStatus: "idle",
+      progress: [],
+      progressOpen: false,
+      processingStage: "",
+      analysisSessionId: turn.analysis_session_id || "",
+      userQuestion: "",
+      createdAt: turn.created_at || ""
+    };
+  });
+}
 function handleModeChange(event) {
   state.queryMode = normalizeQueryMode(event.currentTarget.value);
   render();
@@ -2803,10 +2982,7 @@ function toggleDataTable(event) {
   const message = state.messages.find((item) => item.id === id);
   if (!message) return;
   message.dataOpen = !message.dataOpen;
-  const latestMessage = state.messages[state.messages.length - 1];
-  render({
-    scrollToLatest: message.dataOpen && latestMessage?.id === message.id
-  });
+  render();
 }
 function toggleAnalysisProgress(event) {
   const details = event.currentTarget;
@@ -2827,6 +3003,57 @@ function retryQuestion(event) {
   refreshedInput.value = message.question;
   refreshedInput.focus();
   refreshedInput.setSelectionRange(refreshedInput.value.length, refreshedInput.value.length);
+}
+async function copyQuery(event) {
+  const id = Number(event.currentTarget.dataset.copyQuery);
+  const message = state.messages.find((item) => item.id === id);
+  if (!message) return;
+  try {
+    await writeClipboard(messageClipboardText(message));
+    message.copyStatus = "copied";
+    render();
+    window.setTimeout(() => {
+      if (message.copyStatus === "copied") {
+        message.copyStatus = "idle";
+        render();
+      }
+    }, 1500);
+  } catch (error) {
+    message.copyStatus = "error";
+    reportApiError(error, "Could not copy query.");
+    render();
+  }
+}
+function messageClipboardText(message) {
+  const parts = [`Question:\n${message.question}`];
+  const answer = message.response?.answer || message.error || "";
+  if (answer) {
+    parts.push(`Answer:\n${answer}`);
+  }
+  const sql = message.response?.sql || "";
+  if (sql) {
+    parts.push(`SQL:\n${sql}`);
+  }
+  return parts.join("\n\n");
+}
+async function writeClipboard(value) {
+  const text = String(value || "");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Clipboard is not available.");
+  }
 }
 async function explainAnswer(event) {
   const id = Number(event.currentTarget.dataset.explainAnswer);
@@ -2869,8 +3096,7 @@ async function explainAnswer(event) {
     message.explanationError = error.message || "Explanation could not be prepared.";
     reportApiError(error, "Explanation could not be prepared.");
   } finally {
-    const latestMessage = state.messages[state.messages.length - 1];
-    render({ scrollToLatest: latestMessage?.id === message.id });
+    render();
   }
 }
 async function saveWidgetFromMessage(event) {
@@ -3044,6 +3270,12 @@ async function login(event) {
     state.dashboardsLoaded = false;
     state.activeDashboardId = "";
     state.dashboardEditMode = false;
+    state.messages = [];
+    state.conversationId = "";
+    state.conversations = [];
+    state.conversationsLoaded = false;
+    state.conversationsError = "";
+    rememberActiveConversation("");
     if (!state.enterpriseAccess) {
       state.activeView = "analysis";
       rememberActiveView(state.activeView);
@@ -3131,6 +3363,10 @@ async function logout() {
   state.passwordChangeError = "";
   state.messages = [];
   state.conversationId = "";
+  state.conversations = [];
+  state.conversationsLoaded = false;
+  state.conversationsLoading = false;
+  state.conversationsError = "";
   state.datasources = [];
   state.datasourcesLoaded = false;
   state.datasourceError = "";
@@ -3166,6 +3402,7 @@ async function logout() {
   localStorage.removeItem("gaard_client_role");
   localStorage.removeItem("gaard_client_enterprise_access");
   localStorage.removeItem("gaard_client_must_change_password");
+  localStorage.removeItem("gaard_client_active_conversation_id");
   render();
 }
 function buildWidgetLabel(question) {
@@ -3247,6 +3484,7 @@ function syncConversationFromResponse(response) {
   const conversationId = response?.metadata?.conversation?.id || response?.conversation_id || response?.session_started?.conversation_id || response?.session_resumed?.conversation_id || "";
   if (conversationId) {
     state.conversationId = String(conversationId);
+    rememberActiveConversation(state.conversationId);
   }
 }
 async function submitQuestion(event) {
@@ -3284,6 +3522,7 @@ async function submitQuestion(event) {
     explanation: "",
     explanationError: "",
     explanationMetadata: {},
+    copyStatus: "idle",
     progress: [],
     progressOpen: false,
     processingStage: "Processing query..",
@@ -3323,7 +3562,7 @@ async function submitQuestion(event) {
     reportApiError(error, "Request failed.");
   } finally {
     state.pending = false;
-    render({ scrollToLatest: true });
+    render();
   }
 }
 async function readQueryStream(message, response) {
@@ -3363,14 +3602,15 @@ function handleQueryStreamLine(message, line) {
     message.processingStage = payload.stage === "waiting_on_data_server"
       ? "Waiting on data server..."
       : "Processing query..";
-    render({ scrollToLatest: true });
+    render();
   }
   if (payload?.final) {
     syncConversationFromResponse(payload.final);
     message.status = "ok";
     message.response = payload.final;
     message.processingStage = "";
-    render({ scrollToLatest: true });
+    void loadConversations({ silent: true });
+    render();
     return true;
   }
   return false;
@@ -3416,7 +3656,7 @@ async function submitAnalysisReply(event) {
     reportApiError(error, "Request failed.");
   } finally {
     state.pending = false;
-    render({ scrollToLatest: true });
+    render();
   }
 }
 async function continueAnalysis(message, reply) {
@@ -3476,7 +3716,8 @@ function handleAnalysisStreamLine(message, line) {
     message.response = payload.final;
     message.dataOpen = message.mode === "analysis" && getRows(payload.final).length > 0;
     message.userQuestion = "";
-    render({ scrollToLatest: true });
+    void loadConversations({ silent: true });
+    render();
     return true;
   }
   if (payload?.session_id && !message.analysisSessionId) {
@@ -3496,13 +3737,13 @@ function handleAnalysisStreamLine(message, line) {
         items: []
       }
     ];
-    render({ scrollToLatest: true });
+    render();
     return false;
   }
   const progress = progressFromAnalysisEvent(payload);
   if (progress) {
     message.progress = [...message.progress, progress];
-    render({ scrollToLatest: true });
+    render();
   }
   return false;
 }
@@ -3671,6 +3912,62 @@ function formatCellValue(value) {
     return JSON.stringify(value);
   }
   return String(value ?? "");
+}
+const HISTORY_BOTTOM_TOLERANCE = 12;
+function captureHistoryScroll() {
+  const history = document.querySelector(".history");
+  if (!history) return null;
+  const maxScrollTop = Math.max(0, history.scrollHeight - history.clientHeight);
+  const distanceFromBottom = maxScrollTop - history.scrollTop;
+  const anchor = findHistoryScrollAnchor(history);
+  return {
+    scrollTop: history.scrollTop,
+    distanceFromBottom,
+    atBottom: distanceFromBottom <= HISTORY_BOTTOM_TOLERANCE,
+    anchorId: anchor?.id || "",
+    anchorOffset: anchor?.offset || 0
+  };
+}
+function findHistoryScrollAnchor(history) {
+  const historyRect = history.getBoundingClientRect();
+  const messages = Array.from(history.querySelectorAll("[data-message-id]"));
+  for (const message of messages) {
+    const rect = message.getBoundingClientRect();
+    if (rect.bottom >= historyRect.top && rect.top <= historyRect.bottom) {
+      return {
+        id: message.dataset.messageId || "",
+        offset: rect.top - historyRect.top
+      };
+    }
+  }
+  return null;
+}
+function restoreHistoryScroll(snapshot, options = {}) {
+  if (options.scrollToLatest || snapshot?.atBottom) {
+    scrollToLatest();
+    return;
+  }
+  if (!snapshot) return;
+  const restore = () => {
+    const history = document.querySelector(".history");
+    if (!history) return;
+    const maxScrollTop = Math.max(0, history.scrollHeight - history.clientHeight);
+    const anchor = snapshot.anchorId
+      ? Array.from(history.querySelectorAll("[data-message-id]")).find((message) => message.dataset.messageId === snapshot.anchorId)
+      : null;
+    if (anchor) {
+      const historyRect = history.getBoundingClientRect();
+      const anchorOffset = anchor.getBoundingClientRect().top - historyRect.top;
+      history.scrollTop = Math.max(0, Math.min(maxScrollTop, history.scrollTop + anchorOffset - snapshot.anchorOffset));
+      return;
+    }
+    history.scrollTop = Math.max(0, Math.min(maxScrollTop, snapshot.scrollTop));
+  };
+  restore();
+  requestAnimationFrame(() => {
+    restore();
+    requestAnimationFrame(restore);
+  });
 }
 function scrollToLatest() {
   const scroll = () => {

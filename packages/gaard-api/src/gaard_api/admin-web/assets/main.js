@@ -664,8 +664,7 @@ function getExtensionFrameMaxHeight(frame) {
   return Math.max(1, content.clientHeight - reservedHeight);
 }
 function setExtensionFrameHeight(frame, height) {
-  const maxHeight = getExtensionFrameMaxHeight(frame)-1;
-  frame.style.height = `${Math.ceil(Math.min(height+2, maxHeight))}px`;//+2 because of border 1px
+  frame.style.height = `${Math.ceil(Math.max(height + 2, 1))}px`;
 }
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin) return;
@@ -790,6 +789,8 @@ function allowedRequestPatternsForExtension(extensionId) {
       /^POST \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/refresh$/,
       /^GET \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/jobs$/,
       /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+$/,
+      /^DELETE \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+$/,
+      /^POST \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/cancel$/,
       /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/events$/,
       /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/requests$/
     ]
@@ -1357,8 +1358,8 @@ function getDefaultOverviewWidgetGridWidth(widgetType) {
 }
 function renderOverviewWidgetResultModeOptions(selected = "data") {
   const options = [
-    { value: "data", label: "Zwr\xF3\u0107 dane" },
-    { value: "interpretation", label: "Interpretuj dane" }
+    { value: "data", label: "Return data" },
+    { value: "interpretation", label: "Interpret data" }
   ];
   return options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
 }

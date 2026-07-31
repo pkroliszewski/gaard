@@ -98,6 +98,51 @@ def test_query_creates_conversation_and_rewrites_follow_up(
         assert session.scalar(select(func.count()).select_from(ConversationTurn)) == 2
 
 
+def test_conversation_history_endpoints_return_user_threads(
+    conversation_client: TestClient,
+) -> None:
+    headers = auth_headers(conversation_client)
+
+    first = conversation_client.post(
+        "/api/v1/query",
+        headers=headers,
+        json={"question": "How many active patients are there?", "user_id": "alice"},
+    )
+    assert first.status_code == 200
+    conversation_id = first.json()["metadata"]["conversation"]["id"]
+
+    second = conversation_client.post(
+        "/api/v1/query",
+        headers=headers,
+        json={
+            "question": "and how many appointments?",
+            "user_id": "alice",
+            "conversation_id": conversation_id,
+        },
+    )
+    assert second.status_code == 200
+
+    listed = conversation_client.get("/api/v1/conversations", headers=headers)
+
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert items[0]["id"] == conversation_id
+    assert items[0]["turn_count"] == 2
+    assert items[0]["latest_question"] == "and how many appointments?"
+
+    detail = conversation_client.get(f"/api/v1/conversations/{conversation_id}", headers=headers)
+
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["item"]["id"] == conversation_id
+    assert [turn["question"] for turn in payload["turns"]] == [
+        "How many active patients are there?",
+        "and how many appointments?",
+    ]
+    assert payload["turns"][0]["answer"]
+    assert payload["turns"][0]["metadata"]["output_classification"] == "neutral_data"
+
+
 def test_query_context_mode_new_starts_new_conversation(
     conversation_client: TestClient,
 ) -> None:

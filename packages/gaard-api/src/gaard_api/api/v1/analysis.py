@@ -1236,7 +1236,7 @@ def run_analysis_loop(
 
         response = QueryResponse(
             question=request.question,
-            answer=("Nie udało mi się zakończyć analizy w skonfigurowanym limicie kroków."),
+            answer=("I couldn't complete the analysis within the configured step limit."),
             sql="",
             rows=[],
             metadata={
