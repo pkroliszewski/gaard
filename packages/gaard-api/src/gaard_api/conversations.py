@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-from numbers import Number
 from dataclasses import dataclass
+from numbers import Number
 from typing import Any
 from uuid import uuid4
-
-from sqlalchemy import desc, select
 
 from gaard_core.query_pipeline.models import (
     ConversationContextClassification,
@@ -15,9 +13,11 @@ from gaard_core.query_pipeline.models import (
     QueryRequest,
     QueryResponse,
 )
+from sqlalchemy import desc, select
 
 from gaard_api.admin.database import create_session
-from gaard_api.admin.models import Conversation, ConversationTurn
+from gaard_api.admin.models import Conversation as Conversation
+from gaard_api.admin.models import ConversationTurn
 
 CONTEXT_TURN_LIMIT = 4
 SAFE_ANSWER_CLASSIFICATIONS = {

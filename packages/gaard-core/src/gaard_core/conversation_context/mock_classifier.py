@@ -7,7 +7,6 @@ from gaard_core.query_pipeline.models import (
     QueryRequest,
 )
 
-
 FOLLOW_UP_PREFIXES = (
     "a ",
     "and ",

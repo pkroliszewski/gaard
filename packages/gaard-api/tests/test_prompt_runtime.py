@@ -139,7 +139,7 @@ def test_metadata_answer_explanation_prompt_compiler_serializes_context() -> Non
             "answer": "Przyjęto 12 pacjentów.",
             "result": {
                 "columns": ["patient_count"],
-                "rows": [{"patient_count": Decimal("12")}],
+                "rows": [{"patient_count": Decimal(12)}],
             },
             "metadata": {"sql_generation_mode": "llm"},
             "inference_metadata": {"intent_decision": "read_only_data_question"},

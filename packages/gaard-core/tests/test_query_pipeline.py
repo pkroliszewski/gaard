@@ -1,7 +1,12 @@
 import pytest
 
 from gaard_core.errors import LlmProviderError, QueryPipelineStepError
-from gaard_core.query_pipeline.models import GeneratedSql, QueryRequest, QueryResult
+from gaard_core.query_pipeline.models import (
+    GeneratedSql,
+    OutputClassification,
+    QueryRequest,
+    QueryResult,
+)
 from gaard_core.query_pipeline.pipeline import QueryPipeline
 
 
@@ -46,7 +51,7 @@ class FailingInterpreter:
 
 
 class FailingClassifier:
-    def classify(self, request: QueryRequest, answer: str):
+    def classify(self, request: QueryRequest, answer: str) -> OutputClassification:
         raise AssertionError("classifier should not be called")
 
 

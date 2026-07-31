@@ -1,13 +1,14 @@
 from typing import Any, Protocol
 
+from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
+
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.prompt_compiler.models import CompiledPrompt
 from gaard_core.prompt_compiler.result_interpretation_prompt import (
     ResultInterpretationPromptCompiler,
 )
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
-from gaard_llm.openai_compatible.client import OpenAICompatibleClient
-from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 
 
 class ResultPromptCompiler(Protocol):

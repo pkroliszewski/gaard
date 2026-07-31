@@ -15,7 +15,6 @@ from gaard_api.admin.services import (
     selected_schema_from_cache,
 )
 
-
 SessionFactory = Callable[[], Session]
 
 

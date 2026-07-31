@@ -2,17 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import AdminSession, AdminUser
 from gaard_api.admin.security import hash_token
-from gaard_api.license import license_service
-
+from gaard_api.license import license_service as license_service
 
 SESSION_ACTIVITY_WRITE_INTERVAL = timedelta(minutes=5)
 
@@ -23,54 +23,9 @@ class AuthenticatedSession:
     user: AdminUser
 
 
-def identity_id_for_principal(principal: object | None) -> str | None:
-    if principal is None:
-        return None
-
-    principal_session = getattr(principal, "session", None)
-    principal_user = getattr(principal, "user", None)
-    auth_provider = str(
-        getattr(principal_session, "auth_provider", "")
-        or getattr(principal_user, "auth_provider", "")
-        or ""
-    )
-    username = str(
-        getattr(principal_session, "username", "")
-        or getattr(principal_user, "username", "")
-        or ""
-    )
-
-    if auth_provider == "local":
-        user_id = getattr(principal_user, "id", None)
-        if user_id is not None:
-            return f"local:{user_id}"
-
-    if auth_provider and username:
-        return f"{auth_provider}:{username}"
-    return None
-
-
-def identity_ids_for_principal(principal: object | None) -> list[str]:
-    primary = identity_id_for_principal(principal)
-    ids = [primary] if primary is not None else []
-
-    principal_session = getattr(principal, "session", None)
-    principal_user = getattr(principal, "user", None)
-    auth_provider = str(
-        getattr(principal_session, "auth_provider", "")
-        or getattr(principal_user, "auth_provider", "")
-        or ""
-    )
-    username = str(
-        getattr(principal_session, "username", "")
-        or getattr(principal_user, "username", "")
-        or ""
-    )
-    legacy_username_id = f"{auth_provider}:{username}" if auth_provider and username else ""
-    if legacy_username_id and legacy_username_id not in ids:
-        ids.append(legacy_username_id)
-
-    return ids
+def identity_id_for_principal(principal: AuthenticatedSession) -> str:
+    """Return the persisted GAARD user id for an authenticated principal."""
+    return str(principal.user.id)
 
 
 def get_authorization_token(authorization: str | None) -> str:
@@ -90,7 +45,7 @@ def get_authorization_token(authorization: str | None) -> str:
 
     return token
 
-
+#w admin.py zdublowana ale w starej wersji 
 def get_current_authenticated_session(
     authorization: Annotated[str | None, Header()] = None,
     session: Session = Depends(get_session),
@@ -130,7 +85,7 @@ def get_current_authenticated_session(
         .values(last_seen=datetime.now(UTC))
         .execution_options(synchronize_session=False)
     )
-    if result.rowcount:
+    if cast(CursorResult[Any], result).rowcount:
         session.commit()
     else:
         # End the read transaction before the endpoint opens another metadata
@@ -138,10 +93,12 @@ def get_current_authenticated_session(
         # commit; the activity row itself remains untouched.
         session.commit()
 
+    ensure_user_license_access(user)
 
     return AuthenticatedSession(session=admin_session, user=user)
 
 
+#wersja z auth_dependencies.py
 def get_current_api_user(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AuthenticatedSession:
@@ -193,3 +150,30 @@ def get_current_admin(
         )
 
     return user
+
+def get_current_enterprise_admin(
+    user: AdminUser = Depends(get_current_admin),
+) -> AdminUser:
+    """Require an administrator with an assigned Enterprise user license."""
+    if not user.enterprise_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An assigned Enterprise user license is required.",
+        )
+    return user
+    
+    
+def has_enterprise_user_access(principal: AuthenticatedSession) -> bool:
+    return bool(principal.user.enterprise_access)
+
+def ensure_user_license_access(user: AdminUser) -> None:
+    """Keep non-system accounts active only while global Enterprise is active."""
+    if user.is_system_admin:
+        return
+    state = license_service.refresh_if_due()
+    if state.features.get("identity_management"):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This account does not have an active Enterprise user license.",
+    )

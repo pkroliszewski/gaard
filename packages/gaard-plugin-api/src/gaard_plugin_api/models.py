@@ -7,7 +7,6 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
-
 EXTENSION_API_VERSION = "1"
 _EXTENSION_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 

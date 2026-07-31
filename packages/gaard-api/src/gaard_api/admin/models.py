@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from gaard_core.query_pipeline.models import OutputClassification
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum as SAEnum,
     Float,
     ForeignKey,
     Integer,
@@ -12,9 +12,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-from gaard_core.query_pipeline.models import OutputClassification
 
 
 def utc_now() -> datetime:
@@ -23,6 +24,15 @@ def utc_now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class DatabaseMigrationTag(Base):
+    """A durable marker for one successfully applied database migration."""
+
+    __tablename__ = "database_migration_tags"
+
+    tag: Mapped[str] = mapped_column(String(255), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class AdminUser(Base):

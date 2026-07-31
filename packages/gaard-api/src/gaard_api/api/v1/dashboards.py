@@ -16,8 +16,8 @@ from gaard_api.admin.models import (
     OverviewWidgetTag,
     UserSavedMetric,
 )
-from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 from gaard_api.api.v1.admin import execute_overview_widget, serialize_overview_widget_config
+from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 
 router = APIRouter()
 

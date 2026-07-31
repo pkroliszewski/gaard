@@ -1,10 +1,9 @@
 from typing import Literal
 
+from gaard_core.schema.models import ColumnInfo, DatabaseSchema, ForeignKeyInfo, TableInfo
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.reflection import Inspector
-
-from gaard_core.schema.models import ColumnInfo, DatabaseSchema, ForeignKeyInfo, TableInfo
 
 
 class SQLAlchemySchemaIntrospector:

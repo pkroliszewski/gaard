@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ssl
+from typing import Any
 
 import httpx2 as httpx
 import pytest
@@ -9,12 +10,12 @@ from gaard_api.tls_http import request_with_certifi_fallback
 
 
 def test_https_connect_error_retries_with_certifi_context() -> None:
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
-    def fake_request(url: str, **kwargs):
+    def fake_request(url: str, **kwargs: Any) -> httpx.Response:
         calls.append(kwargs)
         if len(calls) == 1:
-            raise httpx.ConnectError(("certificate is not trusted",))
+            raise httpx.ConnectError("certificate is not trusted")
         return httpx.Response(200, json={"ok": True})
 
     response = request_with_certifi_fallback(
@@ -32,10 +33,10 @@ def test_https_connect_error_retries_with_certifi_context() -> None:
 def test_connect_error_does_not_retry_when_verify_is_explicit() -> None:
     calls = 0
 
-    def fake_request(url: str, **kwargs):
+    def fake_request(url: str, **kwargs: Any) -> httpx.Response:
         nonlocal calls
         calls += 1
-        raise httpx.ConnectError(("certificate is not trusted",))
+        raise httpx.ConnectError("certificate is not trusted")
 
     context = ssl.create_default_context()
     with pytest.raises(httpx.ConnectError):
@@ -54,10 +55,10 @@ def test_connect_error_does_not_retry_when_ssl_cert_file_is_configured(
 ) -> None:
     calls = 0
 
-    def fake_request(url: str, **kwargs):
+    def fake_request(url: str, **kwargs: Any) -> httpx.Response:
         nonlocal calls
         calls += 1
-        raise httpx.ConnectError(("certificate is not trusted",))
+        raise httpx.ConnectError("certificate is not trusted")
 
     monkeypatch.setenv("SSL_CERT_FILE", "/custom/ca.pem")
     with pytest.raises(httpx.ConnectError):

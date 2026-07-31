@@ -1,10 +1,14 @@
+from typing import cast
+
+from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+
 from gaard_core.conversation_context.llm_classifier import (
     LlmConversationContextClassifier,
     parse_conversation_context_classification,
 )
 from gaard_core.conversation_context.mock_classifier import MockConversationContextClassifier
 from gaard_core.query_pipeline.models import ConversationContextDecision, QueryRequest
-from gaard_llm.providers.models import ChatCompletionResponse
 
 
 def test_parse_conversation_context_classification_handles_aliases_and_invalid_values() -> None:
@@ -32,9 +36,9 @@ def test_parse_conversation_context_classification_handles_aliases_and_invalid_v
 def test_llm_conversation_context_classifier_exposes_prompt_and_standalone_follow_up() -> None:
     class FakeClient:
         def __init__(self) -> None:
-            self.request = None
+            self.request: ChatCompletionRequest | None = None
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.request = request
             return ChatCompletionResponse(
                 content=(
@@ -46,7 +50,7 @@ def test_llm_conversation_context_classifier_exposes_prompt_and_standalone_follo
 
     client = FakeClient()
     classifier = LlmConversationContextClassifier(
-        client=client,
+        client=cast(OpenAICompatibleClient, client),
         model="test-model",
     )
 

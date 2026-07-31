@@ -18,7 +18,6 @@ from gaard_plugin_api.models import (
     ExtensionStatus,
 )
 
-
 EXTENSION_ENTRY_POINT_GROUP = "gaard.extensions"
 
 

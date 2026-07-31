@@ -1,15 +1,17 @@
+from typing import Any
+
 import httpx2 as httpx
 import pytest
-
 from gaard_core.errors import LlmProviderError
+
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 
 
-def test_openai_compatible_client_parses_response(monkeypatch) -> None:
-    captured_kwargs = {}
+def test_openai_compatible_client_parses_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_kwargs: dict[str, Any] = {}
 
-    def fake_post(*args, **kwargs):
+    def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
         captured_kwargs.update(kwargs)
         request = httpx.Request(
             method="POST",
@@ -53,10 +55,10 @@ def test_openai_compatible_client_parses_response(monkeypatch) -> None:
     assert "chat_template_kwargs" not in captured_kwargs["json"]
 
 
-def test_openai_compatible_client_merges_extra_body(monkeypatch) -> None:
-    captured_kwargs = {}
+def test_openai_compatible_client_merges_extra_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_kwargs: dict[str, Any] = {}
 
-    def fake_post(*args, **kwargs):
+    def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
         captured_kwargs.update(kwargs)
         request = httpx.Request(
             method="POST",
@@ -103,8 +105,8 @@ def test_openai_compatible_client_merges_extra_body(monkeypatch) -> None:
     assert captured_kwargs["json"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_openai_compatible_client_wraps_invalid_response(monkeypatch) -> None:
-    def fake_post(*args, **kwargs):
+def test_openai_compatible_client_wraps_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
         request = httpx.Request(
             method="POST",
             url="https://example.com/v1/chat/completions",
@@ -137,8 +139,8 @@ def test_openai_compatible_client_wraps_invalid_response(monkeypatch) -> None:
         )
 
 
-def test_openai_compatible_client_includes_provider_error_body(monkeypatch) -> None:
-    def fake_post(*args, **kwargs):
+def test_openai_compatible_client_includes_provider_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
         request = httpx.Request(
             method="POST",
             url="https://example.com/v1/chat/completions",
@@ -177,8 +179,8 @@ def test_openai_compatible_client_includes_provider_error_body(monkeypatch) -> N
     assert "Unrecognized request argument supplied." in str(exc_info.value)
 
 
-def test_openai_compatible_client_lists_models(monkeypatch) -> None:
-    def fake_get(*args, **kwargs):
+def test_openai_compatible_client_lists_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_get(*args: Any, **kwargs: Any) -> httpx.Response:
         assert args[0] == "https://example.com/v1/models"
         assert kwargs["headers"]["Authorization"] == "Bearer test-key"
         request = httpx.Request(method="GET", url=args[0])

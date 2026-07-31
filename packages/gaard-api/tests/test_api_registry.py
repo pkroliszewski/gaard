@@ -1,8 +1,8 @@
 from pathlib import Path
 
+import pytest
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.testclient import TestClient
-import pytest
 
 from gaard_api.api_registry import ApiRegistry
 from gaard_api.core.error_handlers import register_error_handlers

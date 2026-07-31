@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-api"
-version = "0.2.8"
+version = "0.2.9"
 description = "GAARD backend web services providing admin interface"
 readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = [
-    "gaard-core==0.2.8",
-    "gaard-connectors==0.2.8",
-    "gaard-llm==0.2.8",
-    "gaard-plugin-api>=0.2.8,<0.3.0",
+    "gaard-core==0.2.9",
+    "gaard-connectors==0.2.9",
+    "gaard-llm==0.2.9",
+    "gaard-plugin-api>=0.2.9,<0.3.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.7.0",
@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 oracle = ["oracledb>=2.0.0"]
 mssql = ["pyodbc>=5.0.0"]
+odbc = ["pyodbc>=5.0.0"]
 ibm_db2 = ["ibm-db-sa>=0.4.4"]
 teradata = ["teradatasqlalchemy>=20.0.0.9"]
 all-datasources = [
@@ -65,6 +66,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 gaard_api = [
     "admin-web/**/*",
+    "admin/*.sql",
     "example_data/medical_poc/*.sql",
 ]
 
@@ -78,6 +80,9 @@ gaard_api = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.param_functions.Depends", "fastapi.param_functions.File", "fastapi.params.Depends", "fastapi.params.File"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

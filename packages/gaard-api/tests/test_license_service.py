@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-import logging
-import threading
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx2 as httpx
 import pytest
 from sqlalchemy import select
 
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
-from gaard_api.admin.models import AdminUser
+from gaard_api.admin.models import AdminUser, DatasourceConnector
 from gaard_api.core.settings import settings
 from gaard_api.license import (
     LicenseAccessError,
@@ -20,13 +22,14 @@ from gaard_api.license import (
     license_service,
 )
 
-
 LICENSE_KEY = "gaard_live_abc123456789"
 ENV_LICENSE_KEY = "gaard_live_env_enterprise"
 
 
 @pytest.fixture()
-def isolated_license_service(tmp_path, monkeypatch) -> Iterator[LicenseService]:
+def isolated_license_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[LicenseService]:
     monkeypatch.setattr(
         settings,
         "gaard_metadata_database_url",
@@ -45,7 +48,7 @@ def isolated_license_service(tmp_path, monkeypatch) -> Iterator[LicenseService]:
     reset_metadata_store_for_tests()
 
 
-def valid_payload(plan: str) -> dict:
+def valid_payload(plan: str) -> dict[str, Any]:
     return {
         "valid": True,
         "status": "active",
@@ -59,7 +62,7 @@ def valid_payload(plan: str) -> dict:
     }
 
 
-def invalid_payload(status: str) -> dict:
+def invalid_payload(status: str) -> dict[str, Any]:
     return {
         "valid": False,
         "status": status,
@@ -78,7 +81,7 @@ def invalid_payload(status: str) -> dict:
     }
 
 
-def response(payload: dict, status_code: int = 200) -> httpx.Response:
+def response(payload: dict[str, Any], status_code: int = 200) -> httpx.Response:
     return httpx.Response(status_code, json=payload)
 
 
@@ -102,10 +105,10 @@ def test_active_data_analyst_license_enables_data_analyst_entitlements(
     isolated_license_service: LicenseService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    requests: list[dict] = []
+    requests: list[dict[str, Any]] = []
     monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         requests.append(json)
         return response(valid_payload("data_analyst"))
 
@@ -219,10 +222,14 @@ def test_license_refresh_revokes_newest_excess_enterprise_users_and_preserves_ad
     isolated_license_service.refresh(force=True)
 
     with create_session() as session:
-        assert session.get(AdminUser, default_admin_id).enterprise_access is True
-        assert session.get(AdminUser, older_user_id).enterprise_access is True
-        assert session.get(AdminUser, newer_user_id).enterprise_access is False
-        assert session.get(AdminUser, newest_user_id).enterprise_access is False
+        loaded_default_admin = session.get(AdminUser, default_admin_id)
+        loaded_older_user = session.get(AdminUser, older_user_id)
+        loaded_newer_user = session.get(AdminUser, newer_user_id)
+        loaded_newest_user = session.get(AdminUser, newest_user_id)
+        assert loaded_default_admin is not None and loaded_default_admin.enterprise_access is True
+        assert loaded_older_user is not None and loaded_older_user.enterprise_access is True
+        assert loaded_newer_user is not None and loaded_newer_user.enterprise_access is False
+        assert loaded_newest_user is not None and loaded_newest_user.enterprise_access is False
 
 
 def test_unassigned_enterprise_user_is_limited_to_community_query_features(
@@ -236,12 +243,12 @@ def test_unassigned_enterprise_user_is_limited_to_community_query_features(
     isolated_license_service.refresh(force=True)
 
     isolated_license_service.ensure_datasource_contexts_allowed(
-        [(SimpleNamespace(database_type="sqlite"), None)],
+        [(cast(DatasourceConnector, SimpleNamespace(database_type="sqlite")), None)],
         enterprise_access=False,
     )
     with pytest.raises(LicenseAccessError, match="assigned Enterprise user license"):
         isolated_license_service.ensure_datasource_contexts_allowed(
-            [(SimpleNamespace(database_type="duckdb-excel"), None)],
+            [(cast(DatasourceConnector, SimpleNamespace(database_type="duckdb-excel")), None)],
             enterprise_access=False,
         )
 
@@ -252,7 +259,7 @@ def test_env_license_key_takes_precedence_over_admin_ui_key(
 ) -> None:
     requests: list[str] = []
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         requests.append(json["license_key"])
         if json["license_key"] == ENV_LICENSE_KEY:
             return response(valid_payload("enterprise"))
@@ -320,7 +327,7 @@ def test_network_error_uses_valid_cache_within_offline_grace(
     )
     assert isolated_license_service.refresh(force=True).plan == "data_analyst"
 
-    def failing_post(url, json, timeout):
+    def failing_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         raise httpx.ConnectError("offline")
 
     isolated_license_service.set_http_post_for_tests(failing_post)
@@ -348,7 +355,7 @@ def test_network_error_after_offline_grace_downgrades(
         lambda: start + timedelta(days=8, seconds=1),
     )
 
-    def failing_post(url, json, timeout):
+    def failing_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         raise httpx.ConnectError("offline")
 
     isolated_license_service.set_http_post_for_tests(failing_post)
@@ -368,7 +375,7 @@ def test_transient_http_errors_back_off_without_spamming_license_server(
     calls = 0
     monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         nonlocal calls
         calls += 1
         return httpx.Response(status_code, json={"error": "temporary"})
@@ -408,7 +415,7 @@ def test_parallel_refreshes_do_not_start_multiple_online_validations(
     release = threading.Event()
     monkeypatch.setattr(settings, "gaard_license_key", LICENSE_KEY)
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> httpx.Response:
         nonlocal calls
         calls += 1
         entered.set()

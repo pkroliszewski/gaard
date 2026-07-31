@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from functools import lru_cache
 import os
 import ssl
-from typing import Any
+from functools import lru_cache
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import certifi
@@ -20,12 +20,12 @@ def get(url: str, **kwargs: Any) -> httpx.Response:
 
 def request_with_certifi_fallback(request: Any, url: str, **kwargs: Any) -> httpx.Response:
     try:
-        return request(url, **kwargs)
+        return cast(httpx.Response, request(url, **kwargs))
     except httpx.ConnectError as exc:
         if not should_retry_with_certifi(url, kwargs):
             raise
         try:
-            return request(url, **{**kwargs, "verify": certifi_ssl_context()})
+            return cast(httpx.Response, request(url, **{**kwargs, "verify": certifi_ssl_context()}))
         except httpx.HTTPError as fallback_exc:
             raise fallback_exc from exc
 

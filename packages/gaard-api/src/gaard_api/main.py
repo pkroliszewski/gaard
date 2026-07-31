@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.resources import as_file, files
 from pathlib import Path
@@ -6,21 +7,27 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from gaard_api.admin.database import (
+    clear_expired_admin_sessions,
+    create_session,
+    init_metadata_store,
+)
+from gaard_api.admin.models import AdminUser
+from gaard_api.api.v1.admin import router as admin_router
 from gaard_api.api.v1.analysis import router as analysis_router
-from gaard_api.api.v1.admin import get_current_admin, router as admin_router
 from gaard_api.api.v1.dashboards import router as dashboards_router
 from gaard_api.api.v1.prompts import router as prompts_router
 from gaard_api.api.v1.query import router as query_router
 from gaard_api.api.v1.schema import router as schema_router
-from gaard_api.admin.database import clear_expired_admin_sessions, create_session
-from gaard_api.admin.models import AdminUser
+from gaard_api.auth_dependencies import get_current_admin
 from gaard_api.core.error_handlers import register_error_handlers
 from gaard_api.extensions import get_api_registry
 from gaard_api.license import license_service
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_metadata_store()
     license_service.start()
     try:
         with create_session() as session:
@@ -33,7 +40,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GAARD API",
-    version="0.2.8",
+    version="0.2.9",
     description="Self-hosted AI SQL Gateway for governed natural-language access to relational data.",
     lifespan=lifespan,
 )

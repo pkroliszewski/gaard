@@ -1,3 +1,8 @@
+### v0.2.9 - Package metadata and private bundle release
+- Bumped all public packages, private extensions, package manifests, and local GAARD package references to `0.2.9`.
+- Moved private package bundle membership into each extension's `pyproject.toml` under `[tool.gaard.package]`.
+- Removed hardcoded private package inventory from the runtime package updater so installed packages are driven by downloaded bundle manifests.
+
 ### v0.2.8 - Identity privileges and client datasource access
 - Fixed identity-privileges datasource filtering for built-in users so admin-granted datasource access is visible in the client and query execution uses the same identity key.
 - Bumped all public packages and local public package references to `0.2.8` for the next PyPI release.

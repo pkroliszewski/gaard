@@ -1,15 +1,16 @@
-from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
 import io
 import json
-from pathlib import Path
 import sqlite3
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, ClassVar, cast
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select, text
-
+from gaard_connectors import create_builtin_connector_registry
+from gaard_connectors.odbc.connection_string import parse_odbc_connection_string
 from gaard_core.errors import LlmProviderError, QueryPipelineStepError
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
 from gaard_core.query_pipeline.models import (
@@ -19,25 +20,25 @@ from gaard_core.query_pipeline.models import (
     QueryIntentDecision,
     QueryRequest,
 )
-from gaard_llm.providers.models import ChatCompletionResponse
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+from sqlalchemy import select, text
+from sqlalchemy.engine import make_url
 
 from gaard_api.admin.database import (
     clear_expired_admin_sessions,
     create_session,
-    ensure_admin_session_schema,
-    ensure_admin_user_schema,
     reset_metadata_store_for_tests,
     seed_prompts,
 )
 from gaard_api.admin.models import (
-    AdminSetting,
     AdminSession,
+    AdminSetting,
     AdminUser,
     BusinessKnowledgeClaim,
     BusinessLogicSuggestion,
     Dashboard,
-    DashboardWidget,
     DashboardUserState,
+    DashboardWidget,
     DataQueryAuditLog,
     DataQueryAuditType,
     DatasourceConnector,
@@ -58,18 +59,18 @@ from gaard_api.admin.services import (
     record_candidate_business_knowledge,
     set_setting,
 )
+from gaard_api.auth_dependencies import AuthenticatedSession, identity_id_for_principal
 from gaard_api.core.settings import settings
 from gaard_api.example_database import (
     MEDICAL_POC_DASHBOARD_ID,
     install_medical_poc_example_database,
 )
 from gaard_api.main import app
-from gaard_api.query_hooks import QueryHookRegistry, principal_identity_id
-from gaard_connectors import create_builtin_connector_registry
+from gaard_api.query_hooks import QueryHookRegistry
 
 
 @pytest.fixture()
-def admin_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
+def admin_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     demo_db = tmp_path / "demo.db"
 
     monkeypatch.setattr(
@@ -90,7 +91,7 @@ def admin_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
     reset_metadata_store_for_tests()
 
 
-def login(client: TestClient) -> dict:
+def login(client: TestClient) -> dict[str, Any]:
     response = client.post(
         "/api/v1/admin/auth/login",
         json={
@@ -100,7 +101,7 @@ def login(client: TestClient) -> dict:
     )
 
     assert response.status_code == 200
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def change_password(client: TestClient, token: str) -> None:
@@ -159,29 +160,9 @@ def test_authenticated_request_updates_last_seen_without_writing_every_request(
         assert second_seen == first_seen
 
 
-def test_session_schema_backfills_last_seen_and_startup_cleanup_removes_stale_sessions(
-    tmp_path: Path,
+def test_startup_cleanup_removes_stale_sessions(
     admin_client: TestClient,
 ) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-sessions.db'}")
-    with engine.begin() as connection:
-        connection.execute(text("""
-            CREATE TABLE admin_sessions (
-                id INTEGER NOT NULL PRIMARY KEY,
-                token_hash VARCHAR(128) NOT NULL,
-                user_id INTEGER NOT NULL,
-                created_at DATETIME NOT NULL
-            )
-        """))
-        connection.execute(text("""
-            INSERT INTO admin_sessions (id, token_hash, user_id, created_at)
-            VALUES (1, 'legacy', 1, CURRENT_TIMESTAMP)
-        """))
-    ensure_admin_session_schema(engine)
-    with engine.connect() as connection:
-        assert connection.execute(text("SELECT last_seen FROM admin_sessions WHERE id = 1")).scalar() is not None
-
-    # Exercise the cleanup independently of the app lifespan.
     with create_session() as session:
         user = session.scalar(select(AdminUser).where(AdminUser.username == "admin"))
         assert user is not None
@@ -189,7 +170,7 @@ def test_session_schema_backfills_last_seen_and_startup_cleanup_removes_stale_se
             token_hash="stale", user_id=user.id, last_seen=datetime.now(UTC) - timedelta(days=31)
         ))
         session.commit()
-        assert clear_expired_admin_sessions(session) >= 1
+        clear_expired_admin_sessions(session)
         session.commit()
         assert session.scalar(select(AdminSession).where(AdminSession.token_hash == "stale")) is None
 
@@ -226,12 +207,12 @@ def test_identity_sessions_can_be_cleared_without_revoking_the_requesting_sessio
 
 def test_login_does_not_query_extension_auth_without_identity_license(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
 
     class ExplodingAuthRegistry:
-        def authenticate(self, *args, **kwargs):
+        def authenticate(self, *args: Any, **kwargs: Any) -> None:
             raise AssertionError("extension auth provider should not be queried")
 
     monkeypatch.setattr(
@@ -312,7 +293,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     admin_headers = auth_headers(admin_client)
     identities = admin_client.get("/api/v1/admin/identities", headers=admin_headers)
     assert identities.json()["can_manage_identities"] is True
-    item = next(identity for identity in identities.json()["items"] if identity["id"] == f"local:{analyst_id}")
+    item = next(identity for identity in identities.json()["items"] if identity["id"] == str(analyst_id))
     assert item["enterprise_access"] is False
     assert item["enterprise_access_editable"] is True
 
@@ -320,7 +301,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     assert login_as(admin_client, "analyst", "analyst-password")
 
     response = admin_client.patch(
-        f"/api/v1/admin/identities/local:{analyst_id}/enterprise-access",
+        f"/api/v1/admin/identities/{analyst_id}/enterprise-access",
         headers=admin_headers,
         json={"enterprise_access": True},
     )
@@ -332,7 +313,7 @@ def test_admin_assigns_enterprise_access_and_unlicensed_users_are_blocked(
     refreshed_item = next(
         identity
         for identity in refreshed_identities.json()["items"]
-        if identity["id"] == f"local:{analyst_id}"
+        if identity["id"] == str(analyst_id)
     )
     assert refreshed_item["enterprise_access"] is True
 
@@ -360,7 +341,7 @@ def test_admin_enterprise_access_is_not_editable(
     admin_headers = auth_headers(admin_client)
 
     response = admin_client.patch(
-        "/api/v1/admin/identities/local:1/enterprise-access",
+        "/api/v1/admin/identities/1/enterprise-access",
         headers=admin_headers,
         json={"enterprise_access": False},
     )
@@ -394,7 +375,7 @@ def test_additional_administrator_enterprise_access_is_assigned_like_a_user(
         additional_admin_id = additional_admin.id
 
     response = admin_client.patch(
-        f"/api/v1/admin/identities/local:{additional_admin_id}/enterprise-access",
+        f"/api/v1/admin/identities/{additional_admin_id}/enterprise-access",
         headers=admin_headers,
         json={"enterprise_access": True},
     )
@@ -430,7 +411,7 @@ def test_additional_administrator_cannot_clear_system_administrator_sessions(
 
     second_admin_headers = login_as(admin_client, "second-admin", "second-admin-password")
     response = admin_client.delete(
-        f"/api/v1/admin/identities/local:{system_admin.id}/sessions",
+        f"/api/v1/admin/identities/{system_admin.id}/sessions",
         headers=second_admin_headers,
     )
 
@@ -457,80 +438,6 @@ def test_core_does_not_expose_built_in_identity_management(
     )
 
     assert response.status_code == 405
-
-
-def test_admin_user_schema_migrates_provider_prefixed_usernames(tmp_path: Path) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
-    with engine.begin() as connection:
-        connection.execute(text("""
-            CREATE TABLE admin_users (
-                id INTEGER NOT NULL PRIMARY KEY,
-                username VARCHAR(255) NOT NULL UNIQUE,
-                display_name VARCHAR(255) NOT NULL DEFAULT '',
-                auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
-                password_hash TEXT NOT NULL,
-                must_change_password BOOLEAN NOT NULL,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-        """))
-        connection.execute(text("""
-            INSERT INTO admin_users
-                (id, username, display_name, auth_provider, password_hash, must_change_password, created_at, updated_at)
-            VALUES
-                (1, 'ldap:ada', '', 'local', 'external$disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                (2, 'ada', '', 'local', 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                (3, 'ldap:grace', '', 'ldap', 'external$disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """))
-
-    ensure_admin_user_schema(engine)
-
-    with engine.connect() as connection:
-        users = connection.execute(text(
-            "SELECT username, auth_provider FROM admin_users ORDER BY id"
-        )).all()
-    assert users == [("ada", "ldap"), ("ada", "local"), ("grace", "ldap")]
-    assert any(
-        constraint["column_names"] == ["auth_provider", "username"]
-        for constraint in inspect(engine).get_unique_constraints("admin_users")
-    )
-
-
-def test_admin_user_schema_marks_existing_first_local_administrator_as_system_admin(
-    tmp_path: Path,
-) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-metadata.db'}")
-    with engine.begin() as connection:
-        connection.execute(text("""
-            CREATE TABLE admin_users (
-                id INTEGER NOT NULL PRIMARY KEY,
-                username VARCHAR(255) NOT NULL,
-                display_name VARCHAR(255) NOT NULL DEFAULT '',
-                auth_provider VARCHAR(255) NOT NULL DEFAULT 'local',
-                role VARCHAR(50) NOT NULL DEFAULT 'admin',
-                enterprise_access BOOLEAN NOT NULL DEFAULT 0,
-                password_hash TEXT NOT NULL,
-                must_change_password BOOLEAN NOT NULL,
-                is_provisioned BOOLEAN NOT NULL DEFAULT 0,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-        """))
-        connection.execute(text("""
-            INSERT INTO admin_users
-                (id, username, auth_provider, role, enterprise_access, password_hash, must_change_password, created_at, updated_at)
-            VALUES
-                (1, 'admin', 'local', 'admin', 1, 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                (2, 'another-admin', 'local', 'admin', 1, 'hash', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """))
-
-    ensure_admin_user_schema(engine)
-
-    with engine.connect() as connection:
-        users = connection.execute(text(
-            "SELECT username, is_system_admin FROM admin_users ORDER BY id"
-        )).all()
-    assert users == [("admin", 1), ("another-admin", 0)]
 
 
 def auth_headers(client: TestClient) -> dict[str, str]:
@@ -614,14 +521,25 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
                 database_type="duckdb-excel",
                 database_url="duckdb-excel:///restricted.xlsx",
                 sql_dialect="duckdb",
-                active=False,
+                active=True,
+                updated_by="admin",
+            )
+        )
+        session.add(
+            DatasourceConnector(
+                connector_key="restricted-sql-source",
+                name="Restricted SQL source",
+                database_type="sqlite",
+                database_url="sqlite:///:memory:",
+                sql_dialect="sqlite",
+                active=True,
                 updated_by="admin",
             )
         )
         session.commit()
 
     identities = admin_client.patch(
-        "/api/v1/admin/identities/local:1/enterprise-access",
+        "/api/v1/admin/identities/1/enterprise-access",
         headers=headers,
         json={"enterprise_access": False},
     )
@@ -629,10 +547,25 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
     identity_list = admin_client.get("/api/v1/admin/identities", headers=headers)
     datasources = admin_client.get("/api/v1/admin/datasources", headers=headers)
     excel = next(item for item in datasources.json()["items"] if item["connector_key"] == "excel-source")
+    sql_source = next(
+        item
+        for item in datasources.json()["items"]
+        if item["connector_key"] == "restricted-sql-source"
+    )
     excel_mutation = admin_client.post(
         f"/api/v1/admin/datasources/{excel['id']}/state",
         headers=headers,
         json={"active": True},
+    )
+    excel_deactivation = admin_client.post(
+        f"/api/v1/admin/datasources/{excel['id']}/state",
+        headers=headers,
+        json={"active": False},
+    )
+    sql_deactivation = admin_client.post(
+        f"/api/v1/admin/datasources/{sql_source['id']}/state",
+        headers=headers,
+        json={"active": False},
     )
 
     assert identities.status_code == 403
@@ -641,6 +574,10 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
     assert extensions.json()["admin_frontend_modules"] == []
     assert excel["enterprise_access_required"] is True
     assert excel_mutation.status_code == 403
+    assert excel_deactivation.status_code == 200
+    assert excel_deactivation.json()["item"]["active"] is False
+    assert sql_deactivation.status_code == 200
+    assert sql_deactivation.json()["item"]["active"] is False
 
 
 def test_unlicensed_admin_cannot_generate_widget_sql_for_excel_datasource(
@@ -1197,7 +1134,9 @@ def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
         query_config = get_query_runtime_config(session)
         assert query_config.sql_generation_mode == "llm"
         assert query_config.result_interpretation_mode == "llm"
-        assert session.get(AdminSetting, "gaard_sql_generation_mode").updated_by == "system"
+        sql_generation_mode = session.get(AdminSetting, "gaard_sql_generation_mode")
+        assert sql_generation_mode is not None
+        assert sql_generation_mode.updated_by == "system"
 
     reset_metadata_store_for_tests()
 
@@ -1308,7 +1247,9 @@ def test_candidate_business_knowledge_can_be_recorded(
     reset_metadata_store_for_tests()
 
 
-def stub_business_logic_learning_llm(monkeypatch, payload: dict) -> type:
+def stub_business_logic_learning_llm(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> Any:
     monkeypatch.setattr(settings, "gaard_llm_api_key", "test-key")
     monkeypatch.setattr(settings, "gaard_llm_model", "lesson-model")
     with create_session() as session:
@@ -1317,12 +1258,12 @@ def stub_business_logic_learning_llm(monkeypatch, payload: dict) -> type:
         session.commit()
 
     class FakeOpenAICompatibleClient:
-        requests = []
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(content=json.dumps(payload))
 
@@ -1534,19 +1475,19 @@ def test_llm_config_defaults_to_metadata_and_can_be_overridden(
 
 def test_llm_config_can_be_tested_without_saving(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
-        requests = []
+        init_kwargs: dict[str, Any] | None = None
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(content="OK", model=request.model)
 
@@ -1587,17 +1528,19 @@ def test_llm_config_can_be_tested_without_saving(
     assert runtime_config.model == "gpt-4.1-mini"
 
 
-def test_llm_models_are_listed_without_saving(admin_client: TestClient, monkeypatch) -> None:
+def test_llm_models_are_listed_without_saving(
+    admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
+        init_kwargs: dict[str, Any] | None = None
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def list_models(self):
+        def list_models(self) -> list[str]:
             return ["model-a", "model-b"]
 
     monkeypatch.setattr(
@@ -1626,16 +1569,16 @@ def test_llm_models_are_listed_without_saving(admin_client: TestClient, monkeypa
 
 
 def test_llm_models_can_fail_without_blocking_manual_model_entry(
-    admin_client: TestClient, monkeypatch
+    admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
     class FailingOpenAICompatibleClient:
-        def __init__(self, **_kwargs) -> None:
+        def __init__(self, **_kwargs: Any) -> None:
             pass
 
-        def list_models(self):
+        def list_models(self) -> list[str]:
             raise LlmProviderError("Connection refused")
 
     monkeypatch.setattr(
@@ -1660,7 +1603,7 @@ def test_llm_models_can_fail_without_blocking_manual_model_entry(
 
 def test_llm_config_test_can_reuse_saved_api_key(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -1680,12 +1623,12 @@ def test_llm_config_test_can_reuse_saved_api_key(
     assert update_response.status_code == 200
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
+        init_kwargs: dict[str, Any] | None = None
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             return ChatCompletionResponse(content="OK", model=request.model)
 
     monkeypatch.setattr(
@@ -2099,7 +2042,7 @@ def test_overview_widget_save_only_generates_sql_when_question_changes(
 
     generated_questions: list[str] = []
 
-    def generate_sql(*args, **kwargs) -> str:
+    def generate_sql(*args: Any, **kwargs: Any) -> str:
         generated_questions.append(kwargs["query_request"].question)
         return "SELECT 1 AS value"
 
@@ -2296,13 +2239,13 @@ def test_overview_widget_title_suggestion_uses_llm(
         session.commit()
 
     class FakeOpenAICompatibleClient:
-        init_kwargs: dict | None = None
-        requests = []
+        init_kwargs: dict[str, Any] | None = None
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.__class__.init_kwargs = kwargs
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(
                 content="```text\nDoctors by Specialty.\n```",
@@ -2381,12 +2324,12 @@ def test_overview_widget_from_query_strips_datasource_qualifier(
 
 def test_overview_widget_generation_strips_unquoted_datasource_qualifier(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
 
-    def generate_qualified_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_qualified_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql=(
                 "SELECT CAST(value AS INTEGER) AS retention_days "
@@ -2449,7 +2392,7 @@ def test_overview_widget_can_return_interpreted_result(
 
 def test_overview_widget_sql_error_creates_metadata_business_logic_suggestion(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = login(admin_client)["token"]
     change_password(admin_client, token)
@@ -2472,7 +2415,7 @@ def test_overview_widget_sql_error_creates_metadata_business_logic_suggestion(
         },
     )
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql="SELECT COUNT(*) AS value FROM prompts",
             confidence=0.6,
@@ -2569,6 +2512,72 @@ def test_default_datasource_can_be_tested_and_introspected(admin_client: TestCli
     }
 
 
+def test_datasource_schema_returns_introspection_error(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    with create_session() as session:
+        connector = DatasourceConnector(
+            connector_key="broken-schema",
+            name="Broken schema",
+            database_type="sqlite",
+            database_url="sqlite:///:memory:",
+            sql_dialect="sqlite",
+            active=False,
+            updated_by="admin",
+        )
+        session.add(connector)
+        session.commit()
+        connector_id = connector.id
+
+    def fail_introspection(
+        _session: object,
+        _connector: DatasourceConnector,
+        _actor: str,
+    ) -> DatasourceSchemaCache:
+        raise ValueError("SQLAlchemy could not infer a common column type.")
+
+    monkeypatch.setattr(admin_api, "introspect_datasource_connector", fail_introspection)
+
+    response = admin_client.get(
+        f"/api/v1/admin/datasources/{connector_id}/schema",
+        headers=auth_headers(admin_client),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Schema introspection failed: SQLAlchemy could not infer a common column type."
+    )
+
+
+def test_unsaved_datasource_test_returns_connector_error(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    def fail_connection_test(_: DatasourceConnector) -> None:
+        raise ValueError("SQLAlchemy could not infer a common column type.")
+
+    monkeypatch.setattr(admin_api, "test_datasource_connection", fail_connection_test)
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/test",
+        headers=auth_headers(admin_client),
+        json={
+            "database_type": "sqlite",
+            "database_url": "sqlite:///:memory:",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Connection test failed: SQLAlchemy could not infer a common column type."
+    )
+
+
 def test_user_can_list_datasources_but_cannot_create_them(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -2650,10 +2659,9 @@ def test_client_datasource_selection_is_per_user_and_requires_available_sources(
 
 def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
-    from gaard_api.query_hooks import principal_identity_id as query_principal_identity_id
 
     monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: True)
     monkeypatch.setattr(
@@ -2671,6 +2679,10 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
         assert user is not None
         assert connector is not None
         user_id = user.id
+        admin_session = session.scalar(
+            select(AdminSession).where(AdminSession.user_id == user_id)
+        )
+        assert admin_session is not None
         session.execute(text("""
             CREATE TABLE IF NOT EXISTS identity_privilege_datasource_permissions (
                 id INTEGER PRIMARY KEY,
@@ -2687,7 +2699,7 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
             """),
             {
                 "connector_id": connector.id,
-                "identity_id": f"local:{user_id}",
+                "identity_id": str(user_id),
             },
         )
         session.commit()
@@ -2699,11 +2711,28 @@ def test_identity_privileges_match_local_identity_ids_from_admin_permissions(
 
     assert response.status_code == 200
     assert [item["connector_key"] for item in response.json()["items"]] == ["default"]
-    principal = SimpleNamespace(
-        session=SimpleNamespace(auth_provider="local", username="client-user"),
-        user=SimpleNamespace(id=user_id, username="client-user", auth_provider="local"),
+    principal = AuthenticatedSession(
+        session=admin_session,
+        user=user,
     )
-    assert query_principal_identity_id(principal) == f"local:{user_id}"
+    assert identity_id_for_principal(principal) == str(user_id)
+
+    received_identity_ids: list[str | None] = []
+
+    class CapturingHook:
+        def filter_datasource_keys(
+            self, identity_id: str | None, datasource_keys: list[str]
+        ) -> list[str]:
+            received_identity_ids.append(identity_id)
+            return []
+
+    registry = QueryHookRegistry()
+    registry.register(CapturingHook())
+    assert registry.filter_datasource_contexts(
+        principal,
+        [(connector, cast(DatasourceSchemaCache, object()))],
+    ) == []
+    assert received_identity_ids == [str(user_id)]
 
 
 def test_deleting_datasource_removes_identity_privilege_permissions(
@@ -2740,7 +2769,7 @@ def test_deleting_datasource_removes_identity_privilege_permissions(
             text("""
                 INSERT INTO identity_privilege_datasource_permissions
                     (connector_id, identity_id, allowed)
-                VALUES (:connector_id, 'local:1', 1)
+                VALUES (:connector_id, '1', 1)
             """),
             {"connector_id": connector.id},
         )
@@ -2872,7 +2901,7 @@ def test_datasource_connector_builds_sqlite_url_from_database_path(
 
 def test_excel_upload_without_duckdb_excel_connector_returns_400(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
@@ -2900,46 +2929,9 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     assert not upload_dir.exists()
 
 
-def test_enterprise_user_can_activate_own_uploaded_excel_datasource(
-    admin_client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from gaard_api.api.v1 import admin as admin_api
-
-    upload_dir = tmp_path / "excel-uploads"
-    monkeypatch.setattr(settings, "gaard_excel_upload_directory", str(upload_dir))
-    monkeypatch.setattr(admin_api.license_service, "identity_management_allowed", lambda: True)
-    monkeypatch.setattr(admin_api, "ensure_user_license_access", lambda _user: None)
-    monkeypatch.setattr(admin_api, "ensure_excel_datasource_type_available", lambda: None)
-    monkeypatch.setattr(admin_api.license_service, "ensure_datasource_type_allowed", lambda _type: None)
-    monkeypatch.setattr(admin_api.license_service, "ensure_active_source_limit", lambda _items: None)
-    monkeypatch.setattr(
-        admin_api,
-        "set_active_datasource_connector",
-        lambda _session, _connector, _actor: None,
-    )
-
-    response = admin_client.post(
-        "/api/v1/admin/datasources/excel-upload?active=true",
-        headers=user_headers("excel-owner", enterprise_access=True),
-        files={
-            "file": (
-                "owner-data.xlsx",
-                io.BytesIO(b"test workbook"),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["item"]["active"] is True
-    assert response.json()["item"]["updated_by"] == "excel-owner"
-
-
 def test_unassigned_user_cannot_use_or_upload_excel_datasources(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from gaard_api.api.v1 import admin as admin_api
 
@@ -3076,7 +3068,7 @@ def test_inactive_global_enterprise_allows_only_admin_login(
 
 def test_public_datasource_activation_keeps_single_active_datasource(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     import gaard_api.extensions
@@ -3255,6 +3247,158 @@ def test_datasource_connector_builds_mssql_url_from_connection_fields(
         "?Encrypt=yes&TrustServerCertificate=no&driver=ODBC+Driver+18+for+SQL+Server"
     )
     assert item["sql_dialect"] == "tsql"
+
+
+def test_datasource_connector_builds_odbc_dsn_url_without_returning_password(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    password = "P@ss:w/ord;ąćę% + {}"
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "odbc_dsn",
+            "name": "ODBC DSN",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsn",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "dsn": "hospital_reporting",
+                "username": "gaard_reader",
+                "password": password,
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    item = create_response.json()["item"]
+    assert item["database_type"] == "odbc"
+    assert item["sql_dialect"] == "tsql"
+    assert password not in item["database_url"]
+    assert "%2A%2A%2A" in item["database_url"]
+
+    with create_session() as session:
+        connector = session.scalar(
+            select(DatasourceConnector).where(DatasourceConnector.connector_key == "odbc_dsn")
+        )
+        assert connector is not None
+        parsed = make_url(connector.database_url)
+
+    assert parsed.drivername == "mssql+pyodbc"
+    odbc_options = dict(parse_odbc_connection_string(str(parsed.query["odbc_connect"])))
+    assert odbc_options["DSN"] == "hospital_reporting"
+    assert odbc_options["UID"] == "gaard_reader"
+    assert odbc_options["PWD"] == password
+
+
+def test_datasource_connector_builds_odbc_dsnless_url_from_connection_fields(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "odbc_dsnless",
+            "name": "ODBC DSN-less",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsnless",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "odbc_driver": "ODBC Driver 18 for SQL Server",
+                "host": "unixodbc-bridge.internal",
+                "port": 1433,
+                "database": "ERP",
+                "username": "gaard_reader",
+                "password": "secret",
+                "extra_odbc_options": {
+                    "TrustServerCertificate": "yes",
+                    "Encrypt": "yes",
+                },
+            },
+            "active": False,
+        },
+    )
+
+    assert create_response.status_code == 200
+    with create_session() as session:
+        connector = session.scalar(
+            select(DatasourceConnector).where(
+                DatasourceConnector.connector_key == "odbc_dsnless"
+            )
+        )
+        assert connector is not None
+        parsed = make_url(connector.database_url)
+
+    assert parsed.query["odbc_connect"] == (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        "SERVER=unixodbc-bridge.internal,1433;"
+        "DATABASE=ERP;"
+        "UID=gaard_reader;"
+        "PWD=secret;"
+        "Encrypt=yes;"
+        "TrustServerCertificate=yes;"
+    )
+
+
+def test_datasource_connector_update_preserves_odbc_password_when_left_blank(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    create_response = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "odbc_keep_secret",
+            "name": "ODBC keep secret",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsn",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "dsn": "hospital_reporting",
+                "username": "gaard_reader",
+                "password": "secret",
+            },
+            "active": False,
+        },
+    )
+    assert create_response.status_code == 200
+    datasource_id = create_response.json()["item"]["id"]
+
+    update_response = admin_client.put(
+        f"/api/v1/admin/datasources/{datasource_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "ODBC renamed",
+            "database_type": "odbc",
+            "connection_config": {
+                "connection_mode": "dsn",
+                "sqlalchemy_drivername": "mssql+pyodbc",
+                "dsn": "hospital_reporting",
+                "username": "gaard_reader",
+                "password": "",
+            },
+            "active": False,
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert "secret" not in update_response.json()["item"]["database_url"]
+
+    with create_session() as session:
+        connector = session.get(DatasourceConnector, datasource_id)
+        assert connector is not None
+        parsed = make_url(connector.database_url)
+
+    assert parsed.query["odbc_connect"] == "DSN=hospital_reporting;UID=gaard_reader;PWD=secret;"
 
 
 def test_datasource_connector_builds_ibm_db2_url_from_connection_fields(
@@ -3573,7 +3717,7 @@ def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> Non
 
 def test_query_explain_endpoint_uses_answer_explanation_prompt(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     monkeypatch.setattr(settings, "gaard_llm_api_key", "test-key")
@@ -3605,12 +3749,12 @@ def test_query_explain_endpoint_uses_answer_explanation_prompt(
         session.commit()
 
     class FakeOpenAICompatibleClient:
-        requests = []
+        requests: ClassVar[list[ChatCompletionRequest]] = []
 
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def create_chat_completion(self, request):
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
             self.__class__.requests.append(request)
             return ChatCompletionResponse(
                 content="SQL liczy zakończone wizyty, bo o to pyta użytkownik.",
@@ -3759,7 +3903,7 @@ def test_query_stream_ignores_legacy_mode_field(
 
 def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     with create_session() as session:
@@ -3839,11 +3983,11 @@ def test_query_blocks_write_intent_before_llm_and_writes_access_audit(
 
 def test_query_writes_access_audit_for_generated_non_select_sql(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
-    def generate_update_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_update_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql="UPDATE patients SET status = 'inactive'",
             confidence=0.6,
@@ -3887,7 +4031,7 @@ def test_query_writes_access_audit_for_generated_non_select_sql(
 
 def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
@@ -3900,7 +4044,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
             )
 
     class FailingPipeline:
-        def handle(self, request: QueryRequest):
+        def handle(self, request: QueryRequest) -> None:
             raise QueryPipelineStepError(
                 message="LLM provider returned HTTP 400. context length exceeded",
                 phase="sql_generation",
@@ -3949,7 +4093,7 @@ def test_query_writes_audit_for_llm_provider_error_during_sql_generation(
 
 def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
@@ -3962,7 +4106,7 @@ def test_query_writes_generated_sql_for_llm_provider_error_after_sql_generation(
             )
 
     class FailingPipeline:
-        def handle(self, request: QueryRequest):
+        def handle(self, request: QueryRequest) -> None:
             raise QueryPipelineStepError(
                 message="LLM provider request failed.",
                 phase="result_interpretation",
@@ -4044,7 +4188,7 @@ def test_query_audit_uses_active_datasource_connector_key(admin_client: TestClie
 
 def test_query_without_active_datasources_returns_before_ai(
     admin_client: TestClient,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
 
@@ -4053,7 +4197,7 @@ def test_query_without_active_datasources_returns_before_ai(
             connector.active = False
         session.commit()
 
-    def fail_if_ai_is_touched(*args, **kwargs):
+    def fail_if_ai_is_touched(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("AI and query pipeline should not run without active datasources.")
 
     monkeypatch.setattr(
@@ -4159,7 +4303,7 @@ def test_query_endpoint_writes_sql_error_data_query_audit(
 def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     admin_client: TestClient,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     learning_llm = stub_business_logic_learning_llm(
@@ -4200,7 +4344,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     finally:
         connection.close()
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql="SELECT COUNT(*) AS liczba_projektow FROM zlecenia",
             confidence=0.6,
@@ -4315,7 +4459,7 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 def test_missing_column_sql_error_creates_business_logic_suggestion(
     admin_client: TestClient,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     stub_business_logic_learning_llm(
@@ -4359,7 +4503,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
     finally:
         connection.close()
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql=(
                 "SELECT imie, nazwisko, email, telefon, adres, kod, miasto, "
@@ -4436,7 +4580,7 @@ def test_missing_column_sql_error_creates_business_logic_suggestion(
 def test_join_missing_column_sql_error_is_learned_by_llm(
     admin_client: TestClient,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     headers = auth_headers(admin_client)
     learning_llm = stub_business_logic_learning_llm(
@@ -4488,7 +4632,7 @@ def test_join_missing_column_sql_error_is_learned_by_llm(
         "GROUP BY klient_nazwa ORDER BY ilosc DESC LIMIT 10"
     )
 
-    def generate_bad_sql(self, request: QueryRequest) -> GeneratedSql:
+    def generate_bad_sql(self: MockSqlGenerator, request: QueryRequest) -> GeneratedSql:
         return GeneratedSql(
             sql=bad_sql,
             confidence=0.6,

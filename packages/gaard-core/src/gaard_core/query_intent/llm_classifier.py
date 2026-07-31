@@ -1,6 +1,9 @@
 import json
 from typing import Any, Protocol, cast
 
+from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
+
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.prompt_compiler.intent_classification_prompt import (
     IntentClassificationPromptCompiler,
@@ -11,8 +14,6 @@ from gaard_core.query_pipeline.models import (
     QueryIntentDecision,
     QueryRequest,
 )
-from gaard_llm.openai_compatible.client import OpenAICompatibleClient
-from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 
 
 class IntentPromptCompiler(Protocol):

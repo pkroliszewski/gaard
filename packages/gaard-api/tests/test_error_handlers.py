@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,7 +51,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     reset_metadata_store_for_tests()
 
 
-def login(client: TestClient) -> dict:
+def login(client: TestClient) -> dict[str, Any]:
     response = client.post(
         "/api/v1/admin/auth/login",
         json={
@@ -60,7 +61,7 @@ def login(client: TestClient) -> dict:
     )
 
     assert response.status_code == 200
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def change_password(client: TestClient, token: str) -> None:

@@ -28,7 +28,7 @@ export function createIdentityModule({ api, escapeHtml, state, render, setMessag
   }
 
   function builtinUserId(user) {
-    return String(user.id || "").replace(/^local:/, "");
+    return String(user.id || "");
   }
 
   function canManageBuiltinAccount(user) {

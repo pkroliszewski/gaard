@@ -1,14 +1,15 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
-
 from gaard_core.query_pipeline.models import (
     ConversationContextClassification,
     ConversationContextDecision,
 )
+from sqlalchemy import func, select
+
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
 from gaard_api.admin.models import Conversation, ConversationTurn
 from gaard_api.api.v1 import query as query_module
@@ -18,7 +19,7 @@ from gaard_api.main import app
 
 
 @pytest.fixture()
-def conversation_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
+def conversation_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     demo_db = tmp_path / "demo.db"
 
     monkeypatch.setattr(
@@ -410,7 +411,9 @@ def test_query_follow_up_guard_rejects_unrewritten_classifier_output(
     conversation_id = first.json()["metadata"]["conversation"]["id"]
 
     class BadClassifier:
-        def classify(self, request, context):
+        def classify(
+            self, request: Any, context: dict[str, Any]
+        ) -> ConversationContextClassification:
             return ConversationContextClassification(
                 decision=ConversationContextDecision.FOLLOW_UP,
                 confidence=0.9,
@@ -469,7 +472,9 @@ def test_query_accepts_llm_follow_up_when_current_question_is_standalone(
     assert second.status_code == 200
 
     class StandaloneContinuationClassifier:
-        def classify(self, request, context):
+        def classify(
+            self, request: Any, context: dict[str, Any]
+        ) -> ConversationContextClassification:
             return ConversationContextClassification(
                 decision=ConversationContextDecision.FOLLOW_UP,
                 confidence=0.92,

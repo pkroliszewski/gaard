@@ -1,12 +1,14 @@
 import json
 import re
 import threading
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Annotated
+from typing import Any, cast
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+import sqlglot
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from gaard_connectors import ConnectorRegistryError
+from gaard_connectors.odbc import collect_diagnostics, list_configured_dsns, list_odbc_drivers
 from gaard_core.errors import (
     ConfigurationError,
     LlmProviderError,
@@ -21,15 +23,14 @@ from gaard_core.query_pipeline.models import (
     QueryResult,
 )
 from gaard_core.sql_validator.select_only import SelectOnlySqlValidator
-from gaard_connectors import ConnectorRegistryError
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table, update
+from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-import sqlglot
 from sqlglot import expressions as exp
 
 from gaard_api.admin.database import create_session, get_session
@@ -61,6 +62,7 @@ from gaard_api.admin.services import (
     OVERVIEW_WIDGET_SCALAR,
     OVERVIEW_WIDGET_TABLE,
     OVERVIEW_WIDGET_TIMESERIES,
+    NormalizedDatasourceConfiguration,
     apply_data_query_audit_retention,
     coerce_data_query_audit_type,
     delete_business_logic_suggestion,
@@ -71,19 +73,20 @@ from gaard_api.admin.services import (
     get_data_query_audit_type,
     get_datasource_connector,
     get_datasource_connector_by_key,
-    get_or_create_datasource_schema_cache,
     get_datasource_schema_cache,
     get_governance_policy_config,
     get_governance_policy_sources,
     get_llm_config_sources,
     get_llm_runtime_config,
-    get_query_runtime_config,
+    get_or_create_datasource_schema_cache,
     get_overview_widget,
     get_prompt_template,
+    get_query_runtime_config,
     get_setting,
     introspect_datasource_connector,
     is_system_datasource_connector,
     json_loads,
+    learn_business_logic_from_sql_error,
     list_admin_audit_logs,
     list_all_overview_widgets,
     list_business_logic_suggestions_for_connectors,
@@ -91,19 +94,18 @@ from gaard_api.admin.services import (
     list_datasource_connectors,
     list_overview_widgets,
     list_prompt_templates,
-    learn_business_logic_from_sql_error,
     mask_database_url,
     normalize_datasource_configuration,
     record_admin_audit,
     record_data_query_audit,
     record_data_query_sql_error_audit,
     selected_schema_from_cache,
+    set_active_datasource_connector,
     set_business_logic_suggestion_enabled,
     set_governance_policy_config,
     set_llm_runtime_config,
     set_query_runtime_config,
     set_setting,
-    set_active_datasource_connector,
     test_datasource_connection,
     test_llm_runtime_config,
     update_business_logic_suggestion_content,
@@ -111,8 +113,14 @@ from gaard_api.admin.services import (
 )
 from gaard_api.api.v1.schema import get_schema_cache_key
 from gaard_api.auth_dependencies import (
+    AuthenticatedSession,
+    ensure_user_license_access,
+    get_current_admin,
+    get_current_authenticated_session,
+    get_current_enterprise_admin,
+    get_current_enterprise_api_user,
+    has_enterprise_user_access,
     identity_id_for_principal,
-    identity_ids_for_principal,
 )
 from gaard_api.core.schema_cache import schema_context_cache
 from gaard_api.core.settings import settings
@@ -122,7 +130,8 @@ from gaard_api.extensions import (
     get_connector_registry,
     get_extension_manager,
 )
-from gaard_api.license import LicenseAccessError, license_service, redact_license_key
+from gaard_api.license import LicenseAccessError, redact_license_key
+from gaard_api.license import license_service as license_service
 from gaard_api.package_updates import package_update_jobs, package_update_service
 from gaard_api.query_hooks import sqlglot_read_dialect
 
@@ -169,12 +178,6 @@ class MeResponse(BaseModel):
     must_change_password: bool
     role: str = "admin"
     enterprise_access: bool
-
-
-@dataclass(frozen=True)
-class AuthenticatedSession:
-    session: AdminSession
-    user: AdminUser
 
 
 class PromptUpdateRequest(BaseModel):
@@ -384,12 +387,17 @@ def serialize_prompt(prompt: PromptTemplate) -> dict[str, Any]:
 
 
 def serialize_datasource(connector: DatasourceConnector) -> dict[str, Any]:
+    database_url = (
+        mask_database_url(connector.database_url)
+        if connector.database_type == "odbc"
+        else connector.database_url
+    )
     return {
         "id": connector.id,
         "connector_key": connector.connector_key,
         "name": connector.name,
         "database_type": connector.database_type,
-        "database_url": connector.database_url,
+        "database_url": database_url,
         "masked_database_url": mask_database_url(connector.database_url),
         "sql_dialect": connector.sql_dialect,
         "active": connector.active,
@@ -409,10 +417,6 @@ def identity_privileges_are_active() -> bool:
     )
 
 
-def principal_identity_id(principal: AuthenticatedSession) -> str:
-    return identity_id_for_principal(principal) or ""
-
-
 def filter_datasources_for_identity_privileges(
     session: Session,
     principal: AuthenticatedSession,
@@ -422,16 +426,12 @@ def filter_datasources_for_identity_privileges(
     if not identity_privileges_are_active():
         return connectors
 
-    identity_ids = identity_ids_for_principal(principal)
-    if not identity_ids:
-        return []
+    identity_id = identity_id_for_principal(principal)
 
     allowed_ids = set(
         session.scalars(
             select(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.connector_id).where(
-                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id.in_(
-                    identity_ids,
-                ),
+                IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.identity_id == identity_id,
                 IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS.c.allowed.is_(True),
             )
         )
@@ -451,7 +451,7 @@ def grant_client_excel_datasource_permission(
     session.execute(
         insert(IDENTITY_PRIVILEGE_DATASOURCE_PERMISSIONS).values(
             connector_id=connector_id,
-            identity_id=principal_identity_id(principal),
+            identity_id=identity_id_for_principal(principal),
             allowed=True,
         )
     )
@@ -898,7 +898,8 @@ def normalize_datasource_configuration_or_400(
     database_path: str | None = None,
     database_url: str | None = None,
     sql_dialect: str | None = None,
-):
+    existing_database_url: str | None = None,
+) -> NormalizedDatasourceConfiguration:
     try:
         return normalize_datasource_configuration(
             database_type=database_type,
@@ -906,6 +907,7 @@ def normalize_datasource_configuration_or_400(
             database_path=database_path,
             database_url=database_url,
             sql_dialect=sql_dialect,
+            existing_database_url=existing_database_url,
         )
     except (ConnectorRegistryError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1277,85 +1279,6 @@ def serialize_business_logic_suggestion(
         "updated_by": suggestion.updated_by,
     }
 
-
-def get_authorization_token(authorization: str | None) -> str:
-    if authorization is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header.",
-        )
-
-    scheme, _, token = authorization.partition(" ")
-
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Authorization header.",
-        )
-
-    return token
-
-
-def get_current_authenticated_session(
-    authorization: Annotated[str | None, Header()] = None,
-    session: Session = Depends(get_session),
-) -> AuthenticatedSession:
-    token = get_authorization_token(authorization)
-    token_hash = hash_token(token)
-
-    admin_session = session.scalar(
-        select(AdminSession).where(AdminSession.token_hash == token_hash)
-    )
-
-    if admin_session is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin session.",
-        )
-
-    user = session.get(AdminUser, admin_session.user_id)
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin session.",
-        )
-
-    activity_cutoff = datetime.now(UTC) - SESSION_ACTIVITY_WRITE_INTERVAL
-    result = session.execute(
-        update(AdminSession)
-        .where(AdminSession.id == admin_session.id, AdminSession.last_seen < activity_cutoff)
-        .values(last_seen=datetime.now(UTC))
-        .execution_options(synchronize_session=False)
-    )
-    if result.rowcount:
-        session.commit()
-    else:
-        session.commit()
-
-    ensure_user_license_access(user)
-
-
-    return AuthenticatedSession(session=admin_session, user=user)
-
-
-def ensure_user_license_access(user: AdminUser) -> None:
-    """Keep non-system accounts active only while global Enterprise is active."""
-    if user.is_system_admin:
-        return
-    state = license_service.refresh_if_due()
-    if state.features.get("identity_management"):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="This account does not have an active Enterprise user license.",
-    )
-
-
-def has_enterprise_user_access(principal: AuthenticatedSession) -> bool:
-    return bool(principal.user.enterprise_access)
-
-
 def ensure_admin_can_manage_datasource_type(user: AdminUser, database_type: str) -> None:
     """Keep Excel/DuckDB datasource functionality behind an Enterprise seat."""
     if database_type == "duckdb-excel" and not user.enterprise_access:
@@ -1391,31 +1314,6 @@ def admin_can_use_widget_datasource(user: AdminUser, connector: DatasourceConnec
     return True
 
 
-
-def get_current_api_user(
-    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
-) -> AuthenticatedSession:
-    if principal.user.role not in {"user", "admin"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated user does not have API access.",
-        )
-    if principal.user.must_change_password:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password change is required before using the application.",
-        )
-    if not has_enterprise_user_access(principal):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "This account has dashboard-only access because no Enterprise user "
-                "license is assigned."
-            ),
-        )
-    return principal
-
-
 def get_current_datasource_viewer(
     principal: AuthenticatedSession = Depends(get_current_authenticated_session),
 ) -> AuthenticatedSession:
@@ -1427,43 +1325,7 @@ def get_current_datasource_viewer(
                 detail="Password change is required before using the admin portal.",
             )
         return principal
-    return get_current_api_user(principal)
-
-
-def get_current_admin_allow_password_change(
-    principal: AuthenticatedSession = Depends(get_current_authenticated_session),
-) -> AdminUser:
-    if principal.user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role is required.",
-        )
-    return principal.user
-
-
-def get_current_admin(
-    user: AdminUser = Depends(get_current_admin_allow_password_change),
-) -> AdminUser:
-    if user.must_change_password:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Password change is required before using the admin portal.",
-        )
-
-    return user
-
-
-def get_current_enterprise_admin(
-    user: AdminUser = Depends(get_current_admin),
-) -> AdminUser:
-    """Require an administrator with an assigned Enterprise user license."""
-    if not user.enterprise_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="An assigned Enterprise user license is required.",
-        )
-    return user
-
+    return get_current_enterprise_api_user(principal)
 
 @router.post("/auth/login", response_model=LoginResponse)
 def login(request: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
@@ -1644,18 +1506,14 @@ def list_identities(
 ) -> dict[str, Any]:
     with create_session() as session:
         identity_management_allowed = license_service.identity_management_allowed()
-        session_counts = dict(
-            session.execute(
+        session_counts: dict[int, int] = {
+            user_id: count
+            for user_id, count in session.execute(
                 select(AdminSession.user_id, func.count(AdminSession.id)).group_by(AdminSession.user_id)
-            ).all()
-        )
+            ).tuples()
+        }
         users_by_identity = {
-            (
-                f"local:{item.id}"
-                if item.auth_provider == "local"
-                else f"{item.auth_provider}:{item.username}"
-            ): item
-            for item in session.scalars(select(AdminUser)).all()
+            str(item.id): item for item in session.scalars(select(AdminUser)).all()
         }
         dashboards_by_owner: dict[str, list[dict[str, Any]]] = {}
         for dashboard in session.scalars(
@@ -1666,7 +1524,7 @@ def list_identities(
             )
         items = [
             {
-                "id": f"local:{item.id}",
+                "id": str(item.id),
                 "username": item.username,
                 "name": item.display_name or item.username,
                 "role": item.role,
@@ -1689,11 +1547,7 @@ def list_identities(
                 items.extend(provider.list_users(session, refresh=refresh))
         for item in items:
             account = users_by_identity.get(str(item["id"]))
-            owner_user_id = (
-                str(item["id"]).removeprefix("local:")
-                if item.get("provider_id") == "local"
-                else str(account.id) if account is not None else None
-            )
+            owner_user_id = str(item["id"]) if account is not None else None
             item["dashboards"] = dashboards_by_owner.get(owner_user_id or "", [])
             item["enterprise_access"] = bool(
                 item.get("is_system_admin")
@@ -1714,18 +1568,10 @@ def list_identities(
 
 
 def identity_user_for_session_action(session: Session, identity_id: str) -> AdminUser:
-    if identity_id.startswith("local:"):
-        try:
-            user_id = int(identity_id.removeprefix("local:"))
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="Identity not found.") from exc
-        user = session.get(AdminUser, user_id)
-    else:
-        user = session.scalar(
-            select(AdminUser).where(
-                (AdminUser.auth_provider + ":" + AdminUser.username) == identity_id
-            )
-        )
+    try:
+        user = session.get(AdminUser, int(identity_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Identity not found.") from exc
     if user is None:
         raise HTTPException(status_code=404, detail="Identity not found.")
     return user
@@ -1750,7 +1596,7 @@ def clear_identity_sessions(
             AdminSession.id != principal.session.id,
         )
     )
-    cleared = int(result.rowcount or 0)
+    cleared = int(cast(CursorResult[Any], result).rowcount or 0)
     record_admin_audit(
         session=session,
         actor=user.username,
@@ -1775,24 +1621,10 @@ def update_identity_enterprise_access(
     except LicenseAccessError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-    provider_id, separator, identity_value = identity_id.partition(":")
-    if not separator or not provider_id or not identity_value:
+    try:
+        target = session.get(AdminUser, int(identity_id))
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid identity id.")
-
-    if provider_id == "local":
-        try:
-            target = session.get(AdminUser, int(identity_value))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid built-in identity id.") from exc
-        if target is not None and target.auth_provider != "local":
-            target = None
-    else:
-        target = session.scalar(
-            select(AdminUser).where(
-                AdminUser.auth_provider == provider_id,
-                AdminUser.username == identity_value,
-            )
-        )
 
     if target is None:
         raise HTTPException(status_code=404, detail="Identity was not found.")
@@ -2078,7 +1910,7 @@ def create_overview_widget(
 @router.post("/overview/widgets/from-query")
 def create_overview_widget_from_query(
     request: OverviewWidgetFromQueryRequest,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     datasource = get_datasource_connector_by_key(session, request.datasource_key)
@@ -2225,7 +2057,7 @@ def generate_overview_widget_sql_preview(
 @router.post("/overview/widgets/title-suggestion")
 def suggest_overview_widget_title(
     request: OverviewWidgetTitleSuggestionRequest,
-    _principal: AuthenticatedSession = Depends(get_current_api_user),
+    _principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     try:
@@ -2702,7 +2534,7 @@ def get_datasources(
 @router.api_route("/datasources/selection", methods=["PUT", "POST"])
 def update_datasource_selection(
     request: DatasourceSelectionRequest,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
     selected_ids = list(
@@ -2752,6 +2584,38 @@ def get_datasource_types(
 ) -> dict[str, Any]:
     return {
         "items": [definition.serialize() for definition in get_connector_registry().list()],
+        "viewer": user.username,
+    }
+
+
+@router.get("/connectors/odbc/drivers")
+def get_odbc_drivers(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "drivers": list_odbc_drivers(),
+        "viewer": user.username,
+    }
+
+
+@router.get("/connectors/odbc/dsns")
+def get_odbc_dsns(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    dsns = list_configured_dsns()
+    return {
+        "system": dsns["system"],
+        "user": dsns["user"],
+        "viewer": user.username,
+    }
+
+
+@router.get("/connectors/odbc/diagnostics")
+def get_odbc_diagnostics(
+    user: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "item": collect_diagnostics().serialize(),
         "viewer": user.username,
     }
 
@@ -2856,7 +2720,7 @@ def create_datasource(
 async def upload_excel_datasource(
     file: UploadFile = File(...),
     active: bool = False,
-    principal: AuthenticatedSession = Depends(get_current_api_user),
+    principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     if not has_enterprise_user_access(principal):
@@ -2962,15 +2826,16 @@ def update_datasource_state(
             detail="Datasource connector not found.",
         )
 
-    ensure_admin_can_manage_datasource(user, connector)
-
     if is_system_datasource_connector(connector):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The metadata datasource is managed by GAARD.",
         )
 
-    license_service.ensure_datasource_type_allowed(connector.database_type)
+    is_deactivation = not request.active
+    if not is_deactivation:
+        ensure_admin_can_manage_datasource(user, connector)
+        license_service.ensure_datasource_type_allowed(connector.database_type)
 
     if request.active:
         set_active_datasource_connector(session, connector, user.username)
@@ -2979,7 +2844,8 @@ def update_datasource_state(
         connector.updated_by = user.username
         remove_datasource_from_selections(session, connector.connector_key)
 
-    license_service.ensure_active_source_limit(list_datasource_connectors(session))
+    if not is_deactivation:
+        license_service.ensure_active_source_limit(list_datasource_connectors(session))
     record_admin_audit(
         session=session,
         actor=user.username,
@@ -3025,6 +2891,7 @@ def update_datasource(
         database_path=request.database_path,
         database_url=request.database_url,
         sql_dialect=request.sql_dialect,
+        existing_database_url=connector.database_url,
     )
 
     ensure_admin_can_manage_datasource_type(user, normalized_config.database_type)
@@ -3144,6 +3011,13 @@ def activate_datasource(
     return {"item": serialize_datasource(connector)}
 
 
+def connection_test_failed_http_exception(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Connection test failed: {exc}",
+    )
+
+
 @router.post("/datasources/{connector_id}/test")
 def test_datasource(
     connector_id: int,
@@ -3174,10 +3048,7 @@ def test_datasource(
             details={"error": str(exc)},
         )
         session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Connection test failed: {exc}",
-        ) from exc
+        raise connection_test_failed_http_exception(exc) from exc
 
     record_admin_audit(
         session=session,
@@ -3213,7 +3084,10 @@ def test_datasource_from_request(
     )
     ensure_admin_can_manage_datasource_type(user, connector.database_type)
     license_service.ensure_datasource_type_allowed(connector.database_type)
-    test_datasource_connection(connector)
+    try:
+        test_datasource_connection(connector)
+    except Exception as exc:
+        raise connection_test_failed_http_exception(exc) from exc
     return {"status": "ok"}
 
 
@@ -3275,7 +3149,13 @@ def get_datasource_schema(
 
     if cache is None:
         license_service.ensure_datasource_type_allowed(connector.database_type)
-        cache = introspect_datasource_connector(session, connector, user.username)
+        try:
+            cache = introspect_datasource_connector(session, connector, user.username)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Schema introspection failed: {exc}",
+            ) from exc
         session.commit()
 
     return {

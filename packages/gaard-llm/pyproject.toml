@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-llm"
-version = "0.2.8"
+version = "0.2.9"
 description = "LLM provider adapters for GAARD"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "gaard-core==0.2.8",
-    "gaard-plugin-api>=0.2.8,<0.3.0",
+    "gaard-core==0.2.9",
+    "gaard-plugin-api>=0.2.9,<0.3.0",
     "httpx2>=2.5.0",
     "pydantic>=2.7.0",
 ]
@@ -25,6 +25,9 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.param_functions.Depends", "fastapi.params.Depends"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

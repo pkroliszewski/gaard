@@ -6,16 +6,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar, cast
 
-from sqlglot import Dialects
-from sqlalchemy.orm import Session
-
 from gaard_core.errors import ConfigurationError, QueryExecutionError
 from gaard_core.query_pipeline.models import QueryRequest, QueryResult
+from sqlalchemy.orm import Session
+from sqlglot import Dialects
 
 from gaard_api.admin.models import DatasourceConnector, DatasourceSchemaCache
-from gaard_api.auth_dependencies import identity_id_for_principal
+from gaard_api.auth_dependencies import AuthenticatedSession, identity_id_for_principal
 from gaard_api.core.settings import settings
-
 
 DatasourceContext = tuple[DatasourceConnector, DatasourceSchemaCache]
 DatasourceContexts = list[DatasourceContext]
@@ -121,10 +119,10 @@ class QueryHookRegistry:
 
     def filter_datasource_contexts(
         self,
-        principal: Any | None,
+        principal: AuthenticatedSession | None,
         datasource_contexts: DatasourceContexts,
     ) -> DatasourceContexts:
-        identity_id = principal_identity_id(principal)
+        identity_id = identity_id_for_principal(principal) if principal is not None else None
         contexts = datasource_contexts
         for hook in self._hooks:
             if not self._is_enabled(hook):
@@ -272,10 +270,6 @@ def normalize_datasource_contexts(
         return [datasource_context]
 
     return list(datasource_context)
-
-
-def principal_identity_id(principal: Any | None) -> str | None:
-    return identity_id_for_principal(principal)
 
 
 def selected_table_names(cache: DatasourceSchemaCache) -> list[str]:

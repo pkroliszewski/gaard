@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaard-connectors"
-version = "0.2.8"
+version = "0.2.9"
 description = "Database connectors for GAARD based on SQLAlchemy"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "gaard-core==0.2.8",
-    "gaard-plugin-api>=0.2.8,<0.3.0",
+    "gaard-core==0.2.9",
+    "gaard-plugin-api>=0.2.9,<0.3.0",
     "sqlalchemy>=2.0.0",
 ]
 
@@ -19,6 +19,7 @@ postgres = ["psycopg[binary]>=3.2.0"]
 mysql = ["pymysql>=1.1.0"]
 oracle = ["oracledb>=2.0.0"]
 mssql = ["pyodbc>=5.0.0"]
+odbc = ["pyodbc>=5.0.0"]
 ibm_db2 = ["ibm-db-sa>=0.4.4"]
 teradata = ["teradatasqlalchemy>=20.0.0.9"]
 all-datasources = [
@@ -38,6 +39,9 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.param_functions.Depends", "fastapi.params.Depends"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

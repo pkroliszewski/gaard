@@ -2,20 +2,22 @@ import re
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine, RowMapping
-from sqlalchemy.exc import SQLAlchemyError
-
 from gaard_core.errors import QueryExecutionError
 from gaard_core.json_utils import to_jsonable
 from gaard_core.query_pipeline.models import QueryResult
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine, RowMapping
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class SQLAlchemyQueryExecutor:
     def __init__(self, database_url: str, max_rows: int = 100) -> None:
         self.database_url = database_url
         self.max_rows = max_rows
-        self.engine: Engine = create_engine(database_url)
+        self.engine: Engine = self._create_engine(database_url)
+
+    def _create_engine(self, database_url: str) -> Engine:
+        return create_engine(database_url)
 
     def execute(self, sql: str) -> QueryResult:
         limited_sql = self._apply_limit(sql)

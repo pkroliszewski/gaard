@@ -1,13 +1,14 @@
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+
 from gaard_core.query_pipeline.models import OutputClassification, QueryRequest
 from gaard_core.result_classifier.llm_classifier import (
     LlmResultClassifier,
     parse_output_classification,
 )
-from gaard_llm.providers.models import ChatCompletionResponse
 
 
 class FakeLlmClient:
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         return ChatCompletionResponse(
             content='{"output_classification": "personal_data"}',
             model="test-model",
@@ -17,9 +18,9 @@ class FakeLlmClient:
 
 class CapturingLlmClient:
     def __init__(self) -> None:
-        self.requests = []
+        self.requests: list[ChatCompletionRequest] = []
 
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         self.requests.append(request)
 
         return ChatCompletionResponse(

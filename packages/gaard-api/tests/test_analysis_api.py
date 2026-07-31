@@ -1,12 +1,13 @@
-from collections.abc import Iterator
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
+from gaard_core.query_pipeline.models import QueryResponse
 from sqlalchemy import select
 
-from gaard_core.query_pipeline.models import QueryResponse
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
 from gaard_api.admin.models import AnalysisSessionRecord, ConversationTurn, DatasourceConnector
 from gaard_api.admin.services import list_business_logic_suggestions, set_setting
@@ -17,7 +18,7 @@ from gaard_api.main import app
 
 
 @pytest.fixture()
-def analysis_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
+def analysis_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     demo_db = tmp_path / "demo.db"
 
     monkeypatch.setattr(
@@ -38,11 +39,11 @@ def analysis_client(tmp_path: Path, monkeypatch) -> Iterator[TestClient]:
     reset_metadata_store_for_tests()
 
 
-def parse_ndjson(text: str) -> list[dict]:
-    return [json.loads(line) for line in text.strip().splitlines() if line.strip()]
+def parse_ndjson(text: str) -> list[dict[str, Any]]:
+    return [cast(dict[str, Any], json.loads(line)) for line in text.strip().splitlines() if line.strip()]
 
 
-def login(client: TestClient) -> dict:
+def login(client: TestClient) -> dict[str, Any]:
     response = client.post(
         "/api/v1/admin/auth/login",
         json={
@@ -52,7 +53,7 @@ def login(client: TestClient) -> dict:
     )
 
     assert response.status_code == 200
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def change_password(client: TestClient, token: str) -> None:
@@ -313,7 +314,9 @@ def test_analysis_routes_database_evidence_questions_to_database(
         def __init__(self) -> None:
             self.calls = 0
 
-        def decide(self, request, datasource_context, context):
+        def decide(
+            self, request: Any, datasource_context: Any, context: dict[str, Any]
+        ) -> analysis_module.AnalysisPlannerDecision:
             self.calls += 1
             if self.calls == 1:
                 return analysis_module.AnalysisPlannerDecision(
@@ -332,7 +335,9 @@ def test_analysis_routes_database_evidence_questions_to_database(
                 answer="The doctors table contains durable specialization values.",
             )
 
-    def fake_run_sql_request(request, datasource_context, metadata, **_kwargs):
+    def fake_run_sql_request(
+        request: Any, datasource_context: Any, metadata: dict[str, Any], **_kwargs: Any
+    ) -> QueryResponse:
         return QueryResponse(
             question=request.question,
             answer="The specializations are cardiology and pediatrics.",
@@ -396,7 +401,9 @@ def test_analysis_keeps_user_clarification_as_user_question(
     create_active_default_datasource()
 
     class ClarificationPlanner:
-        def decide(self, request, datasource_context, context):
+        def decide(
+            self, request: Any, datasource_context: Any, context: dict[str, Any]
+        ) -> analysis_module.AnalysisPlannerDecision:
             return analysis_module.AnalysisPlannerDecision(
                 action=analysis_module.AnalysisAction.ASK_USER,
                 visible_question=("Co rozumiesz przez „najbardziej wymagającą” sprawę?"),
@@ -408,7 +415,7 @@ def test_analysis_keeps_user_clarification_as_user_question(
                 ),
             )
 
-    def fail_run_sql_request(*args, **kwargs):
+    def fail_run_sql_request(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Clarification questions must not be sent to SQL.")
 
     monkeypatch.setattr(
@@ -450,7 +457,9 @@ def test_analysis_out_of_scope_has_friendly_final_answer(
     headers = auth_headers(analysis_client)
 
     class OutOfScopePlanner:
-        def decide(self, request, datasource_context, context):
+        def decide(
+            self, request: Any, datasource_context: Any, context: dict[str, Any]
+        ) -> analysis_module.AnalysisPlannerDecision:
             return analysis_module.AnalysisPlannerDecision(
                 action=analysis_module.AnalysisAction.OUT_OF_SCOPE,
                 visible_question="Is this covered by the datasource?",
@@ -491,7 +500,9 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
         def __init__(self) -> None:
             self.calls = 0
 
-        def decide(self, request, datasource_context, context):
+        def decide(
+            self, request: Any, datasource_context: Any, context: dict[str, Any]
+        ) -> analysis_module.AnalysisPlannerDecision:
             self.calls += 1
             if self.calls == 1:
                 return analysis_module.AnalysisPlannerDecision(
@@ -523,7 +534,9 @@ def test_analysis_suppresses_supporting_rows_when_final_says_data_is_not_applica
                 ),
             )
 
-    def fake_run_sql_request(request, datasource_context, metadata, **_kwargs):
+    def fake_run_sql_request(
+        request: Any, datasource_context: Any, metadata: dict[str, Any], **_kwargs: Any
+    ) -> QueryResponse:
         return QueryResponse(
             question=request.question,
             answer="The base price for a cardiology consultation is $220.0.",

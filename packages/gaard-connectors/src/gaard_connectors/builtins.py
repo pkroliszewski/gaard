@@ -1,10 +1,11 @@
+from typing import Any
+
 from sqlalchemy import create_engine, text
 
+from gaard_connectors.odbc.connector import create_connector_definition as create_odbc_definition
 from gaard_connectors.registry import ConnectorDefinition, ConnectorRegistry
 from gaard_connectors.sqlalchemy.executor import SQLAlchemyQueryExecutor
 from gaard_connectors.sqlalchemy.introspector import SQLAlchemySchemaIntrospector
-
-from typing import Any
 
 
 def create_builtin_connector_registry() -> ConnectorRegistry:
@@ -32,6 +33,7 @@ def create_builtin_connector_registry() -> ConnectorRegistry:
             url_prefixes=("mysql://", "mysql+pymysql://"),
             description="MySQL database accessed through SQLAlchemy.",
         ),
+        create_odbc_definition(),
         _sqlalchemy_connector(
             type_key="oracle",
             label="Oracle Database",

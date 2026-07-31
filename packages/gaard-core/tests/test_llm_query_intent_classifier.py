@@ -1,13 +1,17 @@
+from typing import cast
+
+from gaard_llm.openai_compatible.client import OpenAICompatibleClient
+from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+
 from gaard_core.query_intent.llm_classifier import (
     LlmQueryIntentClassifier,
     parse_query_intent_classification,
 )
 from gaard_core.query_pipeline.models import QueryIntentDecision, QueryRequest
-from gaard_llm.providers.models import ChatCompletionResponse
 
 
 class FakeLlmClient:
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         return ChatCompletionResponse(
             content=(
                 '{"decision":"write_or_mutation_request",'
@@ -21,9 +25,9 @@ class FakeLlmClient:
 
 class CapturingLlmClient:
     def __init__(self) -> None:
-        self.requests = []
+        self.requests: list[ChatCompletionRequest] = []
 
-    def create_chat_completion(self, request):
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         self.requests.append(request)
 
         return ChatCompletionResponse(
@@ -35,7 +39,7 @@ class CapturingLlmClient:
 
 def test_llm_query_intent_classifier_returns_model_decision() -> None:
     classifier = LlmQueryIntentClassifier(
-        client=FakeLlmClient(),  # type: ignore[arg-type]
+        client=cast(OpenAICompatibleClient, FakeLlmClient()),
         model="test-model",
     )
 
@@ -56,7 +60,7 @@ def test_llm_query_intent_classifier_returns_model_decision() -> None:
 def test_llm_query_intent_classifier_sends_provider_extra_body() -> None:
     client = CapturingLlmClient()
     classifier = LlmQueryIntentClassifier(
-        client=client,  # type: ignore[arg-type]
+        client=cast(OpenAICompatibleClient, client),
         model="test-model",
         extra_body={
             "chat_template_kwargs": {
