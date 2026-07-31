@@ -772,6 +772,7 @@ function allowedRequestsForExtension(extensionId) {
       "GET /api/v1/extensions/gaard-external-api/health",
       "GET /api/v1/extensions/gaard-external-api/info",
       "POST /api/v1/extensions/gaard-external-api/openapi/introspect",
+      "POST /api/v1/extensions/gaard-external-api/endpoint/probe",
       "POST /api/v1/extensions/gaard-external-api/llm/resource-suggestion",
       "GET /api/v1/extensions/gaard-external-api/configs",
       "POST /api/v1/extensions/gaard-external-api/configs"
@@ -789,7 +790,8 @@ function allowedRequestPatternsForExtension(extensionId) {
       /^POST \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/refresh$/,
       /^GET \/api\/v1\/extensions\/gaard-external-api\/configs\/[^/]+\/jobs$/,
       /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+$/,
-      /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/events$/
+      /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/events$/,
+      /^GET \/api\/v1\/extensions\/gaard-external-api\/jobs\/[^/]+\/requests$/
     ]
   };
   return allowedPatternsByExtension[extensionId] || [];
