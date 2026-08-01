@@ -27,7 +27,19 @@ from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from gaard_plugin_api import ExtensionRecord
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, Integer, String, column, delete, func, insert, select, table
+from sqlalchemy import (
+    Boolean,
+    Integer,
+    String,
+    column,
+    create_engine,
+    delete,
+    func,
+    insert,
+    inspect as sqlalchemy_inspect,
+    select,
+    table,
+)
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -346,6 +358,27 @@ class DatasourceSelectionRequest(BaseModel):
 
 class DatasourceSchemaTableSettingsRequest(BaseModel):
     tables: dict[str, dict[str, Any]]
+
+
+class DatasourceViewSqlGenerationRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=20000)
+
+
+class DatasourceViewExecuteRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=20000)
+    sql: str = Field(min_length=1, max_length=200000)
+
+
+class DatasourceViewUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=20000)
+    sql: str = Field(min_length=1, max_length=200000)
+
+
+class DatasourceViewSettingsRequest(BaseModel):
+    description: str = Field(default="", max_length=20000)
 
 
 class BusinessLogicSuggestionUpdateRequest(BaseModel):
@@ -3091,6 +3124,365 @@ def test_datasource_from_request(
     return {"status": "ok"}
 
 
+DATASOURCE_VIEW_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
+def normalize_datasource_view_name(name: str) -> str:
+    normalized = name.strip()
+    if not DATASOURCE_VIEW_NAME_RE.fullmatch(normalized):
+        raise ValueError(
+            "View name must start with a letter or underscore and contain only letters, "
+            "numbers and underscores."
+        )
+    return normalized
+
+
+def clean_sql_text(value: str) -> str:
+    cleaned = remove_thinking_blocks(value).strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    if cleaned.lower().startswith("sql\n"):
+        cleaned = cleaned[4:].strip()
+    return cleaned.strip().rstrip(";")
+
+
+def create_admin_datasource_engine(connector: DatasourceConnector):
+    if connector.database_type == "duckdb-excel" or connector.database_url.startswith(
+        "duckdb-excel://"
+    ):
+        raise ValueError(
+            "This datasource type does not support admin-managed SQL views."
+        )
+    connect_args = (
+        {"check_same_thread": False}
+        if connector.database_url.startswith("sqlite")
+        else {}
+    )
+    return create_engine(connector.database_url, connect_args=connect_args)
+
+
+def quote_datasource_identifier(engine, name: str) -> str:
+    return engine.dialect.identifier_preparer.quote_identifier(name)
+
+
+def extract_select_sql_for_view(
+    connector: DatasourceConnector,
+    view_name: str,
+    sql: str,
+) -> str:
+    cleaned = clean_sql_text(sql)
+    if not cleaned:
+        raise ValueError("View SQL is required.")
+
+    read_dialect = sqlglot_read_dialect(connector.sql_dialect)
+    try:
+        statements = sqlglot.parse(cleaned, read=read_dialect)
+    except Exception as exc:
+        raise ValueError(f"Invalid SQL syntax: {exc}") from exc
+
+    if len(statements) != 1 or statements[0] is None:
+        raise ValueError("Only a single SQL statement can be used to create a view.")
+
+    statement = statements[0]
+    if isinstance(statement, exp.Create):
+        if str(statement.args.get("kind") or "").upper() != "VIEW":
+            raise ValueError("Only CREATE VIEW statements are allowed here.")
+        selectable = statement.args.get("expression")
+        if isinstance(selectable, exp.Subquery):
+            selectable = selectable.this
+        if not isinstance(selectable, (exp.Select, exp.SetOperation)):
+            raise ValueError("CREATE VIEW must be based on a SELECT query.")
+        select_sql = selectable.sql(dialect=read_dialect) if read_dialect else selectable.sql()
+    elif isinstance(statement, (exp.Select, exp.SetOperation)):
+        select_sql = statement.sql(dialect=read_dialect) if read_dialect else statement.sql()
+    else:
+        raise ValueError(
+            "View SQL must be a SELECT query or a CREATE VIEW ... AS SELECT statement."
+        )
+
+    select_sql = prepare_overview_sql_for_connector(connector, select_sql)
+    SelectOnlySqlValidator(dialect=read_dialect).validate(select_sql)
+    return select_sql.strip().rstrip(";")
+
+
+def build_create_view_sql(
+    connector: DatasourceConnector,
+    view_name: str,
+    sql: str,
+    engine,
+) -> str:
+    select_sql = extract_select_sql_for_view(connector, view_name, sql)
+    quoted_view_name = quote_datasource_identifier(engine, view_name)
+    return f"CREATE VIEW {quoted_view_name} AS {select_sql}"
+
+
+def view_sql_for_editor(
+    connector: DatasourceConnector,
+    view_name: str,
+    definition: str | None,
+) -> str:
+    if not definition:
+        return ""
+    try:
+        return extract_select_sql_for_view(connector, view_name, definition)
+    except ValueError:
+        return clean_sql_text(definition)
+
+
+def find_existing_view_name(inspector, view_name: str) -> str | None:
+    normalized = normalize_datasource_view_name(view_name)
+    existing_views = {
+        existing_name.lower(): existing_name
+        for existing_name in inspector.get_view_names()
+    }
+    return existing_views.get(normalized.lower())
+
+
+def datasource_view_description_from_cache(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    actor: str,
+) -> str:
+    cache = get_datasource_schema_cache(session, connector.id)
+    if cache is None:
+        cache = introspect_datasource_connector(session, connector, actor)
+    settings = json_loads(cache.table_settings_json)
+    tables = settings.get("tables", {})
+    direct = tables.get(view_name, {})
+    if direct:
+        return str(direct.get("description", ""))
+    lowered = view_name.lower()
+    for name, item in tables.items():
+        if str(name).lower() == lowered:
+            return str(item.get("description", ""))
+    return ""
+
+
+def get_datasource_view_definition(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    actor: str,
+) -> dict[str, str]:
+    normalized_name = normalize_datasource_view_name(view_name)
+    engine = create_admin_datasource_engine(connector)
+    try:
+        with engine.connect() as connection:
+            inspector = sqlalchemy_inspect(connection)
+            existing_name = find_existing_view_name(inspector, normalized_name)
+            if not existing_name:
+                raise ValueError(f"View '{normalized_name}' does not exist.")
+            definition = inspector.get_view_definition(existing_name)
+    finally:
+        engine.dispose()
+
+    return {
+        "name": existing_name,
+        "description": datasource_view_description_from_cache(
+            session,
+            connector,
+            existing_name,
+            actor,
+        ),
+        "sql": view_sql_for_editor(connector, existing_name, definition),
+    }
+
+
+def save_datasource_view_settings_to_cache(
+    session: Session,
+    cache: DatasourceSchemaCache,
+    view_name: str,
+    description: str,
+    actor: str,
+) -> DatasourceSchemaCache:
+    schema = json_loads(cache.schema_json)
+    view_names = {
+        str(item.get("name")).lower(): str(item.get("name"))
+        for item in schema.get("tables", [])
+        if item.get("object_type") == "view"
+    }
+    actual_view_name = view_names.get(view_name.lower())
+    if not actual_view_name:
+        raise ValueError(f"View '{view_name}' is not present in the introspected schema.")
+
+    settings = json_loads(cache.table_settings_json)
+    table_settings = settings.setdefault("tables", {})
+    existing = table_settings.setdefault(actual_view_name, {})
+    existing["selected"] = True
+    existing["description"] = description.strip()
+    return update_schema_table_settings(
+        session=session,
+        cache=cache,
+        table_settings={"tables": table_settings},
+        actor=actor,
+    )
+
+
+def execute_datasource_view_sql(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    description: str,
+    sql: str,
+    actor: str,
+) -> DatasourceSchemaCache:
+    normalized_name = normalize_datasource_view_name(view_name)
+    engine = create_admin_datasource_engine(connector)
+    try:
+        create_view_sql = build_create_view_sql(connector, normalized_name, sql, engine)
+        with engine.begin() as connection:
+            inspector = sqlalchemy_inspect(connection)
+            existing_name = find_existing_view_name(inspector, normalized_name)
+            if existing_name:
+                raise ValueError(
+                    f"View '{existing_name}' already exists. Delete it before creating it again."
+                )
+            connection.exec_driver_sql(create_view_sql)
+    finally:
+        engine.dispose()
+
+    cache = introspect_datasource_connector(session, connector, actor)
+    return save_datasource_view_settings_to_cache(
+        session,
+        cache,
+        normalized_name,
+        description,
+        actor,
+    )
+
+
+def save_datasource_view_settings(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    description: str,
+    actor: str,
+) -> DatasourceSchemaCache:
+    normalized_name = normalize_datasource_view_name(view_name)
+    cache = get_datasource_schema_cache(session, connector.id)
+    if cache is None:
+        cache = introspect_datasource_connector(session, connector, actor)
+    return save_datasource_view_settings_to_cache(
+        session,
+        cache,
+        normalized_name,
+        description,
+        actor,
+    )
+
+
+def update_datasource_view_sql(
+    session: Session,
+    connector: DatasourceConnector,
+    current_view_name: str,
+    next_view_name: str,
+    description: str,
+    sql: str,
+    actor: str,
+) -> DatasourceSchemaCache:
+    current_name = normalize_datasource_view_name(current_view_name)
+    next_name = normalize_datasource_view_name(next_view_name)
+    engine = create_admin_datasource_engine(connector)
+    try:
+        create_view_sql = build_create_view_sql(connector, next_name, sql, engine)
+        with engine.begin() as connection:
+            inspector = sqlalchemy_inspect(connection)
+            existing_current_name = find_existing_view_name(inspector, current_name)
+            if not existing_current_name:
+                raise ValueError(f"View '{current_name}' does not exist.")
+            existing_next_name = find_existing_view_name(inspector, next_name)
+            if (
+                existing_next_name
+                and existing_next_name.lower() != existing_current_name.lower()
+            ):
+                raise ValueError(
+                    f"View '{existing_next_name}' already exists. Choose another view name."
+                )
+            connection.exec_driver_sql(
+                f"DROP VIEW {quote_datasource_identifier(engine, existing_current_name)}"
+            )
+            connection.exec_driver_sql(create_view_sql)
+    finally:
+        engine.dispose()
+
+    cache = introspect_datasource_connector(session, connector, actor)
+    return save_datasource_view_settings_to_cache(
+        session,
+        cache,
+        next_name,
+        description,
+        actor,
+    )
+
+
+def delete_datasource_view(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    actor: str,
+) -> DatasourceSchemaCache:
+    normalized_name = normalize_datasource_view_name(view_name)
+    engine = create_admin_datasource_engine(connector)
+    try:
+        with engine.begin() as connection:
+            inspector = sqlalchemy_inspect(connection)
+            existing_name = find_existing_view_name(inspector, normalized_name)
+            if not existing_name:
+                raise ValueError(f"View '{normalized_name}' does not exist.")
+            connection.exec_driver_sql(
+                f"DROP VIEW {quote_datasource_identifier(engine, existing_name)}"
+            )
+    finally:
+        engine.dispose()
+
+    return introspect_datasource_connector(session, connector, actor)
+
+
+def generate_datasource_view_sql(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    description: str,
+    actor: str,
+) -> str:
+    normalized_name = normalize_datasource_view_name(view_name)
+    if not description.strip():
+        raise ValueError("View description is required to generate SQL.")
+
+    cache = get_or_create_datasource_schema_cache(session, connector, actor)
+    session.commit()
+
+    from gaard_api.api.v1.query import create_sql_generator, resolve_sql_dialect_plan
+
+    datasource_context = (connector, cache)
+    query_request = QueryRequest(
+        question=(
+            f"Create a SQL SELECT statement for a database view named {normalized_name}. "
+            "The SELECT must implement this datasource logic:\n"
+            f"{description.strip()}\n\n"
+            "Return only one SELECT query. Do not create, drop, alter, insert, update or delete data."
+        ),
+        datasource_id=connector.connector_key,
+        user_id=f"admin-view-config:{normalized_name}",
+    )
+    generated_sql = create_sql_generator(
+        datasource_context,
+        dialect_plan=resolve_sql_dialect_plan([datasource_context]),
+    ).generate(query_request)
+
+    engine = create_admin_datasource_engine(connector)
+    try:
+        return build_create_view_sql(connector, normalized_name, generated_sql.sql, engine)
+    finally:
+        engine.dispose()
+
+
 @router.post("/datasources/{connector_id}/introspect")
 def introspect_datasource(
     connector_id: int,
@@ -3162,6 +3554,275 @@ def get_datasource_schema(
         "item": serialize_datasource_schema(cache),
         "viewer": user.username,
     }
+
+
+@router.get("/datasources/{connector_id}/schema/views/{view_name}")
+def get_datasource_view_definition_endpoint(
+    connector_id: int,
+    view_name: str,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    ensure_admin_can_manage_datasource(user, connector)
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    try:
+        item = get_datasource_view_definition(
+            session=session,
+            connector=connector,
+            view_name=view_name,
+            actor=user.username,
+        )
+    except (SQLAlchemyError, ValueError) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    session.commit()
+    return {"item": item}
+
+
+@router.post("/datasources/{connector_id}/schema/views/generate-sql")
+def generate_datasource_view_sql_preview(
+    connector_id: int,
+    request: DatasourceViewSqlGenerationRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    ensure_admin_can_manage_datasource(user, connector)
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    try:
+        generated_sql = generate_datasource_view_sql(
+            session=session,
+            connector=connector,
+            view_name=request.name,
+            description=request.description,
+            actor=user.username,
+        )
+    except (
+        ConfigurationError,
+        LlmProviderError,
+        SQLAlchemyError,
+        SqlValidationError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {"sql": generated_sql}
+
+
+@router.post("/datasources/{connector_id}/schema/views/execute")
+def execute_datasource_view_sql_endpoint(
+    connector_id: int,
+    request: DatasourceViewExecuteRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    ensure_admin_can_manage_datasource(user, connector)
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    try:
+        cache = execute_datasource_view_sql(
+            session=session,
+            connector=connector,
+            view_name=request.name,
+            description=request.description,
+            sql=request.sql,
+            actor=user.username,
+        )
+    except (SQLAlchemyError, SqlValidationError, ValueError) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.view.execute",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={"view": normalize_datasource_view_name(request.name)},
+    )
+    session.commit()
+
+    return {"item": serialize_datasource_schema(cache)}
+
+
+@router.put("/datasources/{connector_id}/schema/views/{view_name}/execute")
+def update_datasource_view_sql_endpoint(
+    connector_id: int,
+    view_name: str,
+    request: DatasourceViewUpdateRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    ensure_admin_can_manage_datasource(user, connector)
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    try:
+        cache = update_datasource_view_sql(
+            session=session,
+            connector=connector,
+            current_view_name=view_name,
+            next_view_name=request.name,
+            description=request.description,
+            sql=request.sql,
+            actor=user.username,
+        )
+    except (SQLAlchemyError, SqlValidationError, ValueError) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.view.update",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={
+            "from": normalize_datasource_view_name(view_name),
+            "to": normalize_datasource_view_name(request.name),
+        },
+    )
+    session.commit()
+
+    return {"item": serialize_datasource_schema(cache)}
+
+
+@router.put("/datasources/{connector_id}/schema/views/{view_name}")
+def save_datasource_view_settings_endpoint(
+    connector_id: int,
+    view_name: str,
+    request: DatasourceViewSettingsRequest,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    ensure_admin_can_manage_datasource(user, connector)
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    try:
+        cache = save_datasource_view_settings(
+            session=session,
+            connector=connector,
+            view_name=view_name,
+            description=request.description,
+            actor=user.username,
+        )
+    except (SQLAlchemyError, ValueError) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.view.save",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={"view": normalize_datasource_view_name(view_name)},
+    )
+    session.commit()
+
+    return {"item": serialize_datasource_schema(cache)}
+
+
+@router.delete("/datasources/{connector_id}/schema/views/{view_name}")
+def delete_datasource_view_endpoint(
+    connector_id: int,
+    view_name: str,
+    user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    connector = get_datasource_connector(session, connector_id)
+
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datasource connector not found.",
+        )
+
+    ensure_admin_can_manage_datasource(user, connector)
+    license_service.ensure_datasource_type_allowed(connector.database_type)
+
+    try:
+        normalized_name = normalize_datasource_view_name(view_name)
+        cache = delete_datasource_view(
+            session=session,
+            connector=connector,
+            view_name=normalized_name,
+            actor=user.username,
+        )
+    except (SQLAlchemyError, ValueError) as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    record_admin_audit(
+        session=session,
+        actor=user.username,
+        action="datasource.view.delete",
+        resource_type="datasource_connector",
+        resource_id=connector.connector_key,
+        details={"view": normalized_name},
+    )
+    session.commit()
+
+    return {"item": serialize_datasource_schema(cache)}
 
 
 @router.put("/datasources/{connector_id}/schema/tables")

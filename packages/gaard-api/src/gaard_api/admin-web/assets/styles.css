@@ -447,6 +447,14 @@ label {
   font-size: 16px;
 }
 
+.schema-object-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .schema-object-columns {
   padding: 10px;
   border: 1px solid var(--line);
@@ -724,6 +732,12 @@ label {
   animation: spin 0.8s linear infinite;
 }
 
+button .spinner {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -761,6 +775,14 @@ label {
 .panel-header h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .audit-controls {

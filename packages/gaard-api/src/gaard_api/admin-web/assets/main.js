@@ -93,6 +93,20 @@ var state = {
   datasourceSchemaSelectedObjectName: "",
   datasourceSchemaShowEnabledOnly: false,
   datasourceSchemaDraftTables: null,
+  datasourceViewDialog: {
+    open: false,
+    mode: "create",
+    originalName: "",
+    loadedName: "",
+    loadedSql: "",
+    name: "",
+    description: "",
+    sql: "",
+    error: "",
+    success: "",
+    busy: "",
+    executed: false
+  },
   datasourceDetailTab: "config",
   datasourceSchemaContentTab: "details",
   datasourceSchemaEditorTab: "tables",
@@ -1521,7 +1535,8 @@ function renderDatasources() {
         <div class="panel-body datasource-detail-grid">${renderDatasourceForm(selected)}</div>
       </section>
     </div>
-    ${selected ? renderDatasourceSchema() : ""}`;
+    ${selected ? renderDatasourceSchema() : ""}
+    ${renderDatasourceViewDialog()}`;
 }
 function getSelectedDatasource() {
   if (state.selectedDatasourceId === "new") return null;
@@ -1862,7 +1877,13 @@ function renderDatasourceSchema() {
   const activeContentTab = getDatasourceExtensionTab("schema", extensionPanels);
   return `
     <section class="panel">
-      <div class="panel-header"><h2>Schema introspection</h2><span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span></div>
+      <div class="panel-header">
+        <h2>Schema introspection</h2>
+        <div class="panel-header-actions">
+          <button type="button" id="create-datasource-view">Create view</button>
+          <span class="badge">${escapeHtml(schema?.introspected_at || "not cached")}</span>
+        </div>
+      </div>
       <div class="panel-body datasource-schema-layout">
         ${state.datasourceSchemaLoading ? `<p class="muted">loading schema</p>` : state.datasourceSchemaError ? `<p class="error">${escapeHtml(state.datasourceSchemaError)}</p>` : schema ? `
           <form id="datasource-schema-form" class="schema-editor mobile-active">
@@ -1887,6 +1908,41 @@ function renderDatasourceSchema() {
             </div></form>` : `<p class="muted">Run schema introspection to cache tables, views, keys and relationships.</p>`}
       </div>
     </section>`;
+}
+function renderDatasourceViewDialog() {
+  const dialog = state.datasourceViewDialog || {};
+  if (!dialog.open) return "";
+  const busy = dialog.busy || "";
+  const isBusy = Boolean(busy);
+  const isEdit = dialog.mode === "edit";
+  const title = isEdit ? "Edit view" : "Create view";
+  return `
+    <div class="modal-backdrop" data-datasource-view-backdrop>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="datasource-view-dialog-title">
+        <div class="modal-header">
+          <div>
+            <h2 id="datasource-view-dialog-title">${escapeHtml(title)}</h2>
+          </div>
+        </div>
+        <form id="datasource-view-form" class="form-grid">
+          <label>View name<input name="name" value="${escapeHtml(dialog.name || "")}" autocomplete="off" /></label>
+          <label>View description<textarea name="description">${escapeHtml(dialog.description || "")}</textarea></label>
+          <label>SQL<textarea name="sql" class="textarea-small" spellcheck="false">${escapeHtml(dialog.sql || "")}</textarea></label>
+          ${busy === "load" ? `<p class="muted"><span class="spinner" aria-hidden="true"></span> Loading view definition.</p>` : ""}
+          ${dialog.error ? `<p class="error">${escapeHtml(dialog.error)}</p>` : ""}
+          ${dialog.success ? `<p class="success">${escapeHtml(dialog.success)}</p>` : ""}
+          <div class="form-actions modal-actions">
+            <button type="button" data-datasource-view-cancel ${isBusy ? "disabled" : ""}>Cancel</button>
+            <button type="button" data-datasource-view-generate ${isBusy ? "disabled" : ""}>${renderBusyButtonLabel(busy, "generate", "Generate SQL")}</button>
+            <button type="button" data-datasource-view-execute ${isBusy ? "disabled" : ""}>${renderBusyButtonLabel(busy, "execute", "Execute SQL")}</button>
+            <button type="submit" class="primary" ${isBusy ? "disabled" : ""}>${renderBusyButtonLabel(busy, "save", "Save View")}</button>
+          </div>
+        </form>
+      </section>
+    </div>`;
+}
+function renderBusyButtonLabel(activeBusy, key, label) {
+  return activeBusy === key ? `<span class="spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>` : escapeHtml(label);
 }
 function getDatasourceExtensionPanels(slot, arguments_) {
   const renderer = slot === "detail" ? "renderDetail" : "renderSchema";
@@ -2115,6 +2171,7 @@ function renderDatasourceObjectDetails(table, settings) {
         <h3>${escapeHtml(table.name)}</h3>
         <span class="badge">${escapeHtml(objectType)}</span>
       </div>
+      ${objectType === "view" ? `<div class="schema-object-actions"><button type="button" data-edit-datasource-view="${escapeHtml(table.name)}">Edit view</button><button type="button" class="danger" data-delete-datasource-view="${escapeHtml(table.name)}">Delete view</button></div>` : ""}
     </div>
     <div class="schema-object-columns">${escapeHtml((table.columns || []).map((column) => `${column.name}:${column.type}${column.primary_key ? " pk" : ""}`).join(", ") || "No columns available.")}</div>
     <label>Datasource logic<textarea data-schema-detail="description" class="textarea-small" name="${escapeHtml(table.name)}__description">${escapeHtml(settings.description || "")}</textarea></label>
@@ -2341,6 +2398,16 @@ function attachSectionHandlers() {
   document.querySelector("#datasource-type")?.addEventListener("change", syncDatasourceTypeFields);
   document.querySelector("[data-connection-field='connection_mode']")?.addEventListener("change", syncOdbcConnectionModeFields);
   document.querySelector("#datasource-schema-form")?.addEventListener("submit", saveDatasourceSchema);
+  document.querySelector("#create-datasource-view")?.addEventListener("click", openDatasourceViewDialog);
+  document.querySelector("#datasource-view-form")?.addEventListener("submit", saveDatasourceView);
+  document.querySelector("[data-datasource-view-generate]")?.addEventListener("click", generateDatasourceViewSql);
+  document.querySelector("[data-datasource-view-execute]")?.addEventListener("click", executeDatasourceViewSql);
+  document.querySelector("[data-datasource-view-cancel]")?.addEventListener("click", closeDatasourceViewDialog);
+  document.querySelector("[data-datasource-view-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget && !state.datasourceViewDialog?.busy) {
+      closeDatasourceViewDialog();
+    }
+  });
   document.querySelectorAll("[data-datasource-detail-tab]").forEach((button) => button.addEventListener("click", () => {
     state.datasourceDetailTab = button.dataset.datasourceDetailTab || "config";
     render();
@@ -2371,6 +2438,12 @@ function attachSectionHandlers() {
       state.datasourceSchemaContentTab = "details";
       render();
     });
+  });
+  document.querySelectorAll("[data-delete-datasource-view]").forEach((button) => {
+    button.addEventListener("click", deleteDatasourceView);
+  });
+  document.querySelectorAll("[data-edit-datasource-view]").forEach((button) => {
+    button.addEventListener("click", openEditDatasourceViewDialog);
   });
   document.querySelector("#invalidate-schema-cache")?.addEventListener("click", invalidateSchemaCache);
   document.querySelector("#test-datasource")?.addEventListener("click", testDatasource);
@@ -2422,6 +2495,7 @@ function attachSectionHandlers() {
     state.datasourceSchemaError = "";
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
+    resetDatasourceViewDialog();
     render();
   });
   document.querySelectorAll("[data-prompt]").forEach((button) => {
@@ -2433,6 +2507,7 @@ function attachSectionHandlers() {
   document.querySelectorAll("[data-datasource]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.selectedDatasourceId = Number(button.dataset.datasource);
+      resetDatasourceViewDialog();
       await loadDatasourceExtensions();
       await loadDatasourceSchema();
     });
@@ -3257,6 +3332,270 @@ async function testDatasource() {
     setMessage("error", extractErrorMessage(error));
   }
 }
+function defaultDatasourceViewDialog() {
+  return {
+    open: false,
+    mode: "create",
+    originalName: "",
+    loadedName: "",
+    loadedSql: "",
+    name: "",
+    description: "",
+    sql: "",
+    error: "",
+    success: "",
+    busy: "",
+    executed: false
+  };
+}
+function resetDatasourceViewDialog() {
+  state.datasourceViewDialog = defaultDatasourceViewDialog();
+}
+function openDatasourceViewDialog() {
+  state.datasourceViewDialog = {
+    ...defaultDatasourceViewDialog(),
+    mode: "create",
+    open: true
+  };
+  render();
+}
+async function openEditDatasourceViewDialog(event) {
+  const selected = getSelectedDatasource();
+  const viewName = event.currentTarget?.dataset?.editDatasourceView || "";
+  if (!selected || !viewName) return;
+  syncDatasourceSchemaDraftFromForm();
+  const rawTables = state.datasourceSchema?.item?.raw_schema?.tables || [];
+  const tableSettings = state.datasourceSchema?.item?.table_settings?.tables || {};
+  const draftSettings = getDatasourceSchemaDraftTables(rawTables, tableSettings)[viewName] || {};
+  const hasDraftDescription = Object.prototype.hasOwnProperty.call(draftSettings, "description");
+  const draftDescription = hasDraftDescription ? draftSettings.description || "" : "";
+  state.datasourceViewDialog = {
+    ...defaultDatasourceViewDialog(),
+    open: true,
+    mode: "edit",
+    originalName: viewName,
+    loadedName: viewName,
+    name: viewName,
+    description: draftDescription,
+    busy: "load"
+  };
+  render();
+  try {
+    const result = await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(viewName)}`);
+    const item = result.item || {};
+    const description = hasDraftDescription ? draftDescription : item.description || "";
+    state.datasourceViewDialog = {
+      ...state.datasourceViewDialog,
+      mode: "edit",
+      originalName: item.name || viewName,
+      loadedName: item.name || viewName,
+      loadedSql: item.sql || "",
+      name: item.name || viewName,
+      description,
+      sql: item.sql || "",
+      busy: "",
+      error: "",
+      success: "",
+      executed: true
+    };
+    render();
+  } catch (error) {
+    state.datasourceViewDialog = {
+      ...state.datasourceViewDialog,
+      busy: "",
+      error: error.message,
+      success: ""
+    };
+    render();
+  }
+}
+function closeDatasourceViewDialog() {
+  if (state.datasourceViewDialog?.busy) return;
+  resetDatasourceViewDialog();
+  render();
+}
+function readDatasourceViewDialogPayload() {
+  const form = document.querySelector("#datasource-view-form");
+  if (!form) {
+    const dialog = state.datasourceViewDialog || {};
+    return {
+      name: String(dialog.name || "").trim(),
+      description: String(dialog.description || ""),
+      sql: String(dialog.sql || "")
+    };
+  }
+  const data = new FormData(form);
+  return {
+    name: String(data.get("name") || "").trim(),
+    description: String(data.get("description") || ""),
+    sql: String(data.get("sql") || "")
+  };
+}
+function setDatasourceViewDialogBusy(payload, busy) {
+  state.datasourceViewDialog = {
+    ...state.datasourceViewDialog,
+    ...payload,
+    busy,
+    error: "",
+    success: ""
+  };
+  render();
+}
+function validateDatasourceViewPayload(payload, requireSql = false) {
+  if (!payload.name) return "View name is required.";
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(payload.name)) {
+    return "View name must start with a letter or underscore and contain only letters, numbers and underscores.";
+  }
+  if (requireSql && !payload.sql.trim()) return "SQL is required.";
+  return "";
+}
+async function generateDatasourceViewSql() {
+  const selected = getSelectedDatasource();
+  if (!selected) return;
+  const dialog = state.datasourceViewDialog || {};
+  const payload = readDatasourceViewDialogPayload();
+  const validationError = validateDatasourceViewPayload(payload);
+  if (validationError) {
+    state.datasourceViewDialog = { ...state.datasourceViewDialog, ...payload, error: validationError, success: "" };
+    render();
+    return;
+  }
+  setDatasourceViewDialogBusy(payload, "generate");
+  try {
+    const result = await api(`/api/v1/admin/datasources/${selected.id}/schema/views/generate-sql`, {
+      method: "POST",
+      body: JSON.stringify({ name: payload.name, description: payload.description })
+    });
+    state.datasourceViewDialog = {
+      ...state.datasourceViewDialog,
+      ...payload,
+      mode: dialog.mode || "create",
+      sql: result.sql || "",
+      busy: "",
+      error: "",
+      success: "SQL generated.",
+      executed: false
+    };
+    render();
+  } catch (error) {
+    state.datasourceViewDialog = { ...state.datasourceViewDialog, ...payload, busy: "", error: error.message, success: "" };
+    render();
+  }
+}
+async function executeDatasourceViewSql() {
+  const selected = getSelectedDatasource();
+  if (!selected) return;
+  const dialog = state.datasourceViewDialog || {};
+  const payload = readDatasourceViewDialogPayload();
+  const validationError = validateDatasourceViewPayload(payload, true);
+  if (validationError) {
+    state.datasourceViewDialog = { ...state.datasourceViewDialog, ...payload, error: validationError, success: "" };
+    render();
+    return;
+  }
+  setDatasourceViewDialogBusy(payload, "execute");
+  try {
+    const result = dialog.mode === "edit"
+      ? await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(dialog.originalName || payload.name)}/execute`, {
+          method: "PUT",
+          body: JSON.stringify(payload)
+        })
+      : await api(`/api/v1/admin/datasources/${selected.id}/schema/views/execute`, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+    state.datasourceSchema = result;
+    state.datasourceSchemaSelectedObjectName = payload.name;
+    state.datasourceSchemaDraftTables = null;
+    state.datasourceViewDialog = {
+      ...state.datasourceViewDialog,
+      ...payload,
+      originalName: payload.name,
+      loadedName: payload.name,
+      loadedSql: payload.sql,
+      busy: "",
+      error: "",
+      success: "View executed and schema introspection refreshed.",
+      executed: true
+    };
+    render();
+  } catch (error) {
+    state.datasourceViewDialog = { ...state.datasourceViewDialog, ...payload, busy: "", error: error.message, success: "" };
+    render();
+  }
+}
+async function saveDatasourceView(event) {
+  event.preventDefault();
+  const selected = getSelectedDatasource();
+  if (!selected) return;
+  const dialog = state.datasourceViewDialog || {};
+  const payload = readDatasourceViewDialogPayload();
+  const canSaveSettingsOnly = (
+    dialog.executed
+    && (dialog.loadedName || dialog.name) === payload.name
+    && (dialog.loadedSql || dialog.sql) === payload.sql
+  );
+  const validationError = validateDatasourceViewPayload(payload, !canSaveSettingsOnly);
+  if (validationError) {
+    state.datasourceViewDialog = { ...state.datasourceViewDialog, ...payload, error: validationError, success: "" };
+    render();
+    return;
+  }
+  setDatasourceViewDialogBusy(payload, "save");
+  try {
+    const result = canSaveSettingsOnly
+      ? await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(dialog.originalName || payload.name)}`, {
+          method: "PUT",
+          body: JSON.stringify({ description: payload.description })
+        })
+      : dialog.mode === "edit"
+        ? await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(dialog.originalName || payload.name)}/execute`, {
+            method: "PUT",
+            body: JSON.stringify(payload)
+          })
+        : await api(`/api/v1/admin/datasources/${selected.id}/schema/views/execute`, {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+    state.datasourceSchema = result;
+    state.datasourceSchemaSelectedObjectName = payload.name;
+    state.datasourceSchemaDraftTables = null;
+    resetDatasourceViewDialog();
+    setMessage("success", "View saved.");
+    render();
+  } catch (error) {
+    state.datasourceViewDialog = { ...state.datasourceViewDialog, ...payload, busy: "", error: error.message, success: "" };
+    render();
+  }
+}
+async function deleteDatasourceView(event) {
+  const selected = getSelectedDatasource();
+  const viewName = event.currentTarget?.dataset?.deleteDatasourceView || "";
+  if (!selected || !viewName) return;
+  if (!await requestConfirmation({
+    title: "Delete view",
+    message: `Delete view "${viewName}"?`,
+    confirmLabel: "Delete"
+  })) return;
+  try {
+    state.datasourceSchemaLoading = true;
+    state.datasourceSchemaError = "";
+    render();
+    state.datasourceSchema = await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(viewName)}`, {
+      method: "DELETE"
+    });
+    state.datasourceSchemaSelectedObjectName = "";
+    state.datasourceSchemaDraftTables = null;
+    state.datasourceSchemaLoading = false;
+    setMessage("success", "View deleted.");
+    render();
+  } catch (error) {
+    state.datasourceSchemaLoading = false;
+    state.datasourceSchemaError = error.message;
+    setMessage("error", error.message);
+    render();
+  }
+}
 async function introspectDatasource() {
   const selected = getSelectedDatasource();
   if (!selected) return;
@@ -3305,6 +3644,7 @@ async function deleteDatasource() {
     state.datasourceSchemaError = "";
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
+    resetDatasourceViewDialog();
     setMessage("success", "Datasource deleted.");
     await loadDatasources();
   } catch (error) {
@@ -3570,6 +3910,7 @@ async function loadDatasourceSchema() {
     state.datasourceSchemaDraftTables = null;
     state.datasourceSchemaLoading = false;
     state.datasourceSchemaError = "";
+    resetDatasourceViewDialog();
     render();
     return;
   }

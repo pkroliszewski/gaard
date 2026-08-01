@@ -3652,6 +3652,133 @@ def test_datasource_schema_table_settings_are_saved(admin_client: TestClient) ->
     assert "Table: appointments" not in item["formatted_schema"]
 
 
+def test_datasource_schema_views_can_be_created_saved_and_deleted(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+
+    datasource = admin_client.get(
+        "/api/v1/admin/datasources",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["items"][0]
+
+    generate_response = admin_client.post(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/generate-sql",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "v_generated_active_patients",
+            "description": "Active patients count.",
+        },
+    )
+
+    assert generate_response.status_code == 200
+    assert generate_response.json()["sql"].startswith(
+        'CREATE VIEW "v_generated_active_patients" AS SELECT'
+    )
+
+    create_response = admin_client.post(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/execute",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "v_active_patients",
+            "description": "Active patient names.",
+            "sql": (
+                "CREATE VIEW v_active_patients AS "
+                "SELECT id, first_name, last_name FROM patients WHERE status = 'active'"
+            ),
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()["item"]
+    assert any(
+        table["name"] == "v_active_patients" and table["object_type"] == "view"
+        for table in created["raw_schema"]["tables"]
+    )
+    assert (
+        created["table_settings"]["tables"]["v_active_patients"]["description"]
+        == "Active patient names."
+    )
+    assert "View: v_active_patients" in created["formatted_schema"]
+
+    definition_response = admin_client.get(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/v_active_patients",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert definition_response.status_code == 200
+    definition = definition_response.json()["item"]
+    assert definition["name"] == "v_active_patients"
+    assert definition["description"] == "Active patient names."
+    assert definition["sql"].startswith("SELECT")
+
+    duplicate_response = admin_client.post(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/execute",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "v_active_patients",
+            "description": "Duplicate.",
+            "sql": "SELECT id FROM patients",
+        },
+    )
+
+    assert duplicate_response.status_code == 400
+    assert "already exists" in duplicate_response.json()["detail"]
+
+    edit_response = admin_client.put(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/v_active_patients/execute",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "v_current_patients",
+            "description": "Renamed active patient view.",
+            "sql": "SELECT id, first_name FROM patients WHERE status = 'active'",
+        },
+    )
+
+    assert edit_response.status_code == 200
+    edited = edit_response.json()["item"]
+    assert any(
+        table["name"] == "v_current_patients" and table["object_type"] == "view"
+        for table in edited["raw_schema"]["tables"]
+    )
+    assert not any(
+        table["name"] == "v_active_patients"
+        for table in edited["raw_schema"]["tables"]
+    )
+    assert (
+        edited["table_settings"]["tables"]["v_current_patients"]["description"]
+        == "Renamed active patient view."
+    )
+
+    save_response = admin_client.put(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/v_current_patients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"description": "Updated active patient view logic."},
+    )
+
+    assert save_response.status_code == 200
+    saved = save_response.json()["item"]
+    assert (
+        saved["table_settings"]["tables"]["v_current_patients"]["description"]
+        == "Updated active patient view logic."
+    )
+    assert "Updated active patient view logic." in saved["formatted_schema"]
+
+    delete_response = admin_client.delete(
+        f"/api/v1/admin/datasources/{datasource['id']}/schema/views/v_current_patients",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert delete_response.status_code == 200
+    deleted = delete_response.json()["item"]
+    assert not any(
+        table["name"] == "v_current_patients"
+        for table in deleted["raw_schema"]["tables"]
+    )
+    assert "v_current_patients" not in deleted["table_settings"]["tables"]
+
+
 def test_query_endpoint_writes_data_query_audit(admin_client: TestClient) -> None:
     headers = auth_headers(admin_client)
 
