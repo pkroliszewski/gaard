@@ -1,6 +1,8 @@
 import { createIdentityModule } from "./identity.js";
 
 var app = document.querySelector("#app");
+var renderedSection = "";
+var scrollRestoreGeneration = 0;
 var licensePackageUpdatePollTimer = null;
 var overviewGridStack = null;
 var overviewGridSaveTimer = null;
@@ -420,24 +422,100 @@ function logout() {
 }
 function render() {
   if (!app) return;
-  if (!state.token) return renderLogin();
-  if (state.mustChangePassword) return renderPasswordChange();
-  renderShell();
+  const scrollSnapshot = captureScrollSnapshot();
+  const restoreGeneration = ++scrollRestoreGeneration;
+  if (!state.token) {
+    renderLogin();
+  } else if (state.mustChangePassword) {
+    renderPasswordChange();
+  } else {
+    renderShell();
+  }
+  restoreScrollSnapshot(scrollSnapshot, restoreGeneration);
 }
 function renderDatasourceSchemaPreservingScroll() {
-  const content = document.querySelector(".content");
-  const schemaObjectListBody = document.querySelector(".schema-object-list-body");
-  const contentScrollTop = content?.scrollTop || 0;
-  const schemaObjectListScrollTop = schemaObjectListBody?.scrollTop || 0;
-
   render();
-
-  const nextContent = document.querySelector(".content");
-  const nextSchemaObjectListBody = document.querySelector(".schema-object-list-body");
-  if (nextContent) nextContent.scrollTop = contentScrollTop;
-  if (nextSchemaObjectListBody) nextSchemaObjectListBody.scrollTop = schemaObjectListScrollTop;
+}
+function collectScrollableElements() {
+  const targets = [];
+  const rootScroller = document.scrollingElement || document.documentElement;
+  if (rootScroller) targets.push(rootScroller);
+  if (!app) return targets;
+  app.querySelectorAll("*").forEach((element) => {
+    if (!(element instanceof HTMLElement)) return;
+    const styles = window.getComputedStyle(element);
+    const canScrollY = ["auto", "scroll", "overlay"].includes(styles.overflowY) && element.scrollHeight > element.clientHeight + 1;
+    const canScrollX = ["auto", "scroll", "overlay"].includes(styles.overflowX) && element.scrollWidth > element.clientWidth + 1;
+    if (canScrollY || canScrollX) targets.push(element);
+  });
+  return targets;
+}
+function getScrollElementKey(element) {
+  const rootScroller = document.scrollingElement || document.documentElement;
+  if (element === rootScroller) return "__document__";
+  const parts = [];
+  let current = element;
+  while (current && current !== app && current instanceof HTMLElement) {
+    let part = current.tagName.toLowerCase();
+    if (current.id) {
+      part += `#${current.id}`;
+    } else {
+      const dataEntry = Object.entries(current.dataset || {}).find(([, value]) => value);
+      if (dataEntry) part += `[data-${dataEntry[0]}="${dataEntry[1]}"]`;
+      const classNames = Array.from(current.classList || []).sort();
+      if (classNames.length) part += `.${classNames.join(".")}`;
+      const parent = current.parentElement;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter((sibling) => sibling.tagName === current.tagName);
+        if (siblings.length > 1) part += `:nth(${siblings.indexOf(current)})`;
+      }
+    }
+    parts.unshift(part);
+    current = current.parentElement;
+  }
+  return parts.join(">");
+}
+function getScrollPosition(element) {
+  const maxTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  const maxLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+  return {
+    top: element.scrollTop,
+    left: element.scrollLeft,
+    atBottom: maxTop > 0 && maxTop - element.scrollTop <= 2,
+    atRight: maxLeft > 0 && maxLeft - element.scrollLeft <= 2
+  };
+}
+function captureScrollSnapshot() {
+  if (!app || !renderedSection) return null;
+  const positions = new Map();
+  collectScrollableElements().forEach((element) => {
+    positions.set(getScrollElementKey(element), getScrollPosition(element));
+  });
+  return { section: renderedSection, positions };
+}
+function restoreScrollSnapshot(snapshot, restoreGeneration) {
+  if (!snapshot || snapshot.section !== renderedSection || !snapshot.positions.size) return;
+  window.requestAnimationFrame(() => {
+    if (restoreGeneration !== scrollRestoreGeneration) return;
+    window.requestAnimationFrame(() => {
+      if (restoreGeneration !== scrollRestoreGeneration) return;
+      const targets = new Map();
+      collectScrollableElements().forEach((element) => {
+        targets.set(getScrollElementKey(element), element);
+      });
+      snapshot.positions.forEach((position, key) => {
+        const element = targets.get(key);
+        if (!element) return;
+        const maxTop = Math.max(0, element.scrollHeight - element.clientHeight);
+        const maxLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+        element.scrollTop = position.atBottom ? maxTop : Math.min(position.top, maxTop);
+        element.scrollLeft = position.atRight ? maxLeft : Math.min(position.left, maxLeft);
+      });
+    });
+  });
 }
 function renderLogin() {
+  renderedSection = "login";
   app.innerHTML = `
     <main class="login-shell">
       <section class="login-panel">
@@ -476,6 +554,7 @@ function renderLogin() {
   });
 }
 function renderPasswordChange() {
+  renderedSection = "password-change";
   app.innerHTML = `
     <main class="login-shell">
       <section class="login-panel">
@@ -519,6 +598,7 @@ function renderPasswordChange() {
 }
 function renderShell() {
   const activeLabel = getSectionLabel(state.section);
+  renderedSection = state.section;
   app.innerHTML = `
     <div class="app-shell">
       ${renderSidebar()}
@@ -2037,9 +2117,7 @@ function renderDatasourceObjectDetails(table, settings) {
       </div>
     </div>
     <div class="schema-object-columns">${escapeHtml((table.columns || []).map((column) => `${column.name}:${column.type}${column.primary_key ? " pk" : ""}`).join(", ") || "No columns available.")}</div>
-    <label>Description<input data-schema-detail="description" name="${escapeHtml(table.name)}__description" value="${escapeHtml(settings.description || "")}" /></label>
-    <label>Primary key guidance<input data-schema-detail="primary_key_prompt" name="${escapeHtml(table.name)}__primary_key_prompt" value="${escapeHtml(settings.primary_key_prompt || "")}" /></label>
-    <label>Foreign key guidance<input data-schema-detail="foreign_key_prompt" name="${escapeHtml(table.name)}__foreign_key_prompt" value="${escapeHtml(settings.foreign_key_prompt || "")}" /></label>
+    <label>Datasource logic<textarea data-schema-detail="description" class="textarea-small" name="${escapeHtml(table.name)}__description">${escapeHtml(settings.description || "")}</textarea></label>
     <label>Join logic<textarea data-schema-detail="join_logic" class="textarea-small" name="${escapeHtml(table.name)}__join_logic">${escapeHtml(settings.join_logic || "")}</textarea></label>`;
 }
 function renderSchemaCache() {
@@ -3248,10 +3326,14 @@ function syncDatasourceSchemaDraftFromForm() {
   const selectedName = state.datasourceSchemaSelectedObjectName;
   const selectedSettings = selectedName ? draftTables[selectedName] : null;
   if (!selectedSettings) return;
-  selectedSettings.description = form.querySelector("[data-schema-detail='description']")?.value || "";
-  selectedSettings.primary_key_prompt = form.querySelector("[data-schema-detail='primary_key_prompt']")?.value || "";
-  selectedSettings.foreign_key_prompt = form.querySelector("[data-schema-detail='foreign_key_prompt']")?.value || "";
-  selectedSettings.join_logic = form.querySelector("[data-schema-detail='join_logic']")?.value || "";
+  const descriptionInput = form.querySelector("[data-schema-detail='description']");
+  const primaryKeyPromptInput = form.querySelector("[data-schema-detail='primary_key_prompt']");
+  const foreignKeyPromptInput = form.querySelector("[data-schema-detail='foreign_key_prompt']");
+  const joinLogicInput = form.querySelector("[data-schema-detail='join_logic']");
+  if (descriptionInput) selectedSettings.description = descriptionInput.value || "";
+  if (primaryKeyPromptInput) selectedSettings.primary_key_prompt = primaryKeyPromptInput.value || "";
+  if (foreignKeyPromptInput) selectedSettings.foreign_key_prompt = foreignKeyPromptInput.value || "";
+  if (joinLogicInput) selectedSettings.join_logic = joinLogicInput.value || "";
 }
 async function saveDatasourceSchema(event) {
   event.preventDefault();
