@@ -96,6 +96,7 @@ def test_repository_update_file_is_valid_and_has_unique_ordered_tags() -> None:
 
     assert [update.tag for update in updates] == [
         "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-01.dashboard-sharing.v1",
         "2026-08-12.duckdb-file-connector.initial.v1",
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
     ]
@@ -246,6 +247,7 @@ def test_repository_update_normalizes_legacy_identity_permission_ids(tmp_path: P
 
     assert applied == (
         "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-01.dashboard-sharing.v1",
         "2026-08-12.duckdb-file-connector.initial.v1",
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
     )
@@ -292,6 +294,7 @@ def test_repository_update_can_be_applied_without_optional_permission_tables(
 
     assert applied == (
         "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-01.dashboard-sharing.v1",
         "2026-08-12.duckdb-file-connector.initial.v1",
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
     )
@@ -554,11 +557,12 @@ def test_startup_repairs_legacy_database_before_app_queries_models(
                 connection.exec_driver_sql(
                     "SELECT tag FROM database_migration_tags"
                 ).scalars()
-                ) == {
-                    "2026-07-31.identity-ids-use-admin-user-id.v1",
-                    "2026-08-12.duckdb-file-connector.initial.v1",
-                    "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
-                }
+            ) == {
+                "2026-07-31.identity-ids-use-admin-user-id.v1",
+                "2026-08-01.dashboard-sharing.v1",
+                "2026-08-12.duckdb-file-connector.initial.v1",
+                "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+            }
     finally:
         reset_metadata_store_for_tests()
 

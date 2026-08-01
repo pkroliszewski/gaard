@@ -20,7 +20,7 @@ DEFAULT_BACKEND_URL = "http://localhost:8000"
 
 app = FastAPI(
     title="GAARD Client",
-    version="0.2.11",
+    version="0.2.12",
     description="Community client for asking governed natural-language questions.",
 )
 
@@ -133,6 +133,16 @@ class ClientDashboardWidgetLayoutItem(BaseModel):
 
 class ClientDashboardWidgetLayoutRequest(BaseModel):
     items: list[ClientDashboardWidgetLayoutItem] = Field(default_factory=list)
+    backend_url: str | None = None
+
+
+class ClientDashboardShareItem(BaseModel):
+    user_id: str = Field(min_length=1, max_length=255)
+    access_level: str = Field(pattern=r"^(view|edit)$")
+
+
+class ClientDashboardShareUpdateRequest(BaseModel):
+    items: list[ClientDashboardShareItem] = Field(default_factory=list)
     backend_url: str | None = None
 
 
@@ -571,6 +581,37 @@ async def list_dashboards(
     )
 
 
+@app.get("/api/dashboard-users")
+async def list_dashboard_users(
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    users_url = f"{backend_url}/api/v1/dashboards/share-users"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                users_url,
+                headers=backend_auth_headers(authorization),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
 @app.post("/api/dashboards")
 async def create_dashboard(
     request: ClientDashboardWriteRequest,
@@ -610,6 +651,73 @@ async def set_active_dashboard(
             {"dashboard_id": request.dashboard_id},
         ),
     )
+
+
+@app.get("/api/dashboards/{dashboard_id}/shares")
+async def get_dashboard_shares(
+    dashboard_id: str,
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    shares_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/shares"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                shares_url,
+                headers=backend_auth_headers(authorization),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
+@app.put("/api/dashboards/{dashboard_id}/shares")
+async def update_dashboard_shares(
+    dashboard_id: str,
+    request: ClientDashboardShareUpdateRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
+    shares_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/shares"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(
+                shares_url,
+                **backend_request_kwargs(
+                    authorization,
+                    {"items": [item.model_dump() for item in request.items]},
+                ),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.json()
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+        )
+
+    return cast(dict[str, Any], response.json())
 
 
 @app.put("/api/dashboards/{dashboard_id}")

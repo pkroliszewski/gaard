@@ -1,3 +1,9 @@
+### v0.2.14 API / v0.2.12 Client - Shared dashboards and collapsible client navigation
+- Added API-backed dashboard sharing with `view` and `edit` access levels, owner-only deletion, shared dashboard listing, and metadata migrations for existing installations.
+- Added the client dashboard sharing dialog, permission-aware dashboard editing controls, and view-only handling for shared dashboards.
+- Added a collapsible client navigation rail matching the mobile icon-only layout and persisted the collapsed state locally.
+- Bumped `gaard-api` to `0.2.14` and `gaard-client` to `0.2.12`; private package versions are unchanged.
+
 ### v0.2.11 - Admin extension compatibility fixes
 - Added browser-compatible admin API request id fallback for extension panels when `crypto.randomUUID()` is unavailable.
 - Prevented admin extension iframes from collapsing while empty, loading, or reporting their first content height.

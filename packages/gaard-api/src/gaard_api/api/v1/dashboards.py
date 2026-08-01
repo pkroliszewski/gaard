@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -9,7 +8,9 @@ from sqlalchemy.orm import Session, aliased
 
 from gaard_api.admin.database import get_session
 from gaard_api.admin.models import (
+    AdminUser,
     Dashboard,
+    DashboardShare,
     DashboardUserState,
     DashboardWidget,
     OverviewWidget,
@@ -17,10 +18,9 @@ from gaard_api.admin.models import (
     UserSavedMetric,
 )
 from gaard_api.api.v1.admin import (
-    execute_overview_widget, 
+    execute_overview_widget,
     serialize_overview_widget_config,
     serialize_datetime,
-    serialize_dashboard
 )
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 
@@ -47,6 +47,8 @@ DASHBOARD_WIDGET_DEFAULT_SIZES = {
     "area": (6, 4),
     "table": (8, 5),
 }
+
+DASHBOARD_SHARE_ACCESS_LEVELS = {"view", "edit"}
 
 
 class DashboardWriteRequest(BaseModel):
@@ -80,6 +82,15 @@ class DashboardWidgetLayoutRequest(BaseModel):
     items: list[DashboardWidgetLayoutItem] = Field(default_factory=list)
 
 
+class DashboardShareUpdateItem(BaseModel):
+    user_id: str = Field(min_length=1, max_length=255)
+    access_level: str = Field(pattern=r"^(view|edit)$")
+
+
+class DashboardShareUpdateRequest(BaseModel):
+    items: list[DashboardShareUpdateItem] = Field(default_factory=list)
+
+
 def dashboard_owner_user_id(principal: AuthenticatedSession) -> str:
     return str(principal.user.id)
 
@@ -90,6 +101,138 @@ def dashboard_owner_username(principal: AuthenticatedSession) -> str:
 
 def saved_metric_tag_names(owner_username: str) -> tuple[str, str]:
     return ("public", owner_username)
+
+
+def serialize_dashboard(
+    dashboard: Dashboard,
+    *,
+    access_level: str = "owner",
+    is_owner: bool = True,
+) -> dict[str, Any]:
+    can_edit = is_owner or access_level == "edit"
+    return {
+        "id": dashboard.dashboard_id,
+        "name": dashboard.name,
+        "description": dashboard.description,
+        "owner_user_id": dashboard.owner_user_id,
+        "owner_username": dashboard.owner_username,
+        "access_level": "owner" if is_owner else access_level,
+        "is_owner": is_owner,
+        "can_edit": can_edit,
+        "can_share": can_edit,
+        "can_delete": is_owner,
+        "shared": not is_owner,
+        "created_at": serialize_datetime(dashboard.created_at),
+        "updated_at": serialize_datetime(dashboard.updated_at),
+    }
+
+
+def serialize_dashboard_share(share: DashboardShare) -> dict[str, Any]:
+    return {
+        "user_id": share.target_user_id,
+        "username": share.target_username,
+        "access_level": share.access_level,
+        "created_by_user_id": share.created_by_user_id,
+        "created_by_username": share.created_by_username,
+        "created_at": serialize_datetime(share.created_at),
+        "updated_at": serialize_datetime(share.updated_at),
+    }
+
+
+def serialize_share_user(user: AdminUser) -> dict[str, Any]:
+    return {
+        "user_id": str(user.id),
+        "username": user.username,
+        "display_name": user.display_name,
+        "name": user.display_name or user.username,
+        "role": user.role,
+    }
+
+
+def dashboard_share_for_principal(
+    session: Session,
+    dashboard_id: str,
+    principal: AuthenticatedSession,
+) -> DashboardShare | None:
+    return session.scalar(
+        select(DashboardShare).where(
+            DashboardShare.dashboard_id == dashboard_id,
+            DashboardShare.target_user_id == dashboard_owner_user_id(principal),
+        )
+    )
+
+
+def dashboard_access_level(
+    session: Session,
+    dashboard: Dashboard,
+    principal: AuthenticatedSession,
+) -> tuple[str, bool] | None:
+    owner_user_id = dashboard_owner_user_id(principal)
+    if dashboard.owner_user_id == owner_user_id:
+        return "owner", True
+
+    share = dashboard_share_for_principal(session, dashboard.dashboard_id, principal)
+    if share is None or share.access_level not in DASHBOARD_SHARE_ACCESS_LEVELS:
+        return None
+    return share.access_level, False
+
+
+def serialize_dashboard_for_principal(
+    session: Session,
+    dashboard: Dashboard,
+    principal: AuthenticatedSession,
+) -> dict[str, Any]:
+    access = dashboard_access_level(session, dashboard, principal)
+    if access is None:
+        return serialize_dashboard(dashboard, access_level="view", is_owner=False)
+    access_level, is_owner = access
+    return serialize_dashboard(dashboard, access_level=access_level, is_owner=is_owner)
+
+
+def get_dashboard_with_access(
+    session: Session,
+    dashboard_id: str,
+    principal: AuthenticatedSession,
+) -> tuple[Dashboard, str, bool] | None:
+    dashboard = session.scalar(select(Dashboard).where(Dashboard.dashboard_id == dashboard_id))
+    if dashboard is None:
+        return None
+
+    access = dashboard_access_level(session, dashboard, principal)
+    if access is None:
+        return None
+    access_level, is_owner = access
+    return dashboard, access_level, is_owner
+
+
+def can_edit_dashboard(access_level: str, is_owner: bool) -> bool:
+    return is_owner or access_level == "edit"
+
+
+def can_delete_dashboard(is_owner: bool) -> bool:
+    return is_owner
+
+
+def ensure_dashboard_edit_access(access_level: str, is_owner: bool) -> None:
+    if not can_edit_dashboard(access_level, is_owner):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Dashboard edit access is required.",
+        )
+
+
+def list_dashboard_share_users(session: Session) -> list[AdminUser]:
+    return list(session.scalars(select(AdminUser).order_by(AdminUser.username.asc(), AdminUser.id.asc())))
+
+
+def list_dashboard_shares(session: Session, dashboard_id: str) -> list[DashboardShare]:
+    return list(
+        session.scalars(
+            select(DashboardShare)
+            .where(DashboardShare.dashboard_id == dashboard_id)
+            .order_by(DashboardShare.target_username.asc(), DashboardShare.id.asc())
+        )
+    )
 
 
 def serialize_saved_metric(
@@ -133,19 +276,6 @@ def serialize_dashboard_widget(
     }
 
 
-def get_dashboard_for_owner(
-    session: Session,
-    dashboard_id: str,
-    owner_user_id: str,
-) -> Dashboard | None:
-    return session.scalar(
-        select(Dashboard).where(
-            Dashboard.dashboard_id == dashboard_id,
-            Dashboard.owner_user_id == owner_user_id,
-        )
-    )
-
-
 def get_or_create_dashboard_user_state(
     session: Session,
     principal: AuthenticatedSession,
@@ -174,34 +304,57 @@ def list_owner_dashboards(session: Session, owner_user_id: str) -> list[Dashboar
     )
 
 
+def list_accessible_dashboards(
+    session: Session,
+    principal: AuthenticatedSession,
+) -> list[Dashboard]:
+    owner_user_id = dashboard_owner_user_id(principal)
+    dashboards_by_id: dict[str, Dashboard] = {
+        dashboard.dashboard_id: dashboard
+        for dashboard in list_owner_dashboards(session, owner_user_id)
+    }
+    shared_dashboard_ids = list(
+        session.scalars(
+            select(DashboardShare.dashboard_id).where(
+                DashboardShare.target_user_id == owner_user_id
+            )
+        )
+    )
+    if shared_dashboard_ids:
+        for dashboard in session.scalars(
+            select(Dashboard).where(Dashboard.dashboard_id.in_(shared_dashboard_ids))
+        ):
+            dashboards_by_id.setdefault(dashboard.dashboard_id, dashboard)
+
+    return sorted(
+        dashboards_by_id.values(),
+        key=lambda dashboard: (dashboard.updated_at, dashboard.id),
+        reverse=True,
+    )
+
+
 def list_dashboard_widgets(
     session: Session,
     dashboard_id: str,
-    owner_user_id: str,
 ) -> list[DashboardWidget]:
     return list(
         session.scalars(
             select(DashboardWidget)
-            .where(
-                DashboardWidget.dashboard_id == dashboard_id,
-                DashboardWidget.owner_user_id == owner_user_id,
-            )
+            .where(DashboardWidget.dashboard_id == dashboard_id)
             .order_by(DashboardWidget.y.asc(), DashboardWidget.x.asc(), DashboardWidget.id.asc())
         )
     )
 
 
-def get_dashboard_widget_for_owner(
+def get_dashboard_widget(
     session: Session,
     dashboard_id: str,
     widget_id: str,
-    owner_user_id: str,
 ) -> DashboardWidget | None:
     return session.scalar(
         select(DashboardWidget).where(
             DashboardWidget.dashboard_id == dashboard_id,
             DashboardWidget.widget_id == widget_id,
-            DashboardWidget.owner_user_id == owner_user_id,
         )
     )
 
@@ -284,7 +437,7 @@ def serialize_dashboard_collection(
     session: Session,
     principal: AuthenticatedSession,
 ) -> dict[str, Any]:
-    dashboards = list_owner_dashboards(session, dashboard_owner_user_id(principal))
+    dashboards = list_accessible_dashboards(session, principal)
     active_dashboard_id = resolve_active_dashboard_id(session, principal, dashboards)
     active_dashboard = next(
         (
@@ -296,12 +449,17 @@ def serialize_dashboard_collection(
     )
 
     return {
-        "items": [serialize_dashboard(dashboard) for dashboard in dashboards],
+        "items": [
+            serialize_dashboard_for_principal(session, dashboard, principal)
+            for dashboard in dashboards
+        ],
         "active_dashboard_id": active_dashboard_id,
-        "active_dashboard": serialize_dashboard(active_dashboard)
+        "active_dashboard": serialize_dashboard_for_principal(session, active_dashboard, principal)
         if active_dashboard is not None
         else None,
         "viewer": dashboard_owner_username(principal),
+        "viewer_user_id": dashboard_owner_user_id(principal),
+        "share_user_count": len(list_dashboard_share_users(session)),
     }
 
 
@@ -314,6 +472,119 @@ def list_dashboards(
     session.commit()
 
     return payload
+
+
+@router.get("/dashboards/share-users")
+def list_dashboard_users_for_sharing(
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    users = list_dashboard_share_users(session)
+    return {
+        "items": [serialize_share_user(user) for user in users],
+        "total_users": len(users),
+        "viewer_user_id": dashboard_owner_user_id(principal),
+        "viewer": dashboard_owner_username(principal),
+    }
+
+
+@router.get("/dashboards/{dashboard_id}/shares")
+def get_dashboard_shares(
+    dashboard_id: str,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dashboard not found.",
+        )
+    dashboard, access_level, is_owner = access
+    ensure_dashboard_edit_access(access_level, is_owner)
+    shares = list_dashboard_shares(session, dashboard.dashboard_id)
+    users = list_dashboard_share_users(session)
+    return {
+        "dashboard_id": dashboard.dashboard_id,
+        "items": [serialize_dashboard_share(share) for share in shares],
+        "users": [serialize_share_user(user) for user in users],
+        "total_users": len(users),
+    }
+
+
+@router.put("/dashboards/{dashboard_id}/shares")
+def update_dashboard_shares(
+    dashboard_id: str,
+    request: DashboardShareUpdateRequest,
+    principal: AuthenticatedSession = Depends(get_current_api_user),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dashboard not found.",
+        )
+    dashboard, access_level, is_owner = access
+    ensure_dashboard_edit_access(access_level, is_owner)
+
+    requested_by_user_id = dashboard_owner_user_id(principal)
+    requested_by_username = dashboard_owner_username(principal)
+    users_by_id = {
+        str(user.id): user
+        for user in session.scalars(select(AdminUser))
+    }
+    existing_shares = {
+        share.target_user_id: share
+        for share in list_dashboard_shares(session, dashboard.dashboard_id)
+    }
+    next_target_ids: set[str] = set()
+
+    for item in request.items:
+        target_user_id = item.user_id.strip()
+        if not target_user_id or target_user_id == dashboard.owner_user_id:
+            continue
+        target_user = users_by_id.get(target_user_id)
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Share target user {target_user_id} does not exist.",
+            )
+        if item.access_level not in DASHBOARD_SHARE_ACCESS_LEVELS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Dashboard share access level must be view or edit.",
+            )
+
+        next_target_ids.add(target_user_id)
+        share = existing_shares.get(target_user_id)
+        if share is None:
+            share = DashboardShare(
+                dashboard_id=dashboard.dashboard_id,
+                target_user_id=target_user_id,
+                target_username=target_user.username,
+                access_level=item.access_level,
+                created_by_user_id=requested_by_user_id,
+                created_by_username=requested_by_username,
+            )
+            session.add(share)
+            existing_shares[target_user_id] = share
+        else:
+            share.target_username = target_user.username
+            share.access_level = item.access_level
+            share.created_by_user_id = share.created_by_user_id or requested_by_user_id
+            share.created_by_username = share.created_by_username or requested_by_username
+
+    for target_user_id, share in existing_shares.items():
+        if target_user_id not in next_target_ids:
+            session.delete(share)
+
+    session.commit()
+    shares = list_dashboard_shares(session, dashboard.dashboard_id)
+    return {
+        "dashboard_id": dashboard.dashboard_id,
+        "items": [serialize_dashboard_share(share) for share in shares],
+    }
 
 
 @router.get("/dashboards/metrics")
@@ -366,7 +637,6 @@ def delete_saved_dashboard_metric(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    owner_user_id = dashboard_owner_user_id(principal)
     metric = get_saved_metric_for_owner(session, widget_key, dashboard_owner_username(principal))
     if metric is None:
         raise HTTPException(
@@ -378,7 +648,6 @@ def delete_saved_dashboard_metric(
         session.scalars(
             select(DashboardWidget).where(
                 DashboardWidget.metric_widget_key == widget_key,
-                DashboardWidget.owner_user_id == owner_user_id,
             )
         )
     )
@@ -438,17 +707,13 @@ def set_active_dashboard(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    dashboard = get_dashboard_for_owner(
-        session,
-        request.dashboard_id,
-        dashboard_owner_user_id(principal),
-    )
-
-    if dashboard is None:
+    access = get_dashboard_with_access(session, request.dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, access_level, is_owner = access
 
     state = get_or_create_dashboard_user_state(session, principal)
     state.active_dashboard_id = dashboard.dashboard_id
@@ -456,7 +721,11 @@ def set_active_dashboard(
 
     return {
         "active_dashboard_id": dashboard.dashboard_id,
-        "active_dashboard": serialize_dashboard(dashboard),
+        "active_dashboard": serialize_dashboard(
+            dashboard,
+            access_level=access_level,
+            is_owner=is_owner,
+        ),
     }
 
 
@@ -467,17 +736,14 @@ def update_dashboard(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    dashboard = get_dashboard_for_owner(
-        session,
-        dashboard_id,
-        dashboard_owner_user_id(principal),
-    )
-
-    if dashboard is None:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, access_level, is_owner = access
+    ensure_dashboard_edit_access(access_level, is_owner)
 
     name = request.name.strip()
     if not name:
@@ -488,10 +754,15 @@ def update_dashboard(
 
     dashboard.name = name
     dashboard.description = request.description.strip()
-    dashboard.owner_username = dashboard_owner_username(principal)
     session.commit()
 
-    return {"item": serialize_dashboard(dashboard)}
+    return {
+        "item": serialize_dashboard(
+            dashboard,
+            access_level=access_level,
+            is_owner=is_owner,
+        )
+    }
 
 
 @router.get("/dashboards/{dashboard_id}/widgets")
@@ -500,15 +771,15 @@ def list_widgets_for_dashboard(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    owner_user_id = dashboard_owner_user_id(principal)
-    dashboard = get_dashboard_for_owner(session, dashboard_id, owner_user_id)
-    if dashboard is None:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, _access_level, _is_owner = access
 
-    widgets = list_dashboard_widgets(session, dashboard.dashboard_id, owner_user_id)
+    widgets = list_dashboard_widgets(session, dashboard.dashboard_id)
     return {
         "dashboard_id": dashboard.dashboard_id,
         "items": [serialize_dashboard_widget(session, widget) for widget in widgets],
@@ -523,12 +794,14 @@ def add_widget_to_dashboard(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     owner_user_id = dashboard_owner_user_id(principal)
-    dashboard = get_dashboard_for_owner(session, dashboard_id, owner_user_id)
-    if dashboard is None:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, access_level, is_owner = access
+    ensure_dashboard_edit_access(access_level, is_owner)
 
     metric = get_saved_metric_for_owner(
         session,
@@ -554,7 +827,7 @@ def add_widget_to_dashboard(
             detail="Unsupported widget type.",
         )
 
-    widgets = list_dashboard_widgets(session, dashboard.dashboard_id, owner_user_id)
+    widgets = list_dashboard_widgets(session, dashboard.dashboard_id)
     width, height = default_dashboard_widget_size(request.visualization_type)
     widget = DashboardWidget(
         widget_id=uuid4().hex,
@@ -582,21 +855,21 @@ def update_dashboard_widget_layout(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    owner_user_id = dashboard_owner_user_id(principal)
-    dashboard = get_dashboard_for_owner(session, dashboard_id, owner_user_id)
-    if dashboard is None:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, access_level, is_owner = access
+    ensure_dashboard_edit_access(access_level, is_owner)
 
     updated: list[DashboardWidget] = []
     for item in request.items:
-        widget = get_dashboard_widget_for_owner(
+        widget = get_dashboard_widget(
             session,
             dashboard.dashboard_id,
             item.widget_id,
-            owner_user_id,
         )
         if widget is None:
             continue
@@ -620,19 +893,19 @@ def delete_dashboard_widget(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    owner_user_id = dashboard_owner_user_id(principal)
-    dashboard = get_dashboard_for_owner(session, dashboard_id, owner_user_id)
-    if dashboard is None:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, access_level, is_owner = access
+    ensure_dashboard_edit_access(access_level, is_owner)
 
-    widget = get_dashboard_widget_for_owner(
+    widget = get_dashboard_widget(
         session,
         dashboard.dashboard_id,
         widget_id,
-        owner_user_id,
     )
     if widget is None:
         raise HTTPException(
@@ -651,31 +924,35 @@ def delete_dashboard(
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    dashboard = get_dashboard_for_owner(
-        session,
-        dashboard_id,
-        dashboard_owner_user_id(principal),
-    )
-
-    if dashboard is None:
+    access = get_dashboard_with_access(session, dashboard_id, principal)
+    if access is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard not found.",
         )
+    dashboard, _access_level, is_owner = access
+    if not can_delete_dashboard(is_owner):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dashboard owner can delete it.",
+        )
 
-    owner_user_id = dashboard_owner_user_id(principal)
     state = get_or_create_dashboard_user_state(session, principal)
-    for widget in list_dashboard_widgets(session, dashboard.dashboard_id, owner_user_id):
+    state_was_active = state.active_dashboard_id == dashboard_id
+    for widget in list_dashboard_widgets(session, dashboard.dashboard_id):
         session.delete(widget)
+    for share in list_dashboard_shares(session, dashboard.dashboard_id):
+        session.delete(share)
     session.delete(dashboard)
     session.flush()
 
-    if state.active_dashboard_id == dashboard_id:
-        next_dashboard = session.scalar(
-            select(Dashboard)
-            .where(Dashboard.owner_user_id == owner_user_id)
-            .order_by(Dashboard.updated_at.desc(), Dashboard.id.desc())
-        )
+    for user_state in session.scalars(
+        select(DashboardUserState).where(DashboardUserState.active_dashboard_id == dashboard_id)
+    ):
+        user_state.active_dashboard_id = ""
+
+    if state_was_active:
+        next_dashboard = next(iter(list_accessible_dashboards(session, principal)), None)
         state.active_dashboard_id = next_dashboard.dashboard_id if next_dashboard else ""
 
     session.commit()
