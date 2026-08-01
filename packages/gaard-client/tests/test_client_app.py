@@ -36,8 +36,14 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "/api/dashboards" in response.text
     assert "data-save-widget" in response.text
     assert "data-toggle-dashboard-menu" in response.text
+    assert "data-toggle-sidebar" in response.text
+    assert "sidebar-collapsed" in response.text
     assert "Add new dashboard" in response.text
     assert "data-delete-dashboard" in response.text
+    assert "data-open-dashboard-share" in response.text
+    assert "Share dashboard" in response.text
+    assert "/api/dashboard-users" in response.text
+    assert "/shares" in response.text
     assert "analysis-progress" in response.text
     assert "analysis-log" in response.text
     assert "analysis-reply-question" in response.text
@@ -127,6 +133,10 @@ def test_client_dashboard_edit_mode_styles() -> None:
     assert "dashboard-edit-saving-spinner" in response.text
     assert "dashboard-grid-readonly" in response.text
     assert "ui-resizable-handle" in response.text
+    assert ".app-shell.sidebar-collapsed" in response.text
+    assert ".sidebar-toggle-button" in response.text
+    assert ".dashboard-share-dialog" in response.text
+    assert ".dashboard-share-row" in response.text
 
 
 def test_client_dashboard_mobile_styles() -> None:
@@ -937,6 +947,72 @@ def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
     assert captured[9]["url"] == (
         "http://backend.example/api/v1/dashboards/dash-1/widgets/widget-1"
     )
+    assert all(call["headers"] == headers for call in captured)
+
+
+def test_client_app_proxies_dashboard_sharing(monkeypatch: Any) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def get(self, url: str, headers: Any = None) -> httpx.Response:
+            captured.append({"method": "GET", "url": url, "headers": headers})
+            request = httpx.Request("GET", url)
+            if url.endswith("/share-users"):
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    json={"items": [{"user_id": "2", "username": "analyst"}]},
+                )
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"items": [{"user_id": "2", "access_level": "view"}]},
+            )
+
+        async def put(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
+            captured.append(
+                {"method": "PUT", "url": url, "json": json, "headers": headers}
+            )
+            request = httpx.Request("PUT", url)
+            return httpx.Response(status_code=200, request=request, json={"items": json["items"]})
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer token"}
+
+    users_response = client.get(
+        "/api/dashboard-users?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    shares_response = client.get(
+        "/api/dashboards/dash-1/shares?backend_url=http://backend.example/",
+        headers=headers,
+    )
+    save_response = client.put(
+        "/api/dashboards/dash-1/shares",
+        headers=headers,
+        json={
+            "items": [{"user_id": "2", "access_level": "edit"}],
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert users_response.status_code == 200
+    assert shares_response.status_code == 200
+    assert save_response.status_code == 200
+    assert captured[0]["url"] == "http://backend.example/api/v1/dashboards/share-users"
+    assert captured[1]["url"] == "http://backend.example/api/v1/dashboards/dash-1/shares"
+    assert captured[2]["url"] == "http://backend.example/api/v1/dashboards/dash-1/shares"
+    assert captured[2]["json"] == {"items": [{"user_id": "2", "access_level": "edit"}]}
     assert all(call["headers"] == headers for call in captured)
 
 

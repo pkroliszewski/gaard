@@ -96,6 +96,7 @@ def test_repository_update_file_is_valid_and_has_unique_ordered_tags() -> None:
 
     assert [update.tag for update in updates] == [
         "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-01.dashboard-sharing.v1",
     ]
 
 
@@ -242,7 +243,10 @@ def test_repository_update_normalizes_legacy_identity_permission_ids(tmp_path: P
         migration_tags,
     )
 
-    assert applied == ("2026-07-31.identity-ids-use-admin-user-id.v1",)
+    assert applied == (
+        "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-01.dashboard-sharing.v1",
+    )
     with engine.connect() as connection:
         datasource_ids = connection.exec_driver_sql(
             "SELECT connector_id, identity_id "
@@ -272,7 +276,10 @@ def test_repository_update_can_be_applied_without_optional_permission_tables(
         migration_tags,
     )
 
-    assert applied == ("2026-07-31.identity-ids-use-admin-user-id.v1",)
+    assert applied == (
+        "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-01.dashboard-sharing.v1",
+    )
 
 
 def test_legacy_repair_adds_all_pre_tag_core_schema_changes(tmp_path: Path) -> None:
@@ -434,9 +441,12 @@ def test_startup_repairs_legacy_database_before_app_queries_models(
             assert connection.exec_driver_sql(
                 "SELECT is_system_admin FROM admin_users WHERE id = 1"
             ).scalar_one() == 1
-            assert connection.exec_driver_sql(
-                "SELECT tag FROM database_migration_tags"
-            ).scalar_one() == "2026-07-31.identity-ids-use-admin-user-id.v1"
+            assert set(
+                connection.exec_driver_sql("SELECT tag FROM database_migration_tags").scalars()
+            ) == {
+                "2026-07-31.identity-ids-use-admin-user-id.v1",
+                "2026-08-01.dashboard-sharing.v1",
+            }
     finally:
         reset_metadata_store_for_tests()
 

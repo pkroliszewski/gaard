@@ -16,6 +16,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_conversation_turns_turn_id ON conversation_
 CREATE TABLE IF NOT EXISTS conversations (id INTEGER NOT NULL, conversation_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, status VARCHAR(50) NOT NULL, datasource_id VARCHAR(255) NOT NULL, datasource_ids_json TEXT NOT NULL, title VARCHAR(255) NOT NULL, summary_json TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id));
 CREATE UNIQUE INDEX IF NOT EXISTS ix_conversations_conversation_id ON conversations (conversation_id);
 CREATE TABLE IF NOT EXISTS dashboard_user_states (owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, active_dashboard_id VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (owner_user_id));
+CREATE TABLE IF NOT EXISTS dashboard_shares (id INTEGER NOT NULL, dashboard_id VARCHAR(64) NOT NULL, target_user_id VARCHAR(255) NOT NULL, target_username VARCHAR(255) NOT NULL, access_level VARCHAR(20) NOT NULL, created_by_user_id VARCHAR(255) NOT NULL, created_by_username VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_dashboard_shares_dashboard_target UNIQUE (dashboard_id, target_user_id));
 CREATE TABLE IF NOT EXISTS dashboard_widgets (id INTEGER NOT NULL, widget_id VARCHAR(64) NOT NULL, dashboard_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, metric_widget_key VARCHAR(255) NOT NULL, title VARCHAR(255) NOT NULL, visualization_type VARCHAR(50) NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, w INTEGER NOT NULL, h INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_dashboard_widgets_widget_id UNIQUE (widget_id));
 CREATE TABLE IF NOT EXISTS dashboards (id INTEGER NOT NULL, dashboard_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, description TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id));
 CREATE UNIQUE INDEX IF NOT EXISTS ix_dashboards_dashboard_id ON dashboards (dashboard_id);
@@ -63,6 +64,12 @@ CREATE INDEX IF NOT EXISTS ix_conversations_owner_username ON conversations (own
 CREATE INDEX IF NOT EXISTS ix_conversations_status ON conversations (status);
 CREATE INDEX IF NOT EXISTS ix_dashboard_user_states_active_dashboard_id ON dashboard_user_states (active_dashboard_id);
 CREATE INDEX IF NOT EXISTS ix_dashboard_user_states_owner_username ON dashboard_user_states (owner_username);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_access_level ON dashboard_shares (access_level);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_created_by_user_id ON dashboard_shares (created_by_user_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_created_by_username ON dashboard_shares (created_by_username);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_dashboard_id ON dashboard_shares (dashboard_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_target_user_id ON dashboard_shares (target_user_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_target_username ON dashboard_shares (target_username);
 CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_dashboard_id ON dashboard_widgets (dashboard_id);
 CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_metric_widget_key ON dashboard_widgets (metric_widget_key);
 CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_owner_user_id ON dashboard_widgets (owner_user_id);
@@ -97,6 +104,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_conversation_turns_turn_id ON conversation_
 CREATE TABLE IF NOT EXISTS conversations (id SERIAL NOT NULL, conversation_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, status VARCHAR(50) NOT NULL, datasource_id VARCHAR(255) NOT NULL, datasource_ids_json TEXT NOT NULL, title VARCHAR(255) NOT NULL, summary_json TEXT NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id));
 CREATE UNIQUE INDEX IF NOT EXISTS ix_conversations_conversation_id ON conversations (conversation_id);
 CREATE TABLE IF NOT EXISTS dashboard_user_states (owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, active_dashboard_id VARCHAR(64) NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (owner_user_id));
+CREATE TABLE IF NOT EXISTS dashboard_shares (id SERIAL NOT NULL, dashboard_id VARCHAR(64) NOT NULL, target_user_id VARCHAR(255) NOT NULL, target_username VARCHAR(255) NOT NULL, access_level VARCHAR(20) NOT NULL, created_by_user_id VARCHAR(255) NOT NULL, created_by_username VARCHAR(255) NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_dashboard_shares_dashboard_target UNIQUE (dashboard_id, target_user_id));
 CREATE TABLE IF NOT EXISTS dashboard_widgets (id SERIAL NOT NULL, widget_id VARCHAR(64) NOT NULL, dashboard_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, metric_widget_key VARCHAR(255) NOT NULL, title VARCHAR(255) NOT NULL, visualization_type VARCHAR(50) NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, w INTEGER NOT NULL, h INTEGER NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_dashboard_widgets_widget_id UNIQUE (widget_id));
 CREATE TABLE IF NOT EXISTS dashboards (id SERIAL NOT NULL, dashboard_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, owner_username VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, description TEXT NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id));
 CREATE UNIQUE INDEX IF NOT EXISTS ix_dashboards_dashboard_id ON dashboards (dashboard_id);
@@ -144,6 +152,12 @@ CREATE INDEX IF NOT EXISTS ix_conversations_owner_username ON conversations (own
 CREATE INDEX IF NOT EXISTS ix_conversations_status ON conversations (status);
 CREATE INDEX IF NOT EXISTS ix_dashboard_user_states_active_dashboard_id ON dashboard_user_states (active_dashboard_id);
 CREATE INDEX IF NOT EXISTS ix_dashboard_user_states_owner_username ON dashboard_user_states (owner_username);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_access_level ON dashboard_shares (access_level);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_created_by_user_id ON dashboard_shares (created_by_user_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_created_by_username ON dashboard_shares (created_by_username);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_dashboard_id ON dashboard_shares (dashboard_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_target_user_id ON dashboard_shares (target_user_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_shares_target_username ON dashboard_shares (target_username);
 CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_dashboard_id ON dashboard_widgets (dashboard_id);
 CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_metric_widget_key ON dashboard_widgets (metric_widget_key);
 CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_owner_user_id ON dashboard_widgets (owner_user_id);

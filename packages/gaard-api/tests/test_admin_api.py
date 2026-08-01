@@ -37,6 +37,7 @@ from gaard_api.admin.models import (
     BusinessKnowledgeClaim,
     BusinessLogicSuggestion,
     Dashboard,
+    DashboardShare,
     DashboardUserState,
     DashboardWidget,
     DataQueryAuditLog,
@@ -1106,6 +1107,245 @@ def test_dashboards_are_scoped_to_authenticated_user(
         admin_state = session.get(DashboardUserState, "1")
         assert admin_state is not None
         assert admin_state.active_dashboard_id == admin_second_dashboard["id"]
+
+
+def test_dashboard_sharing_permissions(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "refresh_if_due",
+        lambda: SimpleNamespace(features={"identity_management": True}),
+    )
+    admin_headers = auth_headers(admin_client)
+    add_local_user("analyst", "analyst-password")
+    add_local_user("viewer", "viewer-password")
+    analyst_headers = login_as(admin_client, "analyst", "analyst-password")
+    viewer_headers = login_as(admin_client, "viewer", "viewer-password")
+
+    admin_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=admin_headers,
+        json={"name": "Shared operations", "description": "Shared daily view."},
+    )
+    analyst_response = admin_client.post(
+        "/api/v1/dashboards",
+        headers=analyst_headers,
+        json={"name": "Analyst private", "description": "Analyst-only view."},
+    )
+    assert admin_response.status_code == 200
+    assert analyst_response.status_code == 200
+    admin_dashboard = admin_response.json()["item"]
+    analyst_dashboard = analyst_response.json()["item"]
+
+    with create_session() as session:
+        analyst_user = session.scalar(select(AdminUser).where(AdminUser.username == "analyst"))
+        viewer_user = session.scalar(select(AdminUser).where(AdminUser.username == "viewer"))
+        assert analyst_user is not None
+        assert viewer_user is not None
+        analyst_user_id = str(analyst_user.id)
+        viewer_user_id = str(viewer_user.id)
+
+    users_response = admin_client.get("/api/v1/dashboards/share-users", headers=admin_headers)
+    assert users_response.status_code == 200
+    assert users_response.json()["total_users"] >= 3
+
+    cross_active_response = admin_client.put(
+        "/api/v1/dashboards/active",
+        headers=analyst_headers,
+        json={"dashboard_id": admin_dashboard["id"]},
+    )
+    assert cross_active_response.status_code == 404
+
+    share_view_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/shares",
+        headers=admin_headers,
+        json={"items": [{"user_id": analyst_user_id, "access_level": "view"}]},
+    )
+    assert share_view_response.status_code == 200
+    assert share_view_response.json()["items"] == [
+        {
+            "user_id": analyst_user_id,
+            "username": "analyst",
+            "access_level": "view",
+            "created_by_user_id": "1",
+            "created_by_username": "admin",
+            "created_at": share_view_response.json()["items"][0]["created_at"],
+            "updated_at": share_view_response.json()["items"][0]["updated_at"],
+        }
+    ]
+
+    analyst_list = admin_client.get("/api/v1/dashboards", headers=analyst_headers)
+    assert analyst_list.status_code == 200
+    shared_dashboard = next(
+        item for item in analyst_list.json()["items"] if item["id"] == admin_dashboard["id"]
+    )
+    assert shared_dashboard["access_level"] == "view"
+    assert shared_dashboard["can_edit"] is False
+    assert shared_dashboard["can_share"] is False
+    assert shared_dashboard["can_delete"] is False
+    assert analyst_dashboard["id"] in [item["id"] for item in analyst_list.json()["items"]]
+
+    analyst_active_response = admin_client.put(
+        "/api/v1/dashboards/active",
+        headers=analyst_headers,
+        json={"dashboard_id": admin_dashboard["id"]},
+    )
+    assert analyst_active_response.status_code == 200
+    assert analyst_active_response.json()["active_dashboard"]["access_level"] == "view"
+
+    analyst_widgets_response = admin_client.get(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=analyst_headers,
+    )
+    assert analyst_widgets_response.status_code == 200
+    assert analyst_widgets_response.json()["items"] == []
+
+    view_update_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=analyst_headers,
+        json={"name": "Forbidden rename", "description": "No edit access."},
+    )
+    assert view_update_response.status_code == 403
+
+    view_add_widget_response = admin_client.post(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=analyst_headers,
+        json={
+            "metric_widget_key": "missing",
+            "title": "Forbidden",
+            "visualization_type": "number",
+        },
+    )
+    assert view_add_widget_response.status_code == 403
+
+    view_share_response = admin_client.get(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/shares",
+        headers=analyst_headers,
+    )
+    assert view_share_response.status_code == 403
+
+    share_edit_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/shares",
+        headers=admin_headers,
+        json={"items": [{"user_id": analyst_user_id, "access_level": "edit"}]},
+    )
+    assert share_edit_response.status_code == 200
+    assert share_edit_response.json()["items"][0]["access_level"] == "edit"
+
+    edit_share_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/shares",
+        headers=analyst_headers,
+        json={
+            "items": [
+                {"user_id": analyst_user_id, "access_level": "edit"},
+                {"user_id": viewer_user_id, "access_level": "view"},
+            ]
+        },
+    )
+    assert edit_share_response.status_code == 200
+    assert {item["user_id"]: item["access_level"] for item in edit_share_response.json()["items"]} == {
+        analyst_user_id: "edit",
+        viewer_user_id: "view",
+    }
+
+    edit_update_response = admin_client.put(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=analyst_headers,
+        json={"name": "Shared operations edited", "description": "Edited by analyst."},
+    )
+    assert edit_update_response.status_code == 200
+    assert edit_update_response.json()["item"]["name"] == "Shared operations edited"
+    assert edit_update_response.json()["item"]["can_delete"] is False
+
+    with create_session() as session:
+        session.add(
+            OverviewWidget(
+                widget_key="analyst_saved_metric",
+                label="Prompt count",
+                widget_type="scalar",
+                datasource_key="metadata-db",
+                question="How many prompt templates are configured?",
+                sql="SELECT COUNT(*) AS value FROM prompt_templates",
+                active=False,
+                updated_by="analyst",
+            )
+        )
+        session.flush()
+        for tag_name in ("public", "analyst"):
+            if session.get(WidgetTag, tag_name) is None:
+                session.add(WidgetTag(name=tag_name))
+        session.flush()
+        metric = session.scalar(
+            select(OverviewWidget).where(OverviewWidget.widget_key == "analyst_saved_metric")
+        )
+        assert metric is not None
+        for tag_name in ("public", "analyst"):
+            session.add(OverviewWidgetTag(widget_id=metric.id, tag_name=tag_name))
+        session.commit()
+
+    edit_add_widget_response = admin_client.post(
+        f"/api/v1/dashboards/{admin_dashboard['id']}/widgets",
+        headers=analyst_headers,
+        json={
+            "metric_widget_key": "analyst_saved_metric",
+            "title": "Analyst prompt count",
+            "visualization_type": "number",
+        },
+    )
+    assert edit_add_widget_response.status_code == 200
+    assert edit_add_widget_response.json()["item"]["title"] == "Analyst prompt count"
+
+    viewer_list = admin_client.get("/api/v1/dashboards", headers=viewer_headers)
+    assert viewer_list.status_code == 200
+    viewer_shared = next(
+        item for item in viewer_list.json()["items"] if item["id"] == admin_dashboard["id"]
+    )
+    assert viewer_shared["access_level"] == "view"
+    assert viewer_shared["can_edit"] is False
+
+    viewer_delete_response = admin_client.delete(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=viewer_headers,
+    )
+    assert viewer_delete_response.status_code == 403
+    analyst_delete_response = admin_client.delete(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=analyst_headers,
+    )
+    assert analyst_delete_response.status_code == 403
+
+    delete_response = admin_client.delete(
+        f"/api/v1/dashboards/{admin_dashboard['id']}",
+        headers=admin_headers,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "deleted"
+
+    assert all(
+        item["id"] != admin_dashboard["id"]
+        for item in admin_client.get("/api/v1/dashboards", headers=analyst_headers).json()["items"]
+    )
+    assert all(
+        item["id"] != admin_dashboard["id"]
+        for item in admin_client.get("/api/v1/dashboards", headers=viewer_headers).json()["items"]
+    )
+    with create_session() as session:
+        assert (
+            session.scalar(
+                select(DashboardShare).where(DashboardShare.dashboard_id == admin_dashboard["id"])
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(DashboardWidget).where(DashboardWidget.dashboard_id == admin_dashboard["id"])
+            )
+            is None
+        )
 
 
 def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(

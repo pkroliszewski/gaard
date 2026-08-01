@@ -9,12 +9,14 @@ var storedMustChangePassword = localStorage.getItem("gaard_client_must_change_pa
 var storedEnterpriseAccess = localStorage.getItem("gaard_client_enterprise_access") === "true";
 var storedActiveView = localStorage.getItem("gaard_client_active_view") || "";
 var storedConversationId = localStorage.getItem("gaard_client_active_conversation_id") || "";
+var storedSidebarCollapsed = localStorage.getItem("gaard_client_sidebar_collapsed") === "true";
 var state = {
   backendUrl: configuredBackendUrl,
   token: storedToken,
   username: storedUsername,
   role: storedRole,
   enterpriseAccess: storedEnterpriseAccess,
+  sidebarCollapsed: storedSidebarCollapsed,
   mustChangePassword: storedMustChangePassword,
   passwordChangeError: "",
   activeView: normalizeView(params.get("view") || storedActiveView),
@@ -51,6 +53,17 @@ var state = {
   dashboardEditId: "",
   dashboardCreatePending: false,
   dashboardDeletePendingId: "",
+  dashboardShareOpen: false,
+  dashboardShareDashboardId: "",
+  dashboardShares: [],
+  dashboardSharesLoadedDashboardId: "",
+  dashboardSharesLoading: false,
+  dashboardSharesPending: false,
+  dashboardSharesError: "",
+  dashboardShareUsers: [],
+  dashboardShareUsersLoaded: false,
+  dashboardShareUsersLoading: false,
+  dashboardShareUserCount: 0,
   savedMetrics: [],
   savedMetricsLoaded: false,
   savedMetricsResultsLoaded: false,
@@ -298,6 +311,26 @@ function renderIcon(name) {
         <rect x="9" y="9" width="11" height="11" rx="2" />
         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
       </svg>`,
+    share: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="18" cy="5" r="3" />
+        <circle cx="6" cy="12" r="3" />
+        <circle cx="18" cy="19" r="3" />
+        <path d="m8.6 10.5 6.8-4" />
+        <path d="m8.6 13.5 6.8 4" />
+      </svg>`,
+    panelCollapse: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+        <path d="m16 9-3 3 3 3" />
+      </svg>`,
+    panelExpand: `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+        <path d="m13 9 3 3-3 3" />
+      </svg>`,
     chevronDown: `
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="m6 9 6 6 6-6" />
@@ -324,8 +357,9 @@ function renderSidebar() {
     ["queries", "My Queries", "Chat history"],
     ["alerts", "Alerts", "Alert definitions"]
   ];
+  const toggleTitle = state.sidebarCollapsed ? "Expand navigation" : "Collapse navigation";
   return `
-    <aside class="sidebar" aria-label="Navigation">
+    <aside class="sidebar ${state.sidebarCollapsed ? "collapsed" : ""}" aria-label="Navigation">
       <div class="brand">
         <img class="brand-logo" src="/assets/getgaard.svg" alt="" />
         <div class="brand-copy">
@@ -343,12 +377,17 @@ function renderSidebar() {
             </span>
           </button>`).join("")}
       </nav>
-      <div class="data-status" role="status">
-        <span class="status-dot"></span>
-        <div>
-          <strong>Data status</strong>
-          <small>All systems operational</small>
+      <div class="sidebar-footer">
+        <div class="data-status" role="status">
+          <span class="status-dot"></span>
+          <div>
+            <strong>Data status</strong>
+            <small>All systems operational</small>
+          </div>
         </div>
+        <button class="sidebar-toggle-button" type="button" data-toggle-sidebar aria-label="${escapeHtml(toggleTitle)}" title="${escapeHtml(toggleTitle)}">
+          ${renderIcon(state.sidebarCollapsed ? "panelExpand" : "panelCollapse")}
+        </button>
       </div>
     </aside>`;
 }
@@ -448,11 +487,12 @@ function renderAnalysisHeading() {
   }
   const title = dashboard?.name || "Analysis";
   const description = dashboard?.description || (dashboard ? "No description yet." : "Create a dashboard to organize saved query widgets.");
+  const editable = canEditDashboard(dashboard);
   return `
     <div class="conversation-heading analysis-heading">
       <span>Analysis</span>
       <div class="dashboard-title-row">
-        ${dashboard ? `
+        ${dashboard && editable ? `
         <button class="dashboard-title-button" type="button" data-edit-active-dashboard aria-label="Edit dashboard details" title="Edit dashboard details">
           ${escapeHtml(title)}
         </button>` : `<strong>${escapeHtml(title)}</strong>`}
@@ -536,13 +576,44 @@ function getActiveDashboard() {
   }
   return state.dashboards.find((item) => item.id === state.activeDashboardId) || state.dashboards[0] || null;
 }
+function dashboardAccessLevel(dashboard) {
+  return dashboard?.access_level || (dashboard?.is_owner === false ? "view" : "owner");
+}
+function canEditDashboard(dashboard = getActiveDashboard()) {
+  if (!dashboard) return false;
+  return Boolean(dashboard.can_edit ?? dashboard.is_owner ?? dashboardAccessLevel(dashboard) === "edit");
+}
+function canShareDashboard(dashboard = getActiveDashboard()) {
+  if (!dashboard) return false;
+  return Boolean(dashboard.can_share ?? canEditDashboard(dashboard));
+}
+function canDeleteDashboard(dashboard) {
+  if (!dashboard) return false;
+  return Boolean(dashboard.can_delete ?? dashboard.is_owner ?? dashboardAccessLevel(dashboard) === "owner");
+}
+function dashboardSharingAvailable() {
+  return Number(state.dashboardShareUserCount || 0) > 1 || state.dashboardShareUsers.length > 1;
+}
 function renderAnalysisView() {
   const dashboard = getActiveDashboard();
+  const editable = canEditDashboard(dashboard);
+  const shareable = canShareDashboard(dashboard) && dashboardSharingAvailable();
   return `
     <section class="dashboard-view" aria-label="Dashboard Analysis">
       <div class="dashboard-toolbar dashboard-toolbar-compact">
         <div class="dashboard-toolbar-actions">
-          ${dashboard && state.token ? `
+          ${dashboard && state.token && shareable ? `
+          <button
+            class="dashboard-edit-mode-button"
+            type="button"
+            data-open-dashboard-share
+            aria-label="Share dashboard"
+            title="Share dashboard"
+            ${state.dashboardSharesLoading ? "disabled" : ""}
+          >
+            ${state.dashboardSharesLoading ? `<span class="dashboard-edit-saving-spinner" aria-hidden="true"></span>` : renderIcon("share")}
+          </button>` : ""}
+          ${dashboard && state.token && editable ? `
           <button
             class="dashboard-edit-mode-button ${state.dashboardEditMode ? "active" : ""} ${state.dashboardLayoutSaving ? "saving" : ""}"
             type="button"
@@ -555,7 +626,7 @@ function renderAnalysisView() {
             ${state.dashboardLayoutSaving ? `<span class="dashboard-edit-saving-spinner" aria-hidden="true"></span>` : renderIcon("edit")}
             ${state.dashboardLayoutSaving ? `<span>Saving...</span>` : ""}
           </button>` : ""}
-          ${dashboard && state.token && state.dashboardEditMode ? `
+          ${dashboard && state.token && state.dashboardEditMode && editable ? `
           <button class="dashboard-add-widget-button" type="button" data-open-widget-dialog aria-label="Add widget" title="Add widget">
             ${renderIcon("plus")}
           </button>` : ""}
@@ -598,6 +669,7 @@ function renderAnalysisDashboardBody(dashboard) {
       </div>`;
 }
 function renderDashboardWidgetGrid(dashboard) {
+  const editable = canEditDashboard(dashboard);
   if (state.dashboardWidgetsLoading && state.dashboardWidgetsDashboardId !== dashboard.id) {
     return renderDashboardLoadingState(
       "Loading widgets...",
@@ -609,12 +681,12 @@ function renderDashboardWidgetGrid(dashboard) {
       <div class="dashboard-empty">
         <h2>No widgets yet.</h2>
         <div class="dashboard-empty-copy">
-          <span>Add a saved metric to start building this dashboard.</span>
-          ${state.dashboardEditMode ? `
+          <span>${editable ? "Add a saved metric to start building this dashboard." : "This shared dashboard does not have widgets yet."}</span>
+          ${state.dashboardEditMode && editable ? `
           <button class="dashboard-inline-add" type="button" data-open-widget-dialog>
             ${renderIcon("plus")}
             <span>Add widget</span>
-          </button>` : `<p>Choose "Edit layout" to add the first widget.</p>`}
+          </button>` : editable ? `<p>Choose "Edit layout" to add the first widget.</p>` : `<p>View-only dashboards cannot be edited.</p>`}
         </div>
       </div>`;
   }
@@ -709,6 +781,62 @@ function renderDashboardCreateForm(editingDashboard = null, editing = false) {
         </button>
       </div>
     </form>`;
+}
+function renderDashboardShareDialog() {
+  const dashboard = state.dashboards.find((item) => item.id === state.dashboardShareDashboardId) || getActiveDashboard();
+  const sharesByUserId = new Map(state.dashboardShares.map((share) => [String(share.user_id), share]));
+  const users = state.dashboardShareUsers.filter((user) => String(user.user_id) !== String(dashboard?.owner_user_id || ""));
+  const loading = state.dashboardSharesLoading || state.dashboardShareUsersLoading;
+  return `
+    <div class="dashboard-dialog-overlay" role="presentation">
+      <section class="dashboard-dialog dashboard-share-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-share-title">
+        <button class="icon-button dashboard-dialog-close" type="button" data-close-dashboard-share aria-label="Close dialog" title="Close" ${state.dashboardSharesPending ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+        <div class="dashboard-dialog-heading">
+          <span>Analysis</span>
+          <h2 id="dashboard-share-title">Share dashboard</h2>
+          <p>${escapeHtml(dashboard?.name || "Dashboard")}</p>
+        </div>
+        ${loading ? renderDashboardLoadingState("Loading sharing settings...", "Please wait while GAARD prepares user access.") : ""}
+        ${!loading && !users.length ? `
+          <div class="dashboard-widget-empty">
+            <strong>No users available.</strong>
+            <p>Create another user before sharing dashboards.</p>
+          </div>` : ""}
+        ${!loading && users.length ? `
+          <form class="dashboard-share-form" data-dashboard-share-form>
+            <div class="dashboard-share-list">
+              ${users.map((user) => {
+                const share = sharesByUserId.get(String(user.user_id));
+                const selectedLevel = share?.access_level || "none";
+                return `
+                  <label class="dashboard-share-row">
+                    <span>
+                      <strong>${escapeHtml(user.name || user.username || user.user_id)}</strong>
+                      <small>${escapeHtml(user.username || user.user_id)}</small>
+                    </span>
+                    <select data-dashboard-share-user="${escapeHtml(user.user_id)}" ${state.dashboardSharesPending ? "disabled" : ""}>
+                      <option value="none" ${selectedLevel === "none" ? "selected" : ""}>No access</option>
+                      <option value="view" ${selectedLevel === "view" ? "selected" : ""}>View</option>
+                      <option value="edit" ${selectedLevel === "edit" ? "selected" : ""}>Edit</option>
+                    </select>
+                  </label>`;
+              }).join("")}
+            </div>
+            ${state.dashboardSharesError ? `<div class="source-error datasource-error" role="alert">${escapeHtml(state.dashboardSharesError)}</div>` : ""}
+            <div class="dashboard-create-actions">
+              <button type="button" data-close-dashboard-share ${state.dashboardSharesPending ? "disabled" : ""}>Cancel</button>
+              <button class="primary" type="submit" ${state.dashboardSharesPending ? "disabled" : ""}>
+                ${state.dashboardSharesPending ? "Saving..." : "Save sharing"}
+              </button>
+            </div>
+          </form>` : ""}
+      </section>
+    </div>`;
 }
 function renderDashboardWidgetDialog() {
   const metrics = state.savedMetrics;
@@ -877,18 +1005,24 @@ function renderWidgetTypePreview(type) {
 function renderDashboardMenuItem(dashboard) {
   const selected = dashboard.id === state.activeDashboardId;
   const deleting = state.dashboardDeletePendingId === dashboard.id;
+  const sharedLabel = dashboard.shared
+    ? `${dashboardAccessLevel(dashboard) === "edit" ? "Shared edit" : "Shared view"} by ${dashboard.owner_username || "owner"}`
+    : "";
+  const description = sharedLabel || dashboard.description || "No description";
   return `
     <div class="dashboard-menu-item ${selected ? "active" : ""}">
       <button type="button" data-select-dashboard="${escapeHtml(dashboard.id)}">
         <strong>${escapeHtml(dashboard.name || "Untitled dashboard")}</strong>
-        <small>${escapeHtml(dashboard.description || "No description")}</small>
+        <small>${escapeHtml(description)}</small>
       </button>
+      ${canDeleteDashboard(dashboard) ? `
       <button class="dashboard-delete-button" type="button" data-delete-dashboard="${escapeHtml(dashboard.id)}" aria-label="Delete ${escapeHtml(dashboard.name || "dashboard")}" title="Delete dashboard" ${deleting ? "disabled" : ""}>
         ${renderIcon("trash")}
-      </button>
+      </button>` : ""}
     </div>`;
 }
 function renderDashboardWidget(widget) {
+  const editable = canEditDashboard();
   const layout = widget.layout || {};
   const content = renderDashboardWidgetContent(widget);
   return `
@@ -896,7 +1030,7 @@ function renderDashboardWidget(widget) {
       <article class="grid-stack-item-content dashboard-card dashboard-user-widget">
         <header>
           <h2>${escapeHtml(widget.title || widget.metric?.label || "Dashboard widget")}</h2>
-          ${state.dashboardEditMode ? `
+          ${state.dashboardEditMode && editable ? `
           <button type="button" data-delete-dashboard-widget="${escapeHtml(widget.id)}" aria-label="Remove widget" title="Remove widget">
             ${renderIcon("trash")}
           </button>` : ""}
@@ -1207,7 +1341,7 @@ function render(options = {}) {
   if (!app) return;
   const historyScroll = captureHistoryScroll();
   app.innerHTML = `
-    <main class="app-shell">
+    <main class="app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
       ${renderSidebar()}
       <section class="workspace-shell" aria-label="GAARD workspace">
         <header class="topbar">
@@ -1223,6 +1357,7 @@ function render(options = {}) {
       ${state.loginOpen ? renderLoginDialog() : ""}
       ${state.mustChangePassword ? renderPasswordChangeDialog() : ""}
       ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
+      ${state.dashboardShareOpen ? renderDashboardShareDialog() : ""}
       ${state.dashboardWidgetDialogOpen ? renderDashboardWidgetDialog() : ""}
       ${state.saveWidgetDialogOpen ? renderSaveWidgetDialog() : ""}
       ${state.metricEditDialogOpen ? renderMetricEditDialog() : ""}
@@ -1230,6 +1365,7 @@ function render(options = {}) {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", changeView);
   });
+  document.querySelector("[data-toggle-sidebar]")?.addEventListener("click", toggleSidebarCollapsed);
   document.querySelectorAll("[data-open-conversation]").forEach((button) => {
     button.addEventListener("click", openConversation);
   });
@@ -1252,6 +1388,11 @@ function render(options = {}) {
     button.addEventListener("click", openDashboardCreate);
   });
   document.querySelector("[data-edit-active-dashboard]")?.addEventListener("click", openActiveDashboardEdit);
+  document.querySelector("[data-open-dashboard-share]")?.addEventListener("click", openDashboardShareDialog);
+  document.querySelectorAll("[data-close-dashboard-share]").forEach((button) => {
+    button.addEventListener("click", closeDashboardShareDialog);
+  });
+  document.querySelector("[data-dashboard-share-form]")?.addEventListener("submit", saveDashboardShares);
   document.querySelectorAll("[data-close-dashboard-create]").forEach((button) => {
     button.addEventListener("click", closeDashboardCreate);
   });
@@ -1333,8 +1474,14 @@ function render(options = {}) {
   maybeLoadConversationsForActiveView();
   maybeLoadDatasourcesForActiveView();
   maybeLoadDashboardsForActiveView();
+  maybeLoadDashboardShareUsersForActiveView();
   maybeLoadSavedMetricsForActiveView();
   restoreHistoryScroll(historyScroll, options);
+}
+function toggleSidebarCollapsed() {
+  state.sidebarCollapsed = !state.sidebarCollapsed;
+  localStorage.setItem("gaard_client_sidebar_collapsed", String(state.sidebarCollapsed));
+  render();
 }
 var apiErrorTimer = null;
 function apiErrorMessage(error, fallback = "Request failed.") {
@@ -1482,6 +1629,16 @@ function maybeLoadDashboardsForActiveView() {
         void loadDashboardWidgets(state.activeDashboardId);
     }
 }
+function maybeLoadDashboardShareUsersForActiveView() {
+    if (
+        state.activeView === "analysis" &&
+        state.token &&
+        !state.dashboardShareUsersLoaded &&
+        !state.dashboardShareUsersLoading
+    ) {
+        void loadDashboardShareUsers();
+    }
+}
 function maybeLoadSavedMetricsForActiveView() {
     if (state.activeView === "metrics" && state.token && !state.savedMetricsLoaded && !state.savedMetricsLoading) {
         void loadSavedMetrics({ includeResult: false });
@@ -1501,6 +1658,7 @@ async function loadDashboards() {
         state.dashboardsLoaded = false;
         state.activeDashboardId = "";
         state.dashboardEditMode = false;
+        resetDashboardShareState();
         return;
     }
     state.dashboardEditMode = false;
@@ -1516,8 +1674,12 @@ async function loadDashboards() {
             throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
         }
         state.dashboards = payload.items || [];
+        state.dashboardShareUserCount = Number(payload.share_user_count || state.dashboardShareUserCount || 0);
         state.dashboardsLoaded = true;
         state.activeDashboardId = payload.active_dashboard_id || payload.active_dashboard?.id || state.dashboards[0]?.id || "";
+        if (!canEditDashboard(getActiveDashboard())) {
+            state.dashboardEditMode = false;
+        }
         if (state.activeDashboardId) {
             await loadDashboardWidgets(state.activeDashboardId, { silent: true });
         }
@@ -1538,6 +1700,162 @@ function toggleDashboardMenu() {
         void loadDashboards();
     }
 }
+function resetDashboardShareState() {
+    state.dashboardShareOpen = false;
+    state.dashboardShareDashboardId = "";
+    state.dashboardShares = [];
+    state.dashboardSharesLoadedDashboardId = "";
+    state.dashboardSharesLoading = false;
+    state.dashboardSharesPending = false;
+    state.dashboardSharesError = "";
+    state.dashboardShareUsers = [];
+    state.dashboardShareUsersLoaded = false;
+    state.dashboardShareUsersLoading = false;
+    state.dashboardShareUserCount = 0;
+}
+async function loadDashboardShareUsers(options = {}) {
+    if (!state.token) {
+        state.dashboardShareUsers = [];
+        state.dashboardShareUsersLoaded = false;
+        state.dashboardShareUserCount = 0;
+        return;
+    }
+    state.dashboardShareUsersLoading = true;
+    state.dashboardSharesError = "";
+    if (!options.silent) {
+        render();
+    }
+    try {
+        const response = await fetch(`/api/dashboard-users?backend_url=${encodeURIComponent(state.backendUrl)}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboardShareUsers = payload.items || [];
+        state.dashboardShareUserCount = Number(payload.total_users || state.dashboardShareUsers.length || 0);
+        state.dashboardShareUsersLoaded = true;
+    } catch (error) {
+        state.dashboardSharesError = error.message || "Could not load dashboard users.";
+        reportApiError(error, "Could not load dashboard users.");
+        state.dashboardShareUsersLoaded = true;
+    } finally {
+        state.dashboardShareUsersLoading = false;
+        if (!options.silent) {
+            render();
+        }
+    }
+}
+async function loadDashboardShares(dashboardId, options = {}) {
+    if (!state.token || !dashboardId) {
+        state.dashboardShares = [];
+        state.dashboardSharesLoadedDashboardId = "";
+        return;
+    }
+    state.dashboardSharesLoading = true;
+    state.dashboardSharesError = "";
+    if (!options.silent) {
+        render();
+    }
+    try {
+        const params = new URLSearchParams({ backend_url: state.backendUrl });
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/shares?${params.toString()}`, {
+            headers: authHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboardShares = payload.items || [];
+        state.dashboardSharesLoadedDashboardId = dashboardId;
+        if (payload.users) {
+            state.dashboardShareUsers = payload.users;
+            state.dashboardShareUsersLoaded = true;
+        }
+        state.dashboardShareUserCount = Number(payload.total_users || state.dashboardShareUsers.length || state.dashboardShareUserCount || 0);
+    } catch (error) {
+        state.dashboardSharesError = error.message || "Could not load dashboard sharing.";
+        reportApiError(error, "Could not load dashboard sharing.");
+    } finally {
+        state.dashboardSharesLoading = false;
+        if (!options.silent) {
+            render();
+        }
+    }
+}
+async function openDashboardShareDialog() {
+    const dashboard = getActiveDashboard();
+    if (!dashboard?.id || !state.token || !canShareDashboard(dashboard)) return;
+    state.dashboardShareOpen = true;
+    state.dashboardShareDashboardId = dashboard.id;
+    state.dashboardSharesError = "";
+    state.dashboardMenuOpen = false;
+    render();
+    const tasks = [];
+    if (!state.dashboardShareUsersLoaded && !state.dashboardShareUsersLoading) {
+        tasks.push(loadDashboardShareUsers({ silent: true }));
+    }
+    if (state.dashboardSharesLoadedDashboardId !== dashboard.id && !state.dashboardSharesLoading) {
+        tasks.push(loadDashboardShares(dashboard.id, { silent: true }));
+    }
+    if (tasks.length) {
+        await Promise.all(tasks);
+        render();
+    }
+}
+function closeDashboardShareDialog() {
+    if (state.dashboardSharesPending) return;
+    state.dashboardShareOpen = false;
+    state.dashboardShareDashboardId = "";
+    state.dashboardSharesError = "";
+    render();
+}
+async function saveDashboardShares(event) {
+    event.preventDefault();
+    const dashboardId = state.dashboardShareDashboardId;
+    const dashboard = state.dashboards.find((item) => item.id === dashboardId);
+    if (!state.token || !dashboardId || !canShareDashboard(dashboard) || state.dashboardSharesPending) return;
+    const items = Array.from(event.currentTarget.querySelectorAll("[data-dashboard-share-user]")).reduce((shares, select) => {
+        const accessLevel = select.value;
+        const userId = select.dataset.dashboardShareUser || "";
+        if (userId && ["view", "edit"].includes(accessLevel)) {
+            shares.push({ user_id: userId, access_level: accessLevel });
+        }
+        return shares;
+    }, []);
+    state.dashboardSharesPending = true;
+    state.dashboardSharesError = "";
+    render();
+    try {
+        const response = await fetch(`/api/dashboards/${encodeURIComponent(dashboardId)}/shares`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                ...authHeaders()
+            },
+            body: JSON.stringify({
+                items,
+                backend_url: state.backendUrl
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+        }
+        state.dashboardShares = payload.items || [];
+        state.dashboardSharesLoadedDashboardId = dashboardId;
+        state.dashboardShareOpen = false;
+        state.dashboardShareDashboardId = "";
+        await loadDashboards();
+    } catch (error) {
+        state.dashboardSharesError = error.message || "Could not save dashboard sharing.";
+        reportApiError(error, "Could not save dashboard sharing.");
+    } finally {
+        state.dashboardSharesPending = false;
+        render();
+    }
+}
 function openDashboardCreate() {
     state.dashboardCreateOpen = true;
     state.dashboardEditId = "";
@@ -1547,7 +1865,7 @@ function openDashboardCreate() {
 }
 function openActiveDashboardEdit() {
     const dashboard = getActiveDashboard();
-    if (!dashboard?.id || !state.token) return;
+    if (!dashboard?.id || !state.token || !canEditDashboard(dashboard)) return;
     state.dashboardCreateOpen = true;
     state.dashboardEditId = dashboard.id;
     state.dashboardMenuOpen = false;
@@ -1618,6 +1936,10 @@ async function createDashboard(event) {
     event.preventDefault();
     if (!state.token || state.dashboardCreatePending) return;
     const editingDashboardId = state.dashboardEditId;
+    if (editingDashboardId) {
+        const editingDashboard = state.dashboards.find((dashboard) => dashboard.id === editingDashboardId);
+        if (!canEditDashboard(editingDashboard)) return;
+    }
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "").trim();
     const description = String(form.get("description") || "").trim();
@@ -1683,7 +2005,7 @@ async function deleteDashboard(event) {
     event.stopPropagation();
     const dashboardId = event.currentTarget.dataset.deleteDashboard || "";
     const dashboard = state.dashboards.find((item) => item.id === dashboardId);
-    if (!dashboardId || state.dashboardDeletePendingId) return;
+    if (!dashboardId || state.dashboardDeletePendingId || !canDeleteDashboard(dashboard)) return;
     if (!window.confirm(`Delete dashboard "${dashboard?.name || "Untitled dashboard"}"?`)) {
         return;
     }
@@ -1960,7 +2282,7 @@ async function saveMetricLabel(event) {
     }
 }
 function openDashboardWidgetDialog() {
-    if (!state.dashboardEditMode) return;
+    if (!state.dashboardEditMode || !canEditDashboard()) return;
     if (!state.token) {
         openLogin();
         return;
@@ -1999,7 +2321,7 @@ function changeDashboardWidgetType(event) {
 }
 async function addDashboardWidget(event) {
     event.preventDefault();
-    if (!state.dashboardEditMode) return;
+    if (!state.dashboardEditMode || !canEditDashboard()) return;
     if (!state.token || state.dashboardWidgetPending || !state.activeDashboardId) return;
     const form = new FormData(event.currentTarget);
     const metricWidgetKey = String(form.get("metric_widget_key") || "").trim();
@@ -2048,7 +2370,7 @@ async function addDashboardWidget(event) {
     }
 }
 async function deleteDashboardWidget(event) {
-    if (!state.dashboardEditMode) return;
+    if (!state.dashboardEditMode || !canEditDashboard()) return;
     const widgetId = event.currentTarget.dataset.deleteDashboardWidget || "";
     if (!widgetId || !state.activeDashboardId) return;
     if (!window.confirm("Remove this widget from the dashboard?")) {
@@ -2074,6 +2396,7 @@ async function deleteDashboardWidget(event) {
 }
 function scheduleDashboardLayoutSave() {
     if (!state.dashboardEditMode) return;
+    if (!canEditDashboard()) return;
     if (!canPersistDashboardLayout()) return;
     const dashboardId = state.activeDashboardId;
     if (state.dashboardLayoutSaveTimer) {
@@ -2085,6 +2408,7 @@ function scheduleDashboardLayoutSave() {
 }
 async function saveDashboardLayout(dashboardId = state.activeDashboardId) {
     if (!dashboardId || dashboardId !== state.activeDashboardId || !state.token) return;
+    if (!canEditDashboard()) return;
     if (!canPersistDashboardLayout()) return;
     const items = collectDashboardLayout();
     if (!items.length) return;
@@ -2159,6 +2483,7 @@ async function flushPendingDashboardLayoutSave() {
 }
 async function toggleDashboardEditMode() {
     if (!state.token || !getActiveDashboard()?.id || state.dashboardLayoutSaving) return;
+    if (!canEditDashboard()) return;
     if (state.dashboardEditMode) {
         setDashboardLayoutSaving(true);
         await flushPendingDashboardLayoutSave();
@@ -2368,6 +2693,8 @@ async function changeView(event) {
   state.dashboardMenuOpen = false;
   state.dashboardCreateOpen = false;
   state.dashboardEditId = "";
+  state.dashboardShareOpen = false;
+  state.dashboardShareDashboardId = "";
   render();
 }
 function openConversation(event) {
@@ -3270,6 +3597,7 @@ async function login(event) {
     state.dashboardsLoaded = false;
     state.activeDashboardId = "";
     state.dashboardEditMode = false;
+    resetDashboardShareState();
     state.messages = [];
     state.conversationId = "";
     state.conversations = [];
@@ -3381,6 +3709,7 @@ async function logout() {
   state.dashboardEditId = "";
   state.dashboardWidgetDialogOpen = false;
   state.dashboardEditMode = false;
+  resetDashboardShareState();
   state.savedMetrics = [];
   state.savedMetricsLoaded = false;
   state.savedMetricsResultsLoaded = false;

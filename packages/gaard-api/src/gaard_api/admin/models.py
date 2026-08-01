@@ -209,6 +209,31 @@ class DashboardUserState(Base):
     )
 
 
+class DashboardShare(Base):
+    __tablename__ = "dashboard_shares"
+    __table_args__ = (
+        UniqueConstraint(
+            "dashboard_id",
+            "target_user_id",
+            name="uq_dashboard_shares_dashboard_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dashboard_id: Mapped[str] = mapped_column(String(64), index=True)
+    target_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    target_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    access_level: Mapped[str] = mapped_column(String(20), index=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    created_by_username: Mapped[str] = mapped_column(String(255), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class UserDatasourceSelection(Base):
     """Client datasource selections, scoped to one authenticated user."""
 
