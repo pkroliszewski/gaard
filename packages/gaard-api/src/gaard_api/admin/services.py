@@ -2229,6 +2229,7 @@ def build_table_settings(
         tables[table.name] = {
             "selected": bool(existing.get("selected", True)),
             "description": str(existing.get("description", "")),
+            "view_description": str(existing.get("view_description", "")),
             "primary_key_prompt": str(existing.get("primary_key_prompt", "")),
             "foreign_key_prompt": str(existing.get("foreign_key_prompt", "")),
             "join_logic": str(existing.get("join_logic", "")),

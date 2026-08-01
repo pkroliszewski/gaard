@@ -100,7 +100,7 @@ var state = {
     loadedName: "",
     loadedSql: "",
     name: "",
-    description: "",
+    view_description: "",
     sql: "",
     error: "",
     success: "",
@@ -1926,7 +1926,7 @@ function renderDatasourceViewDialog() {
         </div>
         <form id="datasource-view-form" class="form-grid">
           <label>View name<input name="name" value="${escapeHtml(dialog.name || "")}" autocomplete="off" /></label>
-          <label>View description<textarea name="description">${escapeHtml(dialog.description || "")}</textarea></label>
+          <label>View description<textarea name="view_description">${escapeHtml(dialog.view_description || "")}</textarea></label>
           <label>SQL<textarea name="sql" class="textarea-small" spellcheck="false">${escapeHtml(dialog.sql || "")}</textarea></label>
           ${busy === "load" ? `<p class="muted"><span class="spinner" aria-hidden="true"></span> Loading view definition.</p>` : ""}
           ${dialog.error ? `<p class="error">${escapeHtml(dialog.error)}</p>` : ""}
@@ -1976,6 +1976,7 @@ function getDatasourceSchemaDraftTables(rawTables, tableSettings) {
     state.datasourceSchemaDraftTables[table.name] = {
       selected: settings.selected !== false,
       description: settings.description || "",
+      view_description: settings.view_description || "",
       primary_key_prompt: settings.primary_key_prompt || "",
       foreign_key_prompt: settings.foreign_key_prompt || "",
       join_logic: settings.join_logic || ""
@@ -3340,7 +3341,7 @@ function defaultDatasourceViewDialog() {
     loadedName: "",
     loadedSql: "",
     name: "",
-    description: "",
+    view_description: "",
     sql: "",
     error: "",
     success: "",
@@ -3367,8 +3368,7 @@ async function openEditDatasourceViewDialog(event) {
   const rawTables = state.datasourceSchema?.item?.raw_schema?.tables || [];
   const tableSettings = state.datasourceSchema?.item?.table_settings?.tables || {};
   const draftSettings = getDatasourceSchemaDraftTables(rawTables, tableSettings)[viewName] || {};
-  const hasDraftDescription = Object.prototype.hasOwnProperty.call(draftSettings, "description");
-  const draftDescription = hasDraftDescription ? draftSettings.description || "" : "";
+  const draftViewDescription = draftSettings.view_description || "";
   state.datasourceViewDialog = {
     ...defaultDatasourceViewDialog(),
     open: true,
@@ -3376,14 +3376,14 @@ async function openEditDatasourceViewDialog(event) {
     originalName: viewName,
     loadedName: viewName,
     name: viewName,
-    description: draftDescription,
+    view_description: draftViewDescription,
     busy: "load"
   };
   render();
   try {
     const result = await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(viewName)}`);
     const item = result.item || {};
-    const description = hasDraftDescription ? draftDescription : item.description || "";
+    const viewDescription = draftViewDescription || item.view_description || item.description || "";
     state.datasourceViewDialog = {
       ...state.datasourceViewDialog,
       mode: "edit",
@@ -3391,7 +3391,7 @@ async function openEditDatasourceViewDialog(event) {
       loadedName: item.name || viewName,
       loadedSql: item.sql || "",
       name: item.name || viewName,
-      description,
+      view_description: viewDescription,
       sql: item.sql || "",
       busy: "",
       error: "",
@@ -3420,14 +3420,14 @@ function readDatasourceViewDialogPayload() {
     const dialog = state.datasourceViewDialog || {};
     return {
       name: String(dialog.name || "").trim(),
-      description: String(dialog.description || ""),
+      view_description: String(dialog.view_description || ""),
       sql: String(dialog.sql || "")
     };
   }
   const data = new FormData(form);
   return {
     name: String(data.get("name") || "").trim(),
-    description: String(data.get("description") || ""),
+    view_description: String(data.get("view_description") || ""),
     sql: String(data.get("sql") || "")
   };
 }
@@ -3464,7 +3464,7 @@ async function generateDatasourceViewSql() {
   try {
     const result = await api(`/api/v1/admin/datasources/${selected.id}/schema/views/generate-sql`, {
       method: "POST",
-      body: JSON.stringify({ name: payload.name, description: payload.description })
+      body: JSON.stringify({ name: payload.name, view_description: payload.view_description })
     });
     state.datasourceViewDialog = {
       ...state.datasourceViewDialog,
@@ -3546,7 +3546,7 @@ async function saveDatasourceView(event) {
     const result = canSaveSettingsOnly
       ? await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(dialog.originalName || payload.name)}`, {
           method: "PUT",
-          body: JSON.stringify({ description: payload.description })
+          body: JSON.stringify({ view_description: payload.view_description })
         })
       : dialog.mode === "edit"
         ? await api(`/api/v1/admin/datasources/${selected.id}/schema/views/${encodeURIComponent(dialog.originalName || payload.name)}/execute`, {
@@ -3689,6 +3689,7 @@ async function saveDatasourceSchema(event) {
     tables[table.name] = {
       selected: draft.selected !== false,
       description: draft.description || "",
+      view_description: draft.view_description || "",
       primary_key_prompt: draft.primary_key_prompt || "",
       foreign_key_prompt: draft.foreign_key_prompt || "",
       join_logic: draft.join_logic || ""

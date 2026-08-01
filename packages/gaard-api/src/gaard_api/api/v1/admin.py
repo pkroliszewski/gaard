@@ -363,22 +363,33 @@ class DatasourceSchemaTableSettingsRequest(BaseModel):
 class DatasourceViewSqlGenerationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="", max_length=20000)
+    view_description: str | None = Field(default=None, max_length=20000)
 
 
 class DatasourceViewExecuteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="", max_length=20000)
+    view_description: str | None = Field(default=None, max_length=20000)
     sql: str = Field(min_length=1, max_length=200000)
 
 
 class DatasourceViewUpdateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="", max_length=20000)
+    view_description: str | None = Field(default=None, max_length=20000)
     sql: str = Field(min_length=1, max_length=200000)
 
 
 class DatasourceViewSettingsRequest(BaseModel):
     description: str = Field(default="", max_length=20000)
+    view_description: str | None = Field(default=None, max_length=20000)
+
+
+def request_view_description(request: Any) -> str:
+    view_description = getattr(request, "view_description", None)
+    if view_description is not None:
+        return view_description
+    return str(getattr(request, "description", ""))
 
 
 class BusinessLogicSuggestionUpdateRequest(BaseModel):
@@ -3256,6 +3267,27 @@ def datasource_view_description_from_cache(
     tables = settings.get("tables", {})
     direct = tables.get(view_name, {})
     if direct:
+        return str(direct.get("view_description", direct.get("description", "")))
+    lowered = view_name.lower()
+    for name, item in tables.items():
+        if str(name).lower() == lowered:
+            return str(item.get("view_description", item.get("description", "")))
+    return ""
+
+
+def datasource_view_logic_from_cache(
+    session: Session,
+    connector: DatasourceConnector,
+    view_name: str,
+    actor: str,
+) -> str:
+    cache = get_datasource_schema_cache(session, connector.id)
+    if cache is None:
+        cache = introspect_datasource_connector(session, connector, actor)
+    settings = json_loads(cache.table_settings_json)
+    tables = settings.get("tables", {})
+    direct = tables.get(view_name, {})
+    if direct:
         return str(direct.get("description", ""))
     lowered = view_name.lower()
     for name, item in tables.items():
@@ -3282,14 +3314,23 @@ def get_datasource_view_definition(
     finally:
         engine.dispose()
 
+    view_description = datasource_view_description_from_cache(
+        session,
+        connector,
+        existing_name,
+        actor,
+    )
+    datasource_logic = datasource_view_logic_from_cache(
+        session,
+        connector,
+        existing_name,
+        actor,
+    )
     return {
         "name": existing_name,
-        "description": datasource_view_description_from_cache(
-            session,
-            connector,
-            existing_name,
-            actor,
-        ),
+        "description": view_description,
+        "view_description": view_description,
+        "datasource_logic": datasource_logic,
         "sql": view_sql_for_editor(connector, existing_name, definition),
     }
 
@@ -3298,7 +3339,7 @@ def save_datasource_view_settings_to_cache(
     session: Session,
     cache: DatasourceSchemaCache,
     view_name: str,
-    description: str,
+    view_description: str,
     actor: str,
 ) -> DatasourceSchemaCache:
     schema = json_loads(cache.schema_json)
@@ -3315,7 +3356,7 @@ def save_datasource_view_settings_to_cache(
     table_settings = settings.setdefault("tables", {})
     existing = table_settings.setdefault(actual_view_name, {})
     existing["selected"] = True
-    existing["description"] = description.strip()
+    existing["view_description"] = view_description.strip()
     return update_schema_table_settings(
         session=session,
         cache=cache,
@@ -3328,7 +3369,7 @@ def execute_datasource_view_sql(
     session: Session,
     connector: DatasourceConnector,
     view_name: str,
-    description: str,
+    view_description: str,
     sql: str,
     actor: str,
 ) -> DatasourceSchemaCache:
@@ -3352,7 +3393,7 @@ def execute_datasource_view_sql(
         session,
         cache,
         normalized_name,
-        description,
+        view_description,
         actor,
     )
 
@@ -3361,7 +3402,7 @@ def save_datasource_view_settings(
     session: Session,
     connector: DatasourceConnector,
     view_name: str,
-    description: str,
+    view_description: str,
     actor: str,
 ) -> DatasourceSchemaCache:
     normalized_name = normalize_datasource_view_name(view_name)
@@ -3372,7 +3413,7 @@ def save_datasource_view_settings(
         session,
         cache,
         normalized_name,
-        description,
+        view_description,
         actor,
     )
 
@@ -3382,7 +3423,7 @@ def update_datasource_view_sql(
     connector: DatasourceConnector,
     current_view_name: str,
     next_view_name: str,
-    description: str,
+    view_description: str,
     sql: str,
     actor: str,
 ) -> DatasourceSchemaCache:
@@ -3416,7 +3457,7 @@ def update_datasource_view_sql(
         session,
         cache,
         next_name,
-        description,
+        view_description,
         actor,
     )
 
@@ -3448,11 +3489,11 @@ def generate_datasource_view_sql(
     session: Session,
     connector: DatasourceConnector,
     view_name: str,
-    description: str,
+    view_description: str,
     actor: str,
 ) -> str:
     normalized_name = normalize_datasource_view_name(view_name)
-    if not description.strip():
+    if not view_description.strip():
         raise ValueError("View description is required to generate SQL.")
 
     cache = get_or_create_datasource_schema_cache(session, connector, actor)
@@ -3464,8 +3505,8 @@ def generate_datasource_view_sql(
     query_request = QueryRequest(
         question=(
             f"Create a SQL SELECT statement for a database view named {normalized_name}. "
-            "The SELECT must implement this datasource logic:\n"
-            f"{description.strip()}\n\n"
+            "The SELECT must implement this view description:\n"
+            f"{view_description.strip()}\n\n"
             "Return only one SELECT query. Do not create, drop, alter, insert, update or delete data."
         ),
         datasource_id=connector.connector_key,
@@ -3615,7 +3656,7 @@ def generate_datasource_view_sql_preview(
             session=session,
             connector=connector,
             view_name=request.name,
-            description=request.description,
+            view_description=request_view_description(request),
             actor=user.username,
         )
     except (
@@ -3656,7 +3697,7 @@ def execute_datasource_view_sql_endpoint(
             session=session,
             connector=connector,
             view_name=request.name,
-            description=request.description,
+            view_description=request_view_description(request),
             sql=request.sql,
             actor=user.username,
         )
@@ -3705,7 +3746,7 @@ def update_datasource_view_sql_endpoint(
             connector=connector,
             current_view_name=view_name,
             next_view_name=request.name,
-            description=request.description,
+            view_description=request_view_description(request),
             sql=request.sql,
             actor=user.username,
         )
@@ -3756,7 +3797,7 @@ def save_datasource_view_settings_endpoint(
             session=session,
             connector=connector,
             view_name=view_name,
-            description=request.description,
+            view_description=request_view_description(request),
             actor=user.username,
         )
     except (SQLAlchemyError, ValueError) as exc:
