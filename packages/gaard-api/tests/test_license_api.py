@@ -100,7 +100,7 @@ def package_bundle_zip(
         "version": package_version,
         "plan": pack,
         "file_name": f"gaard-{pack}-pack-{package_version}.zip",
-        "gaard_version": ">=0.2.10",
+        "gaard_version": ">=0.2.11",
         "description": "Test package bundle",
         "packages": [
             {

@@ -741,7 +741,8 @@ label {
 .extension-frame {
   display: block;
   width: 100%;
-  height: 1px;
+  height: 420px;
+  min-height: 420px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: white;

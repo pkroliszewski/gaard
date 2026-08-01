@@ -23,6 +23,7 @@ var builtInSectionLabels = {
 };
 var ADMIN_SECTION_STORAGE_KEY = "gaard_admin_section";
 var ADMIN_MENU_GROUPS_STORAGE_KEY = "gaard_admin_menu_groups";
+var EXTENSION_FRAME_MIN_HEIGHT = 420;
 function getInitialAdminSection() {
   const storedSection = localStorage.getItem(ADMIN_SECTION_STORAGE_KEY);
   return storedSection && (builtInSectionLabels[storedSection] || storedSection.startsWith("extension:")) ? storedSection : "overview";
@@ -639,18 +640,26 @@ function initializeExtensionFrameHeight(frame) {
 }
 function getExtensionFrameContentHeight(frame) {
   const reportedHeight = Number(frame.dataset.extensionContentHeight);
-  if (Number.isFinite(reportedHeight) && reportedHeight > 0) return reportedHeight;
+  if (Number.isFinite(reportedHeight) && reportedHeight > 0) {
+    return Math.max(reportedHeight, EXTENSION_FRAME_MIN_HEIGHT);
+  }
   try {
     const documentElement = frame.contentDocument?.documentElement;
     const body = frame.contentDocument?.body;
-    return Math.max(documentElement?.scrollHeight || 0, body?.scrollHeight || 0, 1);
+    return Math.max(
+      documentElement?.scrollHeight || 0,
+      documentElement?.offsetHeight || 0,
+      body?.scrollHeight || 0,
+      body?.offsetHeight || 0,
+      EXTENSION_FRAME_MIN_HEIGHT
+    );
   } catch {
-    return getExtensionFrameMaxHeight(frame);
+    return Math.max(getExtensionFrameMaxHeight(frame), EXTENSION_FRAME_MIN_HEIGHT);
   }
 }
 function getExtensionFrameMaxHeight(frame) {
   const content = frame.closest(".content");
-  if (!content) return Number.POSITIVE_INFINITY;
+  if (!content) return EXTENSION_FRAME_MIN_HEIGHT;
   const styles = window.getComputedStyle(content);
   const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
   const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
@@ -661,10 +670,11 @@ function getExtensionFrameMaxHeight(frame) {
     paddingBottom +
     (messageRegion?.offsetHeight || 0) +
     (messageRegion ? rowGap : 0);
-  return Math.max(1, content.clientHeight - reservedHeight);
+  return Math.max(EXTENSION_FRAME_MIN_HEIGHT, content.clientHeight - reservedHeight);
 }
 function setExtensionFrameHeight(frame, height) {
-  frame.style.height = `${Math.ceil(Math.max(height + 2, 1))}px`;
+  const normalizedHeight = Number.isFinite(height) ? height : EXTENSION_FRAME_MIN_HEIGHT;
+  frame.style.height = `${Math.ceil(Math.max(normalizedHeight + 2, EXTENSION_FRAME_MIN_HEIGHT))}px`;
 }
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin) return;

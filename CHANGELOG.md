@@ -1,3 +1,8 @@
+### v0.2.11 - Admin extension compatibility fixes
+- Added browser-compatible admin API request id fallback for extension panels when `crypto.randomUUID()` is unavailable.
+- Prevented admin extension iframes from collapsing while empty, loading, or reporting their first content height.
+- Bumped public packages, private extensions, package manifests, and local GAARD package references to `0.2.11`.
+
 ### v0.2.10 - Client conversation history and external API refresh management
 - Added API-backed client conversation history so saved chat threads and queries survive page reloads without a local client database.
 - Added client query copy actions and preserved chat scroll position during save, retry, show/hide, copy, and streaming updates.
