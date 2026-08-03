@@ -758,7 +758,6 @@ def resolve_overview_widget_tags_and_assignments(
                 requested_usernames.append(username)
                 continue
         direct_tags.append(tag)
-    print(requested_usernames)
     return [
         *direct_tags,
         *sync_overview_widget_user_assignments(session, widget, requested_usernames),
@@ -2575,7 +2574,8 @@ def get_datasources(
     }
 
 
-@router.api_route("/datasources/selection", methods=["PUT", "POST"])
+@router.put("/datasources/selection")
+@router.post("/datasources/selection")
 def update_datasource_selection(
     request: DatasourceSelectionRequest,
     principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),

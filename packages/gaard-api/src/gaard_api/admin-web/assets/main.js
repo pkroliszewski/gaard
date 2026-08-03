@@ -1568,9 +1568,9 @@ function renderDatasourceForm(connector) {
           <input type="hidden" name="id" value="${escapeHtml(connector?.id || "")}" />
           ${systemManaged ? `<div class="badge">System managed</div>` : ""}
           <label>Connector key<input name="connector_key" ${connector || systemManaged ? "readonly" : ""} ${disabled} value="${escapeHtml(connector?.connector_key || "")}" /></label>
-          <label>Name<input name="name" ${disabled} value="${escapeHtml(connector?.name || "")}" /></label>
+          <label>Name<input name="name" value="${escapeHtml(connector?.name || "")}" /></label>
           <div class="subgrid">
-            <label>Connector type<select id="datasource-type" name="database_type" ${disabled}>${renderDatasourceTypeOptions(selectedTypeKey)}</select></label>
+            <label>Connector type<select id="datasource-type" name="database_type">${renderDatasourceTypeOptions(selectedTypeKey)}</select></label>
             <label>SQL dialect<input id="datasource-sql-dialect" readonly ${disabled} value="${escapeHtml(selectedSqlDialect)}" /></label>
           </div>
           <p id="datasource-type-description" class="muted">${escapeHtml(connectorDescription)}</p>
@@ -3282,13 +3282,14 @@ async function saveDatasource(event) {
   const selected = getSelectedDatasource();
   if (selected?.system_managed) return;
   const form = new FormData(event.currentTarget);
+  const databaseUrlInput = event.currentTarget.querySelector("[name='database_url']");
   const id = String(form.get("id") || "");
   const payload = {
     connector_key: form.get("connector_key"),
     name: form.get("name"),
     database_type: form.get("database_type"),
     connection_config: collectDatasourceConnectionConfig(event.currentTarget),
-    database_url: form.get("database_url") || null,
+    database_url: form.get("database_url") || (databaseUrlInput?.disabled ? selected?.database_url : null),
     active: form.get("active") === "on"
   };
   try {

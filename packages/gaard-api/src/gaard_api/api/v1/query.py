@@ -90,6 +90,7 @@ from gaard_api.query_hooks import (
     DatasourceContexts,
     QueryExecutor,
     SqlDialectPlan,
+    normalize_datasource_contexts
 )
 
 router = APIRouter()
@@ -593,13 +594,6 @@ def create_pipeline(
         output_classification_mode=output_classification_mode if interpret else "none",
     )
 
-
-def normalize_datasource_contexts(
-    datasource_context: DatasourceContext | DatasourceContexts | None,
-) -> DatasourceContexts:
-    from gaard_api.query_hooks import normalize_datasource_contexts as normalize
-
-    return normalize(datasource_context)
 
 
 def resolve_sql_dialect_plan(datasource_contexts: DatasourceContexts) -> SqlDialectPlan:

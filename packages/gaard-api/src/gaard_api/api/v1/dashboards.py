@@ -49,12 +49,7 @@ DASHBOARD_WIDGET_DEFAULT_SIZES = {
 }
 
 
-class DashboardCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
-    description: str = Field(default="", max_length=2_000)
-
-
-class DashboardUpdateRequest(BaseModel):
+class DashboardWriteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=2_000)
 
@@ -407,7 +402,7 @@ def delete_saved_dashboard_metric(
 
 @router.post("/dashboards")
 def create_dashboard(
-    request: DashboardCreateRequest,
+    request: DashboardWriteRequest,
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
@@ -468,7 +463,7 @@ def set_active_dashboard(
 @router.put("/dashboards/{dashboard_id}")
 def update_dashboard(
     dashboard_id: str,
-    request: DashboardUpdateRequest,
+    request: DashboardWriteRequest,
     principal: AuthenticatedSession = Depends(get_current_api_user),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:

@@ -100,13 +100,7 @@ class ClientDatasourceSelectionRequest(BaseModel):
     backend_url: str | None = None
 
 
-class ClientDashboardCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
-    description: str = Field(default="", max_length=2_000)
-    backend_url: str | None = None
-
-
-class ClientDashboardUpdateRequest(BaseModel):
+class ClientDashboardWriteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=2_000)
     backend_url: str | None = None
@@ -477,7 +471,8 @@ async def list_datasources(
     )
 
 
-@app.api_route("/api/datasources/selection", methods=["PUT", "POST"])
+@app.put("/api/datasources/selection")
+@app.post("/api/datasources/selection")
 async def update_datasource_selection(
     request: ClientDatasourceSelectionRequest,
     authorization: str | None = Header(default=None),
@@ -567,7 +562,7 @@ async def list_dashboards(
 
 @app.post("/api/dashboards")
 async def create_dashboard(
-    request: ClientDashboardCreateRequest,
+    request: ClientDashboardWriteRequest,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
@@ -609,7 +604,7 @@ async def set_active_dashboard(
 @app.put("/api/dashboards/{dashboard_id}")
 async def update_dashboard(
     dashboard_id: str,
-    request: ClientDashboardUpdateRequest,
+    request: ClientDashboardWriteRequest,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
@@ -790,42 +785,14 @@ async def query_backend_stream(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     query_url = f"{backend_url}/api/v1/query/stream"
 
-    async def stream_backend() -> AsyncIterator[str]:
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
-                "POST",
-                query_url,
-                **backend_request_kwargs(authorization, query_payload(request)),
-            ) as response:
-                if response.status_code >= 400:
-                    body = await response.aread()
-                    detail = body.decode("utf-8", errors="replace")
-                    yield json.dumps(
-                        {
-                            "error": {
-                                "code": "BACKEND_REQUEST_FAILED",
-                                "message": detail,
-                            }
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                    return
-
-                async for chunk in response.aiter_text():
-                    if chunk:
-                        yield chunk
-        except httpx.HTTPError as exc:
-            yield json.dumps(
-                {
-                    "error": {
-                        "code": "BACKEND_REQUEST_FAILED",
-                        "message": f"Backend request failed: {exc}",
-                    }
-                },
-                ensure_ascii=False,
-            ) + "\n"
-
-    return StreamingResponse(stream_backend(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        proxy_stream(
+            url=query_url,
+            payload=query_payload(request),
+            authorization=authorization,
+        ),
+        media_type="application/x-ndjson",
+    )
 
 
 @app.post("/api/analysis/stream")

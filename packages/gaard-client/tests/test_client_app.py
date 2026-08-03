@@ -761,6 +761,129 @@ def test_client_app_proxies_query_explanation(monkeypatch: Any) -> None:
     }
 
 
+def test_client_app_proxies_query_stream_through_shared_helper(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeStreamResponse:
+        status_code = 200
+
+        async def __aenter__(self) -> "FakeStreamResponse":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def aiter_text(self) -> AsyncIterator[str]:
+            yield '{"event":"result"}\n'
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        def stream(self, method: str, url: str, **kwargs: Any) -> FakeStreamResponse:
+            captured.update({"method": method, "url": url, **kwargs})
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/query/stream",
+        headers={"Authorization": "Bearer token"},
+        json={
+            "question": "How many active patients?",
+            "conversation_id": "conversation-1",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert response.text == '{"event":"result"}\n'
+    assert captured == {
+        "timeout": 120.0,
+        "method": "POST",
+        "url": "http://backend.example/api/v1/query/stream",
+        "json": {
+            "question": "How many active patients?",
+            "user_id": "client",
+            "mode": "sql",
+            "conversation_id": "conversation-1",
+        },
+        "headers": {"Authorization": "Bearer token"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("error_kind", "expected_message"),
+    [
+        ("backend", "Backend unavailable"),
+        ("transport", "Backend request failed: connection lost"),
+    ],
+)
+def test_client_query_stream_preserves_backend_request_failed_errors(
+    monkeypatch: Any,
+    error_kind: str,
+    expected_message: str,
+) -> None:
+    class FakeStreamResponse:
+        status_code = 503
+
+        async def __aenter__(self) -> "FakeStreamResponse":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def aread(self) -> bytes:
+            return b"Backend unavailable"
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 120.0
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        def stream(self, method: str, url: str, **kwargs: Any) -> FakeStreamResponse:
+            if error_kind == "transport":
+                raise httpx.ConnectError(
+                    "connection lost",
+                    request=httpx.Request(method, url),
+                )
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/query/stream",
+        json={
+            "question": "How many active patients?",
+            "backend_url": "http://backend.example/",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert response.text.endswith("\n")
+    assert json.loads(response.text) == {
+        "error": {
+            "code": "BACKEND_REQUEST_FAILED",
+            "message": expected_message,
+        }
+    }
+
+
 def test_client_app_proxies_analysis_stream(monkeypatch: Any) -> None:
     captured: dict[str, Any] = {}
 
@@ -1058,6 +1181,91 @@ def test_client_app_proxies_saved_metric_delete(monkeypatch: Any) -> None:
     }
     assert captured["url"] == ("http://backend.example/api/v1/dashboards/metrics/client_metric")
     assert captured["headers"] == {"Authorization": "Bearer token"}
+
+
+def test_client_dashboard_write_request_is_shared_in_openapi() -> None:
+    schema = app.openapi()
+    schemas = schema["components"]["schemas"]
+    create_schema = schema["paths"]["/api/dashboards"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    update_schema = schema["paths"]["/api/dashboards/{dashboard_id}"]["put"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"]
+
+    assert "ClientDashboardWriteRequest" in schemas
+    assert create_schema == {"$ref": "#/components/schemas/ClientDashboardWriteRequest"}
+    assert update_schema == create_schema
+
+
+def test_client_dashboard_write_request_validation_is_unchanged(
+    monkeypatch: Any,
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            captured.append({"method": method, "url": url, **kwargs})
+            return httpx.Response(
+                status_code=200,
+                request=httpx.Request(method, url),
+                json={"item": kwargs["json"]},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+    create_url = "/api/dashboards"
+    update_url = "/api/dashboards/dash-1"
+
+    create_response = client.post(
+        create_url,
+        json={"name": "Operations", "backend_url": "http://backend.example/"},
+    )
+    update_response = client.put(
+        update_url,
+        json={"name": "Operations updated", "backend_url": "http://backend.example/"},
+    )
+
+    assert create_response.status_code == 200
+    assert update_response.status_code == 200
+    assert captured == [
+        {
+            "method": "POST",
+            "url": "http://backend.example/api/v1/dashboards",
+            "json": {"name": "Operations", "description": ""},
+        },
+        {
+            "method": "PUT",
+            "url": "http://backend.example/api/v1/dashboards/dash-1",
+            "json": {"name": "Operations updated", "description": ""},
+        },
+    ]
+
+    invalid_payloads = [
+        {},
+        {"description": "Missing name"},
+        {"name": "x" * 256},
+        {"name": "Operations", "description": "x" * 2_001},
+    ]
+    for url in (create_url, update_url):
+        for payload in invalid_payloads:
+            method = client.post if url == create_url else client.put
+            response = method(url, json=payload)
+            assert response.status_code == 422
 
 
 def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:

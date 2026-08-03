@@ -783,6 +783,66 @@ def test_query_endpoint_accepts_authenticated_user(admin_client: TestClient) -> 
     assert response.json()["answer"]
 
 
+def test_dashboard_write_request_is_shared_in_openapi() -> None:
+    schema = app.openapi()
+    schemas = schema["components"]["schemas"]
+    create_schema = schema["paths"]["/api/v1/dashboards"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    update_schema = schema["paths"]["/api/v1/dashboards/{dashboard_id}"]["put"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"]
+
+    assert "DashboardWriteRequest" in schemas
+    assert create_schema == {"$ref": "#/components/schemas/DashboardWriteRequest"}
+    assert update_schema == create_schema
+
+
+def test_dashboard_write_request_validation_is_unchanged(
+    admin_client: TestClient,
+) -> None:
+    headers = auth_headers(admin_client)
+    create_url = "/api/v1/dashboards"
+
+    create_response = admin_client.post(
+        create_url,
+        headers=headers,
+        json={"name": "Operations"},
+    )
+    assert create_response.status_code == 200
+    dashboard = create_response.json()["item"]
+    assert dashboard["description"] == ""
+
+    update_url = f"/api/v1/dashboards/{dashboard['id']}"
+    update_response = admin_client.put(
+        update_url,
+        headers=headers,
+        json={"name": "Operations updated"},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["item"]["description"] == ""
+
+    invalid_payloads = [
+        {},
+        {"description": "Missing name"},
+        {"name": "x" * 256},
+        {"name": "Operations", "description": "x" * 2_001},
+    ]
+    for url in (create_url, update_url):
+        for payload in invalid_payloads:
+            method = admin_client.post if url == create_url else admin_client.put
+            response = method(url, headers=headers, json=payload)
+            assert response.status_code == 422
+
+        whitespace_response = (
+            admin_client.post(url, headers=headers, json={"name": "   "})
+            if url == create_url
+            else admin_client.put(url, headers=headers, json={"name": "   "})
+        )
+        assert whitespace_response.status_code == 400
+        assert whitespace_response.json()["detail"] == "Dashboard name is required."
+
+
 def test_dashboards_are_scoped_to_authenticated_user(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
