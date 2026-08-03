@@ -16,7 +16,12 @@ from gaard_api.admin.models import (
     OverviewWidgetTag,
     UserSavedMetric,
 )
-from gaard_api.api.v1.admin import execute_overview_widget, serialize_overview_widget_config
+from gaard_api.api.v1.admin import (
+    execute_overview_widget, 
+    serialize_overview_widget_config,
+    serialize_datetime,
+    serialize_dashboard
+)
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_api_user
 
 router = APIRouter()
@@ -80,10 +85,6 @@ class DashboardWidgetLayoutRequest(BaseModel):
     items: list[DashboardWidgetLayoutItem] = Field(default_factory=list)
 
 
-def serialize_datetime(value: datetime) -> str:
-    return value.isoformat()
-
-
 def dashboard_owner_user_id(principal: AuthenticatedSession) -> str:
     return str(principal.user.id)
 
@@ -94,18 +95,6 @@ def dashboard_owner_username(principal: AuthenticatedSession) -> str:
 
 def saved_metric_tag_names(owner_username: str) -> tuple[str, str]:
     return ("public", owner_username)
-
-
-def serialize_dashboard(dashboard: Dashboard) -> dict[str, Any]:
-    return {
-        "id": dashboard.dashboard_id,
-        "name": dashboard.name,
-        "description": dashboard.description,
-        "owner_user_id": dashboard.owner_user_id,
-        "owner_username": dashboard.owner_username,
-        "created_at": serialize_datetime(dashboard.created_at),
-        "updated_at": serialize_datetime(dashboard.updated_at),
-    }
 
 
 def serialize_saved_metric(

@@ -1,11 +1,14 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx2 as httpx
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from gaard_client.main import app
+from gaard_client.main import app, proxy_json_request
 
 
 def test_client_app_serves_index_and_config(monkeypatch: Any) -> None:
@@ -110,9 +113,7 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "resizestop" in response.text
     assert "alwaysShowResizeHandle" in response.text
     assert "/api/datasources/excel" in response.text
-    assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (
-        response.text
-    )
+    assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (response.text)
     assert "user_question" in response.text
     assert "Investigation" not in response.text
     assert "investigation" not in response.text
@@ -140,6 +141,286 @@ def test_client_dashboard_mobile_styles() -> None:
     assert ".dashboard-widget-chart" in response.text
 
 
+def test_proxy_json_request_returns_json_and_forwards_arguments(
+    monkeypatch: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+    files = {"file": ("data.xlsx", b"content", "application/octet-stream")}
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            captured.update({"method": method, "url": url, **kwargs})
+            return httpx.Response(
+                status_code=200,
+                request=httpx.Request(method, url),
+                json={"status": "ok"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    result = asyncio.run(
+        proxy_json_request(
+            "POST",
+            "http://backend.example/api/v1/upload",
+            timeout=120.0,
+            request_kwargs={
+                "json": {"name": "report"},
+                "headers": {"Authorization": "Bearer token"},
+                "params": {"active": True},
+                "files": files,
+            },
+        )
+    )
+
+    assert result == {"status": "ok"}
+    assert captured == {
+        "timeout": 120.0,
+        "method": "POST",
+        "url": "http://backend.example/api/v1/upload",
+        "json": {"name": "report"},
+        "headers": {"Authorization": "Bearer token"},
+        "params": {"active": True},
+        "files": files,
+    }
+
+
+def test_proxy_json_request_preserves_json_backend_error(monkeypatch: Any) -> None:
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            return httpx.Response(
+                status_code=403,
+                headers={"content-type": "application/json"},
+                request=httpx.Request(method, url),
+                json={"detail": "Forbidden"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            proxy_json_request(
+                "GET",
+                "http://backend.example/api/v1/protected",
+                timeout=30.0,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"detail": "Forbidden"}
+
+
+def test_proxy_json_request_preserves_text_backend_error(monkeypatch: Any) -> None:
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            return httpx.Response(
+                status_code=500,
+                headers={"content-type": "text/plain"},
+                request=httpx.Request(method, url),
+                text="Internal error",
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            proxy_json_request(
+                "GET",
+                "http://backend.example/api/v1/failure",
+                timeout=30.0,
+            )
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Internal error"
+
+
+def test_proxy_json_request_maps_transport_error_to_bad_gateway(
+    monkeypatch: Any,
+) -> None:
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            raise httpx.ConnectError(
+                "connection lost",
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            proxy_json_request(
+                "GET",
+                "http://backend.example/api/v1/unavailable",
+                timeout=30.0,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert str(exc_info.value.detail).startswith("Backend request failed:")
+
+
+def test_client_app_preserves_login_and_datasource_requests(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            captured.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "timeout": self.timeout,
+                    **kwargs,
+                }
+            )
+            return httpx.Response(
+                status_code=200,
+                request=httpx.Request(method, url),
+                json={"status": "ok"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = TestClient(app)
+    authorization = {"Authorization": "Bearer token"}
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={
+            "username": "ada",
+            "password": "secret-password",
+            "backend_url": "http://backend.example/",
+        },
+    )
+    datasources_response = client.get(
+        "/api/datasources?backend_url=http://backend.example/",
+        headers=authorization,
+    )
+    selection_response = client.put(
+        "/api/datasources/selection",
+        headers=authorization,
+        json={
+            "datasource_ids": ["primary", "archive"],
+            "backend_url": "http://backend.example/",
+        },
+    )
+    upload_response = client.post(
+        "/api/datasources/excel?backend_url=http://backend.example/&active=false",
+        headers=authorization,
+        files={
+            "file": (
+                "report.xlsx",
+                b"workbook-content",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert login_response.status_code == 200
+    assert datasources_response.status_code == 200
+    assert selection_response.status_code == 200
+    assert upload_response.status_code == 200
+    assert captured[0] == {
+        "method": "POST",
+        "url": "http://backend.example/api/v1/admin/auth/login",
+        "timeout": 30.0,
+        "json": {"username": "ada", "password": "secret-password"},
+    }
+    assert captured[1] == {
+        "method": "GET",
+        "url": "http://backend.example/api/v1/admin/datasources?available_only=true",
+        "timeout": 30.0,
+        "headers": authorization,
+    }
+    assert captured[2] == {
+        "method": "POST",
+        "url": "http://backend.example/api/v1/admin/datasources/selection",
+        "timeout": 30.0,
+        "json": {"datasource_ids": ["primary", "archive"]},
+        "headers": authorization,
+    }
+    assert captured[3]["method"] == "POST"
+    assert captured[3]["url"] == "http://backend.example/api/v1/admin/datasources/excel-upload"
+    assert captured[3]["timeout"] == 120.0
+    assert captured[3]["headers"] == authorization
+    assert captured[3]["params"] == {"active": False}
+    assert captured[3]["files"] == {
+        "file": (
+            "report.xlsx",
+            b"workbook-content",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+
+
 def test_client_app_proxies_query(monkeypatch: Any) -> None:
     captured: dict[str, Any] = {}
 
@@ -153,10 +434,12 @@ def test_client_app_proxies_query(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url: str, json: dict[str, Any]) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
-            request = httpx.Request("POST", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -187,6 +470,7 @@ def test_client_app_proxies_query(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json()["metadata"]["output_classification"] == "neutral_data"
+    assert captured["method"] == "POST"
     assert captured["url"] == "http://backend.example/api/v1/query"
     assert captured["json"] == {
         "question": "How many active patients are there?",
@@ -208,11 +492,14 @@ def test_client_app_proxies_password_change(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url: str, json: dict[str, Any], headers: Any) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            headers = kwargs["headers"]
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
-            request = httpx.Request("POST", url)
+            request = httpx.Request(method, url)
             return httpx.Response(
                 status_code=200,
                 request=request,
@@ -233,6 +520,7 @@ def test_client_app_proxies_password_change(monkeypatch: Any) -> None:
     )
 
     assert response.status_code == 200
+    assert captured["method"] == "POST"
     assert captured["url"] == "http://backend.example/api/v1/admin/auth/change-password"
     assert captured["headers"] == {"Authorization": "Bearer token"}
     assert captured["json"] == {
@@ -254,10 +542,12 @@ def test_client_app_proxies_current_user(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def get(self, url: str, headers: Any) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            headers = kwargs["headers"]
+            captured["method"] = method
             captured["url"] = url
             captured["headers"] = headers
-            request = httpx.Request("GET", url)
+            request = httpx.Request(method, url)
             return httpx.Response(
                 status_code=200,
                 request=request,
@@ -274,6 +564,7 @@ def test_client_app_proxies_current_user(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json()["must_change_password"] is True
+    assert captured["method"] == "GET"
     assert captured["url"] == "http://backend.example/api/v1/admin/me"
     assert captured["headers"] == {"Authorization": "Bearer token"}
 
@@ -291,9 +582,9 @@ def test_client_app_proxies_conversation_history(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def get(self, url: str, headers: Any) -> httpx.Response:
-            captured.append({"url": url, "headers": headers})
-            request = httpx.Request("GET", url)
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            captured.append({"method": method, "url": url, "headers": kwargs["headers"]})
+            request = httpx.Request(method, url)
             if url.endswith("/api/v1/conversations?limit=50"):
                 return httpx.Response(
                     status_code=200,
@@ -327,10 +618,12 @@ def test_client_app_proxies_conversation_history(monkeypatch: Any) -> None:
     assert detail_response.json()["turns"][0]["id"] == "turn-1"
     assert captured == [
         {
+            "method": "GET",
             "url": "http://backend.example/api/v1/conversations?limit=50",
             "headers": {"Authorization": "Bearer token"},
         },
         {
+            "method": "GET",
             "url": "http://backend.example/api/v1/conversations/conversation-1?limit=100",
             "headers": {"Authorization": "Bearer token"},
         },
@@ -350,10 +643,12 @@ def test_client_app_proxies_query_conversation_id(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url: str, json: dict[str, Any]) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
-            request = httpx.Request("POST", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -383,6 +678,7 @@ def test_client_app_proxies_query_conversation_id(monkeypatch: Any) -> None:
     )
 
     assert response.status_code == 200
+    assert captured["method"] == "POST"
     assert captured["url"] == "http://backend.example/api/v1/query"
     assert captured["json"] == {
         "question": "and in May?",
@@ -405,11 +701,14 @@ def test_client_app_proxies_query_explanation(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            headers = kwargs.get("headers")
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
-            request = httpx.Request("POST", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -440,6 +739,7 @@ def test_client_app_proxies_query_explanation(monkeypatch: Any) -> None:
     )
 
     assert response.status_code == 200
+    assert captured["method"] == "POST"
     assert response.json()["metadata"]["prompt_key"] == "answer_explanation"
     assert captured["url"] == "http://backend.example/api/v1/query/explain"
     assert captured["headers"] == {"Authorization": "Bearer token"}
@@ -474,33 +774,39 @@ def test_client_app_proxies_analysis_stream(monkeypatch: Any) -> None:
             pass
 
         async def aiter_text(self) -> AsyncIterator[str]:
-            yield json.dumps(
-                {
-                    "event": "analysis_step",
-                    "session_id": "abc",
-                    "analysis_step": {
-                        "iteration": 1,
-                        "visible_question": "Do I have everything?",
-                        "visible_reasoning": "Checking available context.",
-                    },
-                }
-            ) + "\n"
-            yield json.dumps(
-                {
-                    "event": "final",
-                    "session_id": "abc",
-                    "final": {
-                        "question": "q",
-                        "answer": "Analysis answer.",
-                        "sql": "",
-                        "rows": [],
-                        "metadata": {
-                            "analysis_mode": "analysis",
-                            "analysis_session_id": "abc",
+            yield (
+                json.dumps(
+                    {
+                        "event": "analysis_step",
+                        "session_id": "abc",
+                        "analysis_step": {
+                            "iteration": 1,
+                            "visible_question": "Do I have everything?",
+                            "visible_reasoning": "Checking available context.",
                         },
-                    },
-                }
-            ) + "\n"
+                    }
+                )
+                + "\n"
+            )
+            yield (
+                json.dumps(
+                    {
+                        "event": "final",
+                        "session_id": "abc",
+                        "final": {
+                            "question": "q",
+                            "answer": "Analysis answer.",
+                            "sql": "",
+                            "rows": [],
+                            "metadata": {
+                                "analysis_mode": "analysis",
+                                "analysis_session_id": "abc",
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
 
     class FakeAsyncClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -554,10 +860,12 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url: str, json: dict[str, Any]) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
-            request = httpx.Request("POST", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -588,9 +896,8 @@ def test_client_app_proxies_widget_save_from_query(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json()["item"]["active"] is False
-    assert captured["url"] == (
-        "http://backend.example/api/v1/admin/overview/widgets/from-query"
-    )
+    assert captured["method"] == "POST"
+    assert captured["url"] == ("http://backend.example/api/v1/admin/overview/widgets/from-query")
     assert captured["json"] == {
         "label": "Active patients",
         "widget_type": "scalar",
@@ -615,11 +922,14 @@ def test_client_app_proxies_widget_title_suggestion(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def post(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            headers = kwargs.get("headers")
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
-            request = httpx.Request("POST", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -642,6 +952,7 @@ def test_client_app_proxies_widget_title_suggestion(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json()["title"] == "Doctors by Specialty"
+    assert captured["method"] == "POST"
     assert captured["url"] == (
         "http://backend.example/api/v1/admin/overview/widgets/title-suggestion"
     )
@@ -665,11 +976,14 @@ def test_client_app_proxies_saved_metric_update(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def patch(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            json = kwargs["json"]
+            headers = kwargs.get("headers")
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
-            request = httpx.Request("PATCH", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -691,9 +1005,8 @@ def test_client_app_proxies_saved_metric_update(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json()["item"]["label"] == "New metric name"
-    assert captured["url"] == (
-        "http://backend.example/api/v1/dashboards/metrics/client_metric"
-    )
+    assert captured["method"] == "PATCH"
+    assert captured["url"] == ("http://backend.example/api/v1/dashboards/metrics/client_metric")
     assert captured["headers"] == {"Authorization": "Bearer token"}
     assert captured["json"] == {"label": "New metric name"}
 
@@ -711,10 +1024,12 @@ def test_client_app_proxies_saved_metric_delete(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
-        async def delete(self, url: str, headers: Any = None) -> httpx.Response:
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            headers = kwargs.get("headers")
+            captured["method"] = method
             captured["url"] = url
             captured["headers"] = headers
-            request = httpx.Request("DELETE", url)
+            request = httpx.Request(method, url)
 
             return httpx.Response(
                 status_code=200,
@@ -735,14 +1050,13 @@ def test_client_app_proxies_saved_metric_delete(monkeypatch: Any) -> None:
     )
 
     assert response.status_code == 200
+    assert captured["method"] == "DELETE"
     assert response.json() == {
         "status": "deleted",
         "widget_key": "client_metric",
         "removed_dashboard_widgets": 2,
     }
-    assert captured["url"] == (
-        "http://backend.example/api/v1/dashboards/metrics/client_metric"
-    )
+    assert captured["url"] == ("http://backend.example/api/v1/dashboards/metrics/client_metric")
     assert captured["headers"] == {"Authorization": "Bearer token"}
 
 
@@ -759,6 +1073,14 @@ def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
         async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
             pass
 
+        async def request(
+            self,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            return await getattr(self, method.lower())(url, **kwargs)
+
         async def get(self, url: str, headers: Any = None) -> httpx.Response:
             captured.append({"method": "GET", "url": url, "headers": headers})
             request = httpx.Request("GET", url)
@@ -769,9 +1091,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
             )
 
         async def post(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
-            captured.append(
-                {"method": "POST", "url": url, "json": json, "headers": headers}
-            )
+            captured.append({"method": "POST", "url": url, "json": json, "headers": headers})
             request = httpx.Request("POST", url)
             if url.endswith("/widgets"):
                 return httpx.Response(
@@ -786,9 +1106,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
             )
 
         async def put(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
-            captured.append(
-                {"method": "PUT", "url": url, "json": json, "headers": headers}
-            )
+            captured.append({"method": "PUT", "url": url, "json": json, "headers": headers})
             request = httpx.Request("PUT", url)
             if not url.endswith("/active"):
                 return httpx.Response(
@@ -805,10 +1123,10 @@ def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
                 },
             )
 
-        async def patch(self, url: str, json: dict[str, Any], headers: Any = None) -> httpx.Response:
-            captured.append(
-                {"method": "PATCH", "url": url, "json": json, "headers": headers}
-            )
+        async def patch(
+            self, url: str, json: dict[str, Any], headers: Any = None
+        ) -> httpx.Response:
+            captured.append({"method": "PATCH", "url": url, "json": json, "headers": headers})
             request = httpx.Request("PATCH", url)
             return httpx.Response(
                 status_code=200,
@@ -928,9 +1246,7 @@ def test_client_app_proxies_dashboard_crud(monkeypatch: Any) -> None:
         "title": "Metric",
         "visualization_type": "bar",
     }
-    assert captured[8]["url"] == (
-        "http://backend.example/api/v1/dashboards/dash-1/widgets/layout"
-    )
+    assert captured[8]["url"] == ("http://backend.example/api/v1/dashboards/dash-1/widgets/layout")
     assert captured[8]["json"] == {
         "items": [{"widget_id": "widget-1", "x": 1, "y": 2, "w": 6, "h": 4}]
     }
@@ -953,23 +1269,29 @@ def test_client_app_streams_analysis_user_question(monkeypatch: Any) -> None:
             pass
 
         async def aiter_text(self) -> AsyncIterator[str]:
-            yield json.dumps(
-                {
-                    "event": "session_started",
-                    "session_id": "session-1",
-                    "session_started": {
+            yield (
+                json.dumps(
+                    {
+                        "event": "session_started",
                         "session_id": "session-1",
-                        "status": "running",
-                    },
-                }
-            ) + "\n"
-            yield json.dumps(
-                {
-                    "event": "user_question",
-                    "session_id": "session-1",
-                    "user_question": {"question": "Jaki zakres?"},
-                }
-            ) + "\n"
+                        "session_started": {
+                            "session_id": "session-1",
+                            "status": "running",
+                        },
+                    }
+                )
+                + "\n"
+            )
+            yield (
+                json.dumps(
+                    {
+                        "event": "user_question",
+                        "session_id": "session-1",
+                        "user_question": {"question": "Jaki zakres?"},
+                    }
+                )
+                + "\n"
+            )
 
     class FakeAsyncClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1024,19 +1346,22 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch: Any) -> N
             pass
 
         async def aiter_text(self) -> AsyncIterator[str]:
-            yield json.dumps(
-                {
-                    "event": "final",
-                    "session_id": "session-1",
-                    "final": {
-                        "question": "q",
-                        "answer": "done",
-                        "sql": "SELECT 1",
-                        "rows": [{"value": 1}],
-                        "metadata": {"analysis_session_id": "session-1"},
-                    },
-                }
-            ) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "event": "final",
+                        "session_id": "session-1",
+                        "final": {
+                            "question": "q",
+                            "answer": "done",
+                            "sql": "SELECT 1",
+                            "rows": [{"value": 1}],
+                            "metadata": {"analysis_session_id": "session-1"},
+                        },
+                    }
+                )
+                + "\n"
+            )
 
     class FakeAsyncClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1069,9 +1394,7 @@ def test_client_app_proxies_analysis_session_reply_stream(monkeypatch: Any) -> N
     lines = [json.loads(line) for line in response.text.strip().splitlines()]
     assert lines[0]["final"]["answer"] == "done"
     assert captured["method"] == "POST"
-    assert captured["url"] == (
-        "http://backend.example/api/v1/analysis/session-1/messages/stream"
-    )
+    assert captured["url"] == ("http://backend.example/api/v1/analysis/session-1/messages/stream")
     assert captured["json"] == {"message": "last month"}
 
 

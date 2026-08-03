@@ -174,6 +174,39 @@ def backend_request_kwargs(
     return kwargs
 
 
+async def proxy_json_request(
+    method: str,
+    url: str,
+    *,
+    timeout: float,
+    request_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(
+                method,
+                url,
+                **(request_kwargs or {}),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend request failed: {exc}",
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=(
+                response.json()
+                if response.headers.get("content-type", "").startswith("application/json")
+                else response.text
+            ),
+        )
+
+    return cast(dict[str, Any], response.json())
+
+
 def query_payload(request: ClientQueryRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "question": request.question,
@@ -242,27 +275,12 @@ async def query_backend(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     query_url = f"{backend_url}/api/v1/query"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                query_url,
-                **backend_request_kwargs(authorization, query_payload(request)),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        query_url,
+        timeout=120.0,
+        request_kwargs=backend_request_kwargs(authorization, query_payload(request)),
+    )
 
 
 @app.get("/api/conversations")
@@ -274,27 +292,12 @@ async def list_conversations_backend(
     resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     conversations_url = f"{resolved_backend_url}/api/v1/conversations?{urlencode({'limit': limit})}"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                conversations_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        conversations_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -310,27 +313,12 @@ async def get_conversation_backend(
         f"{urlencode({'limit': limit})}"
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                conversation_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        conversation_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.post("/api/query/explain")
@@ -341,27 +329,15 @@ async def explain_query_backend(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     explain_url = f"{backend_url}/api/v1/query/explain"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                explain_url,
-                **backend_request_kwargs(authorization, query_explanation_payload(request)),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        explain_url,
+        timeout=120.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            query_explanation_payload(request),
+        ),
+    )
 
 
 @app.post("/api/auth/login")
@@ -369,30 +345,17 @@ async def login_backend(request: ClientLoginRequest) -> dict[str, Any]:
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     login_url = f"{backend_url}/api/v1/admin/auth/login"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                login_url,
-                json={
-                    "username": request.username,
-                    "password": request.password,
-                },
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        login_url,
+        timeout=30.0,
+        request_kwargs={
+            "json": {
+                "username": request.username,
+                "password": request.password,
+            },
+        },
+    )
 
 
 @app.post("/api/auth/change-password")
@@ -403,30 +366,18 @@ async def change_password_backend(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     change_password_url = f"{backend_url}/api/v1/admin/auth/change-password"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                change_password_url,
-                **backend_request_kwargs(authorization, {
-                    "current_password": request.current_password,
-                    "new_password": request.new_password,
-                }),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        change_password_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {
+                "current_password": request.current_password,
+                "new_password": request.new_password,
+            },
+        ),
+    )
 
 
 @app.post("/api/auth/logout")
@@ -437,27 +388,12 @@ async def logout_backend(
     resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     logout_url = f"{resolved_backend_url}/api/v1/admin/auth/logout"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                logout_url,
-                headers={"Authorization": authorization} if authorization else {},
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        logout_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.get("/api/auth/me")
@@ -468,27 +404,12 @@ async def get_current_user_backend(
     resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     me_url = f"{resolved_backend_url}/api/v1/admin/me"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                me_url,
-                headers={"Authorization": authorization} if authorization else {},
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        me_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.post("/api/widgets/title-suggestion")
@@ -499,30 +420,18 @@ async def suggest_widget_title(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     suggestion_url = f"{backend_url}/api/v1/admin/overview/widgets/title-suggestion"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                suggestion_url,
-                **backend_request_kwargs(authorization, {
-                    "question": request.question,
-                    "sql": request.sql,
-                }),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        suggestion_url,
+        timeout=120.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {
+                "question": request.question,
+                "sql": request.sql,
+            },
+        ),
+    )
 
 
 @app.post("/api/widgets/from-query")
@@ -533,35 +442,23 @@ async def create_widget_from_query(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     widget_url = f"{backend_url}/api/v1/admin/overview/widgets/from-query"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                widget_url,
-                **backend_request_kwargs(authorization, {
-                    "label": request.label,
-                    "widget_type": request.widget_type,
-                    "datasource_key": request.datasource_key,
-                    "question": request.question,
-                    "sql": request.sql,
-                    "rows": request.rows,
-                    "result_mode": request.result_mode,
-                }),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        widget_url,
+        timeout=120.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {
+                "label": request.label,
+                "widget_type": request.widget_type,
+                "datasource_key": request.datasource_key,
+                "question": request.question,
+                "sql": request.sql,
+                "rows": request.rows,
+                "result_mode": request.result_mode,
+            },
+        ),
+    )
 
 
 @app.get("/api/datasources")
@@ -572,27 +469,12 @@ async def list_datasources(
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     datasources_url = f"{backend_url}/api/v1/admin/datasources?available_only=true"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                datasources_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        datasources_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.api_route("/api/datasources/selection", methods=["PUT", "POST"])
@@ -603,26 +485,15 @@ async def update_datasource_selection(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     selection_url = f"{backend_url}/api/v1/admin/datasources/selection"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                selection_url,
-                **backend_request_kwargs(
-                    authorization, {"datasource_ids": request.datasource_ids}
-                ),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Backend request failed: {exc}") from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        selection_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {"datasource_ids": request.datasource_ids},
+        ),
+    )
 
 
 @app.post("/api/datasources/excel")
@@ -639,36 +510,23 @@ async def upload_excel_datasource(
     upload_url = f"{backend_url}/api/v1/admin/datasources/excel-upload"
     content = await file.read()
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                upload_url,
-                headers=backend_auth_headers(authorization),
-                params={"active": active},
-                files={
-                    "file": (
-                        file.filename,
-                        content,
-                        file.content_type
-                        or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                },
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        upload_url,
+        timeout=120.0,
+        request_kwargs={
+            "headers": backend_auth_headers(authorization),
+            "params": {"active": active},
+            "files": {
+                "file": (
+                    file.filename,
+                    content,
+                    file.content_type
+                    or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        },
+    )
 
 
 @app.post("/api/datasources/{connector_id}/state")
@@ -680,27 +538,15 @@ async def update_datasource_state(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     state_url = f"{backend_url}/api/v1/admin/datasources/{connector_id}/state"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                state_url,
-                **backend_request_kwargs(authorization, {"active": request.active}),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        state_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {"active": request.active},
+        ),
+    )
 
 
 @app.get("/api/dashboards")
@@ -711,27 +557,12 @@ async def list_dashboards(
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     dashboards_url = f"{backend_url}/api/v1/dashboards"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                dashboards_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        dashboards_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.post("/api/dashboards")
@@ -742,33 +573,18 @@ async def create_dashboard(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     dashboards_url = f"{backend_url}/api/v1/dashboards"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                dashboards_url,
-                **backend_request_kwargs(
-                    authorization,
-                    {
-                        "name": request.name,
-                        "description": request.description,
-                    },
-                ),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        dashboards_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {
+                "name": request.name,
+                "description": request.description,
+            },
+        ),
+    )
 
 
 @app.put("/api/dashboards/active")
@@ -779,32 +595,15 @@ async def set_active_dashboard(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     dashboard_url = f"{backend_url}/api/v1/dashboards/active"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.put(
-                dashboard_url,
-                **backend_request_kwargs(
-                    authorization,
-                    {
-                        "dashboard_id": request.dashboard_id,
-                    },
-                ),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "PUT",
+        dashboard_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {"dashboard_id": request.dashboard_id},
+        ),
+    )
 
 
 @app.put("/api/dashboards/{dashboard_id}")
@@ -816,33 +615,18 @@ async def update_dashboard(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     dashboard_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.put(
-                dashboard_url,
-                **backend_request_kwargs(
-                    authorization,
-                    {
-                        "name": request.name,
-                        "description": request.description,
-                    },
-                ),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "PUT",
+        dashboard_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {
+                "name": request.name,
+                "description": request.description,
+            },
+        ),
+    )
 
 
 @app.get("/api/dashboard-metrics")
@@ -857,27 +641,12 @@ async def list_dashboard_metrics(
         f"?include_result={'true' if include_result else 'false'}"
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.get(
-                metrics_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        metrics_url,
+        timeout=120.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.patch("/api/dashboard-metrics/{widget_key}")
@@ -889,27 +658,15 @@ async def update_dashboard_metric(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     metric_url = f"{backend_url}/api/v1/dashboards/metrics/{widget_key}"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.patch(
-                metric_url,
-                **backend_request_kwargs(authorization, {"label": request.label}),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "PATCH",
+        metric_url,
+        timeout=120.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {"label": request.label},
+        ),
+    )
 
 
 @app.delete("/api/dashboard-metrics/{widget_key}")
@@ -921,27 +678,12 @@ async def delete_dashboard_metric(
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     metric_url = f"{backend_url}/api/v1/dashboards/metrics/{widget_key}"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.delete(
-                metric_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "DELETE",
+        metric_url,
+        timeout=120.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.get("/api/dashboards/{dashboard_id}/widgets")
@@ -953,27 +695,12 @@ async def list_dashboard_widgets(
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     widgets_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.get(
-                widgets_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "GET",
+        widgets_url,
+        timeout=120.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.post("/api/dashboards/{dashboard_id}/widgets")
@@ -985,34 +712,19 @@ async def add_dashboard_widget(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     widgets_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                widgets_url,
-                **backend_request_kwargs(
-                    authorization,
-                    {
-                        "metric_widget_key": request.metric_widget_key,
-                        "title": request.title,
-                        "visualization_type": request.visualization_type,
-                    },
-                ),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "POST",
+        widgets_url,
+        timeout=120.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {
+                "metric_widget_key": request.metric_widget_key,
+                "title": request.title,
+                "visualization_type": request.visualization_type,
+            },
+        ),
+    )
 
 
 @app.patch("/api/dashboards/{dashboard_id}/widgets/layout")
@@ -1024,35 +736,15 @@ async def update_dashboard_widget_layout(
     backend_url = normalize_backend_url(request.backend_url or get_default_backend_url())
     layout_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets/layout"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.patch(
-                layout_url,
-                **backend_request_kwargs(
-                    authorization,
-                    {
-                        "items": [
-                            item.model_dump()
-                            for item in request.items
-                        ],
-                    },
-                ),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "PATCH",
+        layout_url,
+        timeout=30.0,
+        request_kwargs=backend_request_kwargs(
+            authorization,
+            {"items": [item.model_dump() for item in request.items]},
+        ),
+    )
 
 
 @app.delete("/api/dashboards/{dashboard_id}/widgets/{widget_id}")
@@ -1065,27 +757,12 @@ async def delete_dashboard_widget(
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     widget_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}/widgets/{widget_id}"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.delete(
-                widget_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "DELETE",
+        widget_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.delete("/api/dashboards/{dashboard_id}")
@@ -1097,27 +774,12 @@ async def delete_dashboard(
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
     dashboard_url = f"{backend_url}/api/v1/dashboards/{dashboard_id}"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.delete(
-                dashboard_url,
-                headers=backend_auth_headers(authorization),
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Backend request failed: {exc}",
-        ) from exc
-
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-        )
-
-    return cast(dict[str, Any], response.json())
+    return await proxy_json_request(
+        "DELETE",
+        dashboard_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
 
 
 @app.post("/api/query/stream")

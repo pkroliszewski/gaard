@@ -571,7 +571,7 @@ def serialize_datasource_schema(cache: DatasourceSchemaCache) -> dict[str, Any]:
     }
 
 
-def serialize_admin_dashboard(dashboard: Dashboard) -> dict[str, Any]:
+def serialize_dashboard(dashboard: Dashboard) -> dict[str, Any]:
     return {
         "id": dashboard.dashboard_id,
         "name": dashboard.name,
@@ -1564,7 +1564,7 @@ def list_identities(
             select(Dashboard).order_by(Dashboard.updated_at.desc(), Dashboard.id.desc())
         ).all():
             dashboards_by_owner.setdefault(dashboard.owner_user_id, []).append(
-                serialize_admin_dashboard(dashboard)
+                serialize_dashboard(dashboard)
             )
         items = [
             {
@@ -1785,7 +1785,7 @@ def get_admin_dashboards(
     )
 
     return {
-        "items": [serialize_admin_dashboard(dashboard) for dashboard in dashboards],
+        "items": [serialize_dashboard(dashboard) for dashboard in dashboards],
         "viewer": user.username,
     }
 
