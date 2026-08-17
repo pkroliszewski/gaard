@@ -342,6 +342,9 @@ class DatasourceConnectorUpdateRequest(BaseModel):
 
 
 class DatasourceConnectionTestRequest(BaseModel):
+    connector_key: str | None = Field(
+        default=None, min_length=1, pattern=r"^[a-zA-Z0-9_-]+$"
+    )
     database_type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     connection_config: dict[str, Any] = Field(default_factory=dict)
     database_path: str | None = Field(default=None, min_length=1)
@@ -483,12 +486,12 @@ def filter_datasources_for_identity_privileges(
     return [connector for connector in connectors if connector.id in allowed_ids]
 
 
-def grant_client_excel_datasource_permission(
+def grant_client_uploaded_datasource_permission(
     session: Session,
     connector_id: int,
     principal: AuthenticatedSession,
 ) -> None:
-    """Make a client-uploaded workbook private to its uploader when enabled."""
+    """Make a client-uploaded datasource private to its uploader when enabled."""
     if not identity_privileges_are_active():
         return
 
@@ -903,10 +906,16 @@ def suggest_metric_title_with_llm(
     return normalize_metric_title(response.content, fallback)
 
 
-def build_client_excel_datasource_key(session: Session, filename: str) -> str:
-    stem = Path(filename).stem or "excel"
-    normalized = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-") or "excel"
-    base_key = f"client_excel_{normalized[:48].strip('_-') or 'source'}"
+def build_client_file_datasource_key(
+    session: Session,
+    filename: str,
+    source_kind: str,
+) -> str:
+    stem = Path(filename).stem or source_kind
+    normalized = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-") or source_kind
+    prefix = f"client_{source_kind}_"
+    available_length = 255 - len(prefix)
+    base_key = f"{prefix}{normalized[:available_length].strip('_-') or 'source'}"
     connector_key = base_key
     suffix = 2
 
@@ -918,20 +927,25 @@ def build_client_excel_datasource_key(session: Session, filename: str) -> str:
     return connector_key
 
 
-def safe_excel_upload_path(directory: Path, filename: str) -> Path:
-    safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", Path(filename).name).strip("._")
-    if not safe_name:
-        safe_name = "source.xlsx"
-    if Path(safe_name).suffix.lower() != ".xlsx":
-        safe_name = f"{Path(safe_name).stem or 'source'}.xlsx"
-
-    target = directory / safe_name
+def safe_file_upload_directory(
+    root: Path,
+    filename: str,
+    extension: str,
+) -> tuple[Path, Path]:
+    stem = re.sub(r"[^a-zA-Z0-9_.-]+", "_", Path(filename).stem).strip("._") or "source"
+    safe_name = f"{stem}{extension}"
+    directory = root / stem
     suffix = 2
-    while target.exists():
-        target = directory / f"{Path(safe_name).stem}_{suffix}.xlsx"
+    while directory.exists():
+        directory = root / f"{stem}_{suffix}"
         suffix += 1
-
-    return target
+    resolved_root = root.resolve()
+    resolved_directory = directory.resolve()
+    try:
+        resolved_directory.relative_to(resolved_root)
+    except ValueError as exc:  # pragma: no cover - stem is normalized above
+        raise ValueError("File upload directory escapes the configured upload root.") from exc
+    return resolved_directory, resolved_directory / safe_name
 
 
 def normalize_datasource_configuration_or_400(
@@ -956,14 +970,36 @@ def normalize_datasource_configuration_or_400(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-def ensure_excel_datasource_type_available() -> None:
+def finalize_datasource_url_or_400(
+    session: Session,
+    connector_key: str,
+    config: NormalizedDatasourceConfiguration,
+) -> NormalizedDatasourceConfiguration:
+    definition = get_connector_registry().get(config.database_type)
+    if definition.datasource_url_finalizer is None:
+        return config
     try:
-        get_connector_registry().get("duckdb-excel")
+        database_url = definition.datasource_url_finalizer(
+            session, connector_key, config.database_url
+        )
+        definition.validate_database_url(database_url)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return NormalizedDatasourceConfiguration(
+        database_type=config.database_type,
+        database_url=database_url,
+        sql_dialect=config.sql_dialect,
+    )
+
+
+def ensure_file_datasource_type_available(upload_kind: str) -> None:
+    try:
+        get_connector_registry().get("duckdb-file")
     except ConnectorRegistryError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Excel workbook uploads require the duckdb-excel datasource connector, "
+                f"{upload_kind} uploads require the duckdb-file datasource connector, "
                 "which is not available in this GAARD API process."
             ),
         ) from exc
@@ -1323,11 +1359,15 @@ def serialize_business_logic_suggestion(
     }
 
 def ensure_admin_can_manage_datasource_type(user: AdminUser, database_type: str) -> None:
-    """Keep Excel/DuckDB datasource functionality behind an Enterprise seat."""
-    if database_type == "duckdb-excel" and not user.enterprise_access:
+    """Keep paid file datasource functionality behind an Enterprise seat."""
+    restricted_messages = {
+        "duckdb-excel": "Excel datasources require an assigned Enterprise user license.",
+        "duckdb-file": "Non-SQL file datasources require an assigned Enterprise user license.",
+    }
+    if database_type in restricted_messages and not user.enterprise_access:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Excel datasources require an assigned Enterprise user license.",
+            detail=restricted_messages[database_type],
         )
 
 
@@ -2559,7 +2599,8 @@ def get_datasources(
         "items": [
             {
                 **serialize_datasource(connector),
-                "enterprise_access_required": connector.database_type == "duckdb-excel",
+                "enterprise_access_required": connector.database_type
+                in {"duckdb-excel", "duckdb-file"},
             }
             for connector in connectors
         ],
@@ -2570,6 +2611,7 @@ def get_datasources(
         ],
         "multiple_selection_allowed": multi_datasource_access_is_active(),
         "excel_upload_allowed": enterprise_access,
+        "csv_upload_allowed": enterprise_access,
         "viewer": principal.session.username or principal.user.username,
     }
 
@@ -2727,6 +2769,10 @@ def create_datasource(
             detail="Datasource connector key already exists.",
         )
 
+    normalized_config = finalize_datasource_url_or_400(
+        session, request.connector_key, normalized_config
+    )
+
     connector = DatasourceConnector(
         connector_key=request.connector_key,
         name=request.name,
@@ -2760,8 +2806,8 @@ def create_datasource(
     return {"item": serialize_datasource(connector)}
 
 
-@router.post("/datasources/excel-upload")
-async def upload_excel_datasource(
+@router.post("/datasources/file-upload")
+async def upload_client_file_datasource(
     file: UploadFile = File(...),
     active: bool = False,
     principal: AuthenticatedSession = Depends(get_current_enterprise_api_user),
@@ -2770,37 +2816,53 @@ async def upload_excel_datasource(
     if not has_enterprise_user_access(principal):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Uploading Excel workbooks requires an assigned Enterprise user license.",
+            detail="Uploading datasource files requires an assigned Enterprise user license.",
         )
     filename = file.filename or ""
-    if Path(filename).suffix.lower() != ".xlsx":
+    extension = Path(filename).suffix.lower()
+    if extension not in {".csv", ".xlsx"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only .xlsx files can be added as Excel datasources.",
+            detail="Only .csv and .xlsx files can be added as client datasources.",
         )
 
-    ensure_excel_datasource_type_available()
-    license_service.ensure_datasource_type_allowed("duckdb-excel")
+    source_kind = "excel" if extension == ".xlsx" else "csv"
+    upload_kind = "Excel workbook" if source_kind == "excel" else "CSV"
+    upload_directory = (
+        settings.gaard_excel_upload_directory
+        if source_kind == "excel"
+        else settings.gaard_csv_upload_directory
+    )
+    ensure_file_datasource_type_available(upload_kind)
+    license_service.ensure_datasource_type_allowed("duckdb-file")
 
-    upload_dir = Path(settings.gaard_excel_upload_directory).expanduser().resolve()
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    target_path = safe_excel_upload_path(upload_dir, filename)
+    upload_root = Path(upload_directory).expanduser().resolve()
+    upload_root.mkdir(parents=True, exist_ok=True)
+    source_directory, target_path = safe_file_upload_directory(
+        upload_root, filename, extension
+    )
+    source_directory.mkdir()
 
     try:
-        with target_path.open("wb") as destination:
+        with target_path.open("xb") as destination:
             while chunk := await file.read(1024 * 1024):
                 destination.write(chunk)
     except OSError as exc:
+        target_path.unlink(missing_ok=True)
+        try:
+            source_directory.rmdir()
+        except OSError:
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Excel file could not be saved: {exc}",
+            detail=f"{upload_kind} file could not be saved: {exc}",
         ) from exc
 
     request = DatasourceConnectorRequest(
-        connector_key=build_client_excel_datasource_key(session, filename),
+        connector_key=build_client_file_datasource_key(session, filename, source_kind),
         name=Path(filename).stem or target_path.stem,
-        database_type="duckdb-excel",
-        database_url=f"duckdb-excel:///{target_path.as_posix()}",
+        database_type="duckdb-file",
+        database_url=f"duckdb-file:///{source_directory.as_posix()}",
         sql_dialect="duckdb",
         active=active,
     )
@@ -2813,8 +2875,12 @@ async def upload_excel_datasource(
             database_url=request.database_url,
             sql_dialect=request.sql_dialect,
         )
+        normalized_config = finalize_datasource_url_or_400(
+            session, request.connector_key, normalized_config
+        )
     except HTTPException:
         target_path.unlink(missing_ok=True)
+        source_directory.rmdir()
         raise
 
     connector = DatasourceConnector(
@@ -2829,7 +2895,7 @@ async def upload_excel_datasource(
     session.add(connector)
     session.flush()
 
-    grant_client_excel_datasource_permission(session, connector.id, principal)
+    grant_client_uploaded_datasource_permission(session, connector.id, principal)
 
     if active:
         set_active_datasource_connector(
@@ -2841,12 +2907,13 @@ async def upload_excel_datasource(
     record_admin_audit(
         session=session,
         actor=principal.session.username or principal.user.username,
-        action="datasource.excel_upload",
+        action="datasource.file_upload",
         resource_type="datasource_connector",
         resource_id=connector.connector_key,
         details={
             "database_type": connector.database_type,
             "filename": Path(filename).name,
+            "source_kind": source_kind,
             "active": connector.active,
         },
     )
@@ -3001,6 +3068,16 @@ def delete_datasource(
         session.delete(schema_cache)
     remove_datasource_from_selections(session, connector_key)
     remove_datasource_permissions(session, connector.id)
+    definition = get_connector_registry().get(connector.database_type)
+    if definition.datasource_deleter is not None:
+        try:
+            definition.datasource_deleter(
+                session, connector.connector_key, connector.database_url
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
     session.delete(connector)
 
     record_admin_audit(
@@ -3081,6 +3158,13 @@ def test_datasource(
     license_service.ensure_datasource_type_allowed(connector.database_type)
 
     try:
+        definition = get_connector_registry().get(connector.database_type)
+        if definition.datasource_url_finalizer is not None:
+            connector.database_url = definition.datasource_url_finalizer(
+                session,
+                connector.connector_key,
+                connector.database_url,
+            )
         test_datasource_connection(connector)
     except Exception as exc:
         record_admin_audit(
@@ -3110,6 +3194,7 @@ def test_datasource(
 def test_datasource_from_request(
     request: DatasourceConnectionTestRequest,
     user: AdminUser = Depends(get_current_admin),
+    session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     normalized_config = normalize_datasource_configuration_or_400(
         database_type=request.database_type,
@@ -3129,7 +3214,22 @@ def test_datasource_from_request(
     ensure_admin_can_manage_datasource_type(user, connector.database_type)
     license_service.ensure_datasource_type_allowed(connector.database_type)
     try:
-        test_datasource_connection(connector)
+        definition = get_connector_registry().get(connector.database_type)
+        if definition.preview_connection_tester is not None:
+            if request.connector_key is None:
+                raise ValueError("Datasource key is required to test this datasource type.")
+            definition.preview_connection_tester(
+                connector.database_url, request.connector_key
+            )
+        else:
+            test_datasource_connection(connector)
+    except ValueError as exc:
+        if str(exc) == "Datasource connector key already exists.":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Datasource connector key already exists.",
+            ) from exc
+        raise connection_test_failed_http_exception(exc) from exc
     except Exception as exc:
         raise connection_test_failed_http_exception(exc) from exc
     return {"status": "ok"}
@@ -3580,19 +3680,8 @@ def get_datasource_schema(
 
     cache = get_datasource_schema_cache(session, connector.id)
 
-    if cache is None:
-        license_service.ensure_datasource_type_allowed(connector.database_type)
-        try:
-            cache = introspect_datasource_connector(session, connector, user.username)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Schema introspection failed: {exc}",
-            ) from exc
-        session.commit()
-
     return {
-        "item": serialize_datasource_schema(cache),
+        "item": serialize_datasource_schema(cache) if cache is not None else None,
         "viewer": user.username,
     }
 

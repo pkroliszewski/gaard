@@ -862,6 +862,10 @@ function allowedRequestsForExtension(extensionId) {
       "POST /api/v1/admin/datasources",
       "POST /api/v1/admin/datasources/test"
     ]),
+    "duckdb-file-connector": new Set([
+      "POST /api/v1/admin/datasources",
+      "POST /api/v1/admin/datasources/test"
+    ]),
     "siem-forwarder": new Set([
       "GET /api/v1/extensions/siem-forwarder/siem/config",
       "PUT /api/v1/extensions/siem-forwarder/siem/config",
@@ -1551,7 +1555,7 @@ function renderDatasourceForm(connector) {
   const metadataDatasource = connector?.connector_key === "metadata-db";
   const enterpriseRestricted = isEnterpriseDatasource(connector);
   const selectedTypeKey = connector?.database_type
-    || state.datasourceTypes.find((item) => item.type_key !== "duckdb-excel" || state.enterpriseAccess)?.type_key
+    || state.datasourceTypes.find((item) => !isEnterpriseDatasourceType(item.type_key) || state.enterpriseAccess)?.type_key
     || "";
   const selectedType = getDatasourceType(selectedTypeKey);
   const selectedSqlDialect = connector?.sql_dialect || selectedType?.default_sql_dialect || "";
@@ -1593,7 +1597,10 @@ function getDatasourceType(typeKey) {
   return state.datasourceTypes.find((item) => item.type_key === typeKey) || null;
 }
 function isEnterpriseDatasource(connector) {
-  return connector?.enterprise_access_required === true || connector?.database_type === "duckdb-excel";
+  return connector?.enterprise_access_required === true || isEnterpriseDatasourceType(connector?.database_type);
+}
+function isEnterpriseDatasourceType(typeKey) {
+  return typeKey === "duckdb-excel" || typeKey === "duckdb-file";
 }
 function renderDatasourceTypeOptions(selected) {
   const datasourceTypes = [...state.datasourceTypes];
@@ -1610,7 +1617,7 @@ function renderDatasourceTypeOptions(selected) {
   if (!datasourceTypes.length) {
     return `<option value="" selected>No connector types available</option>`;
   }
-  return datasourceTypes.map((item) => `<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""} ${item.type_key === "duckdb-excel" && !state.enterpriseAccess ? "disabled" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  return datasourceTypes.map((item) => `<option value="${escapeHtml(item.type_key)}" ${item.type_key === selected ? "selected" : ""} ${isEnterpriseDatasourceType(item.type_key) && !state.enterpriseAccess ? "disabled" : ""}>${escapeHtml(item.label)}</option>`).join("");
 }
 function renderSqlDialectOptions(datasourceType, selected) {
   const dialects = [...datasourceType?.sql_dialects || []];
@@ -3283,7 +3290,7 @@ async function saveDatasource(event) {
   if (selected?.system_managed) return;
   const form = new FormData(event.currentTarget);
   const databaseUrlInput = event.currentTarget.querySelector("[name='database_url']");
-  const id = String(form.get("id") || "");
+  const id = selected?.id || null;
   const payload = {
     connector_key: form.get("connector_key"),
     name: form.get("name"),
@@ -3293,15 +3300,10 @@ async function saveDatasource(event) {
     active: form.get("active") === "on"
   };
   try {
-    const result = selected && payload.active !== selected.active
-      ? await api(`/api/v1/admin/datasources/${selected.id}/state`, {
-        method: "POST",
-        body: JSON.stringify({ active: payload.active })
-      })
-      : await api(id ? `/api/v1/admin/datasources/${id}` : "/api/v1/admin/datasources", {
-        method: id ? "PUT" : "POST",
-        body: JSON.stringify(id ? { ...payload, connector_key: void 0 } : payload)
-      });
+    const result = await api(id ? `/api/v1/admin/datasources/${id}` : "/api/v1/admin/datasources", {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(id ? { ...payload, connector_key: void 0 } : payload)
+    });
     await commitDatasourceExtensions(result.item);
     state.selectedDatasourceId = result.item.id;
     setMessage("success", "Datasource saved.");
@@ -3321,6 +3323,7 @@ async function testDatasource() {
       await api("/api/v1/admin/datasources/test", {
         method: "POST",
         body: JSON.stringify({
+          connector_key: formData.get("connector_key"),
           database_type: formData.get("database_type"),
           connection_config: collectDatasourceConnectionConfig(form),
           database_url: formData.get("database_url") || null

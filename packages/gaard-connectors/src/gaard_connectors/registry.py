@@ -21,6 +21,9 @@ ExecutorFactory = Callable[[str, int], QueryExecutor]
 IntrospectorFactory = Callable[[str], SchemaIntrospector]
 ConnectionTester = Callable[[str], None]
 DatabaseUrlValidator = Callable[[str], None]
+PreviewConnectionTester = Callable[[str, str], None]
+DatasourceUrlFinalizer = Callable[[Any, str, str], str]
+DatasourceDeleter = Callable[[Any, str, str], None]
 
 
 class ConnectorRegistryError(RuntimeError):
@@ -47,6 +50,9 @@ class ConnectorDefinition:
     introspector_factory: IntrospectorFactory
     connection_tester: ConnectionTester
     database_url_validator: DatabaseUrlValidator | None = None
+    preview_connection_tester: PreviewConnectionTester | None = None
+    datasource_url_finalizer: DatasourceUrlFinalizer | None = None
+    datasource_deleter: DatasourceDeleter | None = None
     config_schema: Mapping[str, Any] = field(default_factory=dict)
     description: str = ""
 

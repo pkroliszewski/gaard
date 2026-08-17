@@ -49,6 +49,9 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "syncConversationFromResponse" in response.text
     assert "renderDatasourcesView" in response.text
     assert "Excel workbooks" in response.text
+    assert "CSV uploads" in response.text
+    assert 'data-add-source="csv"' in response.text
+    assert 'data-view="datasources" aria-label="Manage data sources"' in response.text
     assert "Connected feature" not in response.text
     assert "data-add-source" in response.text
     assert "openSourcePicker" in response.text
@@ -112,7 +115,7 @@ def test_client_app_warns_when_response_uses_mock_modes() -> None:
     assert "grid.disable?.()" in response.text
     assert "resizestop" in response.text
     assert "alwaysShowResizeHandle" in response.text
-    assert "/api/datasources/excel" in response.text
+    assert "/api/datasources/${sourceType}" in response.text
     assert 'message.mode === "analysis" && getRows(payload.final).length > 0' in (response.text)
     assert "user_question" in response.text
     assert "Investigation" not in response.text
@@ -383,11 +386,17 @@ def test_client_app_preserves_login_and_datasource_requests(monkeypatch: Any) ->
             )
         },
     )
+    csv_upload_response = client.post(
+        "/api/datasources/csv?backend_url=http://backend.example/&active=false",
+        headers=authorization,
+        files={"file": ("cases.csv", b"id,name\n1,Alice\n", "text/csv")},
+    )
 
     assert login_response.status_code == 200
     assert datasources_response.status_code == 200
     assert selection_response.status_code == 200
     assert upload_response.status_code == 200
+    assert csv_upload_response.status_code == 200
     assert captured[0] == {
         "method": "POST",
         "url": "http://backend.example/api/v1/admin/auth/login",
@@ -408,7 +417,7 @@ def test_client_app_preserves_login_and_datasource_requests(monkeypatch: Any) ->
         "headers": authorization,
     }
     assert captured[3]["method"] == "POST"
-    assert captured[3]["url"] == "http://backend.example/api/v1/admin/datasources/excel-upload"
+    assert captured[3]["url"] == "http://backend.example/api/v1/admin/datasources/file-upload"
     assert captured[3]["timeout"] == 120.0
     assert captured[3]["headers"] == authorization
     assert captured[3]["params"] == {"active": False}
@@ -418,6 +427,20 @@ def test_client_app_preserves_login_and_datasource_requests(monkeypatch: Any) ->
             b"workbook-content",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+    }
+    assert captured[4] == {
+        "method": "POST",
+        "url": "http://backend.example/api/v1/admin/datasources/file-upload",
+        "timeout": 120.0,
+        "headers": authorization,
+        "params": {"active": False},
+        "files": {
+            "file": (
+                "cases.csv",
+                b"id,name\n1,Alice\n",
+                "text/csv",
+            )
+        },
     }
 
 

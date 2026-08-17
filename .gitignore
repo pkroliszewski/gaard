@@ -1,5 +1,6 @@
 # Runtime databases
 metadata.db
+.gaard/
 *.db
 *.sqlite
 *.sqlite3

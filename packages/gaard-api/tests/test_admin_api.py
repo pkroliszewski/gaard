@@ -21,6 +21,7 @@ from gaard_core.query_pipeline.models import (
     QueryRequest,
 )
 from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
+from openpyxl import Workbook
 from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 
@@ -43,6 +44,7 @@ from gaard_api.admin.models import (
     DataQueryAuditType,
     DatasourceConnector,
     DatasourceSchemaCache,
+    DuckDBFileMaterialization,
     OverviewWidget,
     OverviewWidgetTag,
     PromptTemplate,
@@ -501,7 +503,7 @@ def user_headers(
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasources(
+def test_unlicensed_admin_has_read_only_identities_and_restricted_file_datasources(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -536,6 +538,17 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
                 updated_by="admin",
             )
         )
+        session.add(
+            DatasourceConnector(
+                connector_key="non-sql-file-source",
+                name="Non-SQL file source",
+                database_type="duckdb-file",
+                database_url="duckdb-file:///materializations/restricted_file",
+                sql_dialect="duckdb",
+                active=True,
+                updated_by="admin",
+            )
+        )
         session.commit()
 
     identities = admin_client.patch(
@@ -547,6 +560,11 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
     identity_list = admin_client.get("/api/v1/admin/identities", headers=headers)
     datasources = admin_client.get("/api/v1/admin/datasources", headers=headers)
     excel = next(item for item in datasources.json()["items"] if item["connector_key"] == "excel-source")
+    file_source = next(
+        item
+        for item in datasources.json()["items"]
+        if item["connector_key"] == "non-sql-file-source"
+    )
     sql_source = next(
         item
         for item in datasources.json()["items"]
@@ -562,6 +580,16 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
         headers=headers,
         json={"active": False},
     )
+    file_mutation = admin_client.post(
+        f"/api/v1/admin/datasources/{file_source['id']}/state",
+        headers=headers,
+        json={"active": True},
+    )
+    file_deactivation = admin_client.post(
+        f"/api/v1/admin/datasources/{file_source['id']}/state",
+        headers=headers,
+        json={"active": False},
+    )
     sql_deactivation = admin_client.post(
         f"/api/v1/admin/datasources/{sql_source['id']}/state",
         headers=headers,
@@ -573,9 +601,13 @@ def test_unlicensed_admin_has_read_only_identities_and_restricted_excel_datasour
     assert extensions.json()["admin_sections"] == []
     assert extensions.json()["admin_frontend_modules"] == []
     assert excel["enterprise_access_required"] is True
+    assert file_source["enterprise_access_required"] is True
     assert excel_mutation.status_code == 403
+    assert file_mutation.status_code == 403
     assert excel_deactivation.status_code == 200
     assert excel_deactivation.json()["item"]["active"] is False
+    assert file_deactivation.status_code == 200
+    assert file_deactivation.json()["item"]["active"] is False
     assert sql_deactivation.status_code == 200
     assert sql_deactivation.json()["item"]["active"] is False
 
@@ -693,6 +725,35 @@ def test_admin_lists_extensions_inventory(admin_client: TestClient) -> None:
     assert payload["viewer"] == "admin"
 
 
+def test_directory_materializer_section_is_exposed_like_excel_loader(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    section = SimpleNamespace(
+        extension_id="duckdb-file-connector",
+        serialize=lambda: {"section_id": "extension:duckdb-file-connector:duckdb-file"},
+    )
+    registry = SimpleNamespace(
+        list_admin_sections=lambda: [section],
+        list_admin_frontend_modules=list,
+    )
+    monkeypatch.setattr(admin_api, "get_extension_manager", lambda: SimpleNamespace(records=[]))
+    monkeypatch.setattr(admin_api, "get_api_registry", lambda: registry)
+
+    response = admin_client.get(
+        "/api/v1/admin/extensions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["admin_sections"] == [
+        {"section_id": "extension:duckdb-file-connector:duckdb-file"}
+    ]
+
+
 def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: TestClient) -> None:
     response = admin_client.get("/admin/assets/main.js")
 
@@ -712,6 +773,8 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert 'src="/admin/assets/getgaard.svg"' in response.text
     assert "Update packages" in response.text
     assert "formatLicenseEditionLabel(state.license)" in response.text
+    assert "const id = selected?.id || null;" in response.text
+    assert "method: id ? \"PUT\" : \"POST\"" in response.text
     assert "<span>Community edition</span>" not in response.text
     assert 'api("/api/v1/admin/license/status")' in response.text
     assert 'api("/api/v1/admin/license/packages/update"' in response.text
@@ -729,6 +792,7 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert governance_index < configuration_index < license_index < extensions_index
     assert "extension-frame" in response.text
     assert "plugin unavailable" in response.text
+    assert '"duckdb-file-connector": new Set([' in response.text
     assert "renderDatabaseTypeOptions" not in response.text
     assert "Loading dashboard overview" in response.text
     assert "overview-page-loading" in response.text
@@ -2572,7 +2636,7 @@ def test_default_datasource_can_be_tested_and_introspected(admin_client: TestCli
     }
 
 
-def test_datasource_schema_returns_introspection_error(
+def test_datasource_schema_read_does_not_trigger_introspection(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2606,10 +2670,8 @@ def test_datasource_schema_returns_introspection_error(
         headers=auth_headers(admin_client),
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == (
-        "Schema introspection failed: SQLAlchemy could not infer a common column type."
-    )
+    assert response.status_code == 200
+    assert response.json()["item"] is None
 
 
 def test_unsaved_datasource_test_returns_connector_error(
@@ -2636,6 +2698,188 @@ def test_unsaved_datasource_test_returns_connector_error(
     assert response.json()["detail"] == (
         "Connection test failed: SQLAlchemy could not infer a common column type."
     )
+
+
+def test_saved_datasource_test_runs_url_finalizer(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    with create_session() as session:
+        connector = DatasourceConnector(
+            connector_key="repair-me",
+            name="Repair me",
+            database_type="sqlite",
+            database_url="sqlite:///before.db",
+            sql_dialect="sqlite",
+            active=False,
+            updated_by="test",
+        )
+        session.add(connector)
+        session.commit()
+        connector_id = connector.id
+
+    finalizer_calls: list[tuple[str, str]] = []
+
+    def finalize(_session: object, connector_key: str, database_url: str) -> str:
+        finalizer_calls.append((connector_key, database_url))
+        return "sqlite:///after.db"
+
+    monkeypatch.setattr(
+        admin_api,
+        "get_connector_registry",
+        lambda: SimpleNamespace(
+            get=lambda _database_type: SimpleNamespace(datasource_url_finalizer=finalize)
+        ),
+    )
+    monkeypatch.setattr(admin_api, "test_datasource_connection", lambda connector: None)
+
+    response = admin_client.post(
+        f"/api/v1/admin/datasources/{connector_id}/test",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert finalizer_calls == [("repair-me", "sqlite:///before.db")]
+    with create_session() as session:
+        assert session.get(DatasourceConnector, connector_id).database_url == "sqlite:///after.db"
+
+
+def test_saved_duckdb_file_test_creates_missing_materialization_mapping(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    source = (tmp_path / "migrated-source.csv").resolve()
+    source.write_text("id,name\n1,Alice\n", encoding="utf-8")
+    storage = (tmp_path / "duckdb-file-storage").resolve()
+    monkeypatch.setenv("GAARD_DUCKDB_FILE_STORAGE_ROOT", str(storage))
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_datasource_type_allowed",
+        lambda database_type: None,
+    )
+    with create_session() as session:
+        connector = DatasourceConnector(
+            connector_key="migrated-source",
+            name="Migrated source",
+            database_type="duckdb-file",
+            database_url=f"duckdb-file:///{source.as_posix()}",
+            sql_dialect="duckdb",
+            active=False,
+            updated_by="migration",
+        )
+        session.add(connector)
+        session.commit()
+        connector_id = connector.id
+
+    response = admin_client.post(
+        f"/api/v1/admin/datasources/{connector_id}/test",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    with create_session() as session:
+        connector = session.get(DatasourceConnector, connector_id)
+        mapping = session.get(DuckDBFileMaterialization, "migrated-source")
+        assert connector is not None
+        assert connector.database_url.startswith("duckdb-file:///materializations/")
+        assert mapping is not None
+        assert mapping.datasource_key == "migrated-source"
+        assert (storage / "materializations" / mapping.materialization_name).is_file()
+
+
+def test_unsaved_duckdb_file_test_rejects_existing_unmapped_connector_key(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    monkeypatch.setattr(
+        admin_api, "ensure_admin_can_manage_datasource_type", lambda user, type_key: None
+    )
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_datasource_type_allowed",
+        lambda database_type: None,
+    )
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    with create_session() as session:
+        session.add(
+            DatasourceConnector(
+                connector_key="already-used",
+                name="Existing SQLite",
+                database_type="sqlite",
+                database_url="sqlite:///existing.db",
+                sql_dialect="sqlite",
+                active=False,
+                updated_by="test",
+            )
+        )
+        session.commit()
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "already-used",
+            "database_type": "duckdb-file",
+            "database_url": "duckdb-file:///C:/missing-source.csv",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Datasource connector key already exists."
+
+
+def test_directory_materializer_reports_non_sql_license_error(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    license_message = (
+        "This datasource type requires a license with non-SQL source support. "
+        "Upgrade the license or keep this source inactive."
+    )
+
+    def reject_license(_database_type: str) -> None:
+        raise admin_api.LicenseAccessError(license_message)
+
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_datasource_type_allowed",
+        reject_license,
+    )
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    source = (tmp_path / "directory-source").resolve()
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connector_key": "directory-source",
+            "database_type": "duckdb-file",
+            "database_url": f"duckdb-file:///{source.as_posix()}",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == {
+        "code": "LICENSE_ENTITLEMENT_REQUIRED",
+        "message": license_message,
+    }
+    assert not source.exists()
 
 
 def test_user_can_list_datasources_but_cannot_create_them(
@@ -2931,6 +3175,52 @@ def test_datasource_connector_accepts_postgres_sql_dialect(
     assert item["sql_dialect"] == "postgres"
 
 
+def test_datasource_update_keeps_key_and_duplicate_create_is_rejected(
+    admin_client: TestClient,
+) -> None:
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {
+        "connector_key": "editable_source",
+        "name": "Original name",
+        "database_type": "sqlite",
+        "database_url": "sqlite:///original.db",
+        "active": False,
+    }
+    created = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers=headers,
+        json=payload,
+    )
+    assert created.status_code == 200
+    datasource_id = created.json()["item"]["id"]
+
+    updated = admin_client.put(
+        f"/api/v1/admin/datasources/{datasource_id}",
+        headers=headers,
+        json={
+            "name": "Updated name",
+            "database_type": "sqlite",
+            "database_url": "sqlite:///updated.db",
+            "active": False,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["item"]["connector_key"] == "editable_source"
+    assert updated.json()["item"]["name"] == "Updated name"
+    assert updated.json()["item"]["database_url"] == "sqlite:///updated.db"
+
+    duplicate = admin_client.post(
+        "/api/v1/admin/datasources",
+        headers=headers,
+        json={**payload, "name": "Duplicate"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "Datasource connector key already exists."
+
+
 def test_datasource_connector_builds_sqlite_url_from_database_path(
     admin_client: TestClient,
     tmp_path: Path,
@@ -2959,7 +3249,7 @@ def test_datasource_connector_builds_sqlite_url_from_database_path(
     assert item["sql_dialect"] == "sqlite"
 
 
-def test_excel_upload_without_duckdb_excel_connector_returns_400(
+def test_excel_upload_without_duckdb_file_connector_returns_400(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2973,7 +3263,7 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     monkeypatch.setattr(admin_api, "get_connector_registry", create_builtin_connector_registry)
 
     response = admin_client.post(
-        "/api/v1/admin/datasources/excel-upload",
+        "/api/v1/admin/datasources/file-upload",
         headers={"Authorization": f"Bearer {token}"},
         files={
             "file": (
@@ -2985,8 +3275,168 @@ def test_excel_upload_without_duckdb_excel_connector_returns_400(
     )
 
     assert response.status_code == 400
-    assert "duckdb-excel datasource connector" in response.json()["detail"]
+    assert "duckdb-file datasource connector" in response.json()["detail"]
     assert not upload_dir.exists()
+
+
+def test_excel_upload_creates_private_directory_datasource(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    upload_dir = tmp_path / "excel-uploads"
+    storage_dir = tmp_path / "duckdb-file-storage"
+    monkeypatch.setattr(settings, "gaard_excel_upload_directory", str(upload_dir))
+    monkeypatch.setenv("GAARD_DUCKDB_FILE_STORAGE_ROOT", str(storage_dir.resolve()))
+    monkeypatch.setattr(
+        admin_api, "ensure_file_datasource_type_available", lambda upload_kind: None
+    )
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_datasource_type_allowed",
+        lambda database_type: None,
+    )
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: False)
+    monkeypatch.setattr(
+        admin_api,
+        "normalize_datasource_configuration_or_400",
+        lambda **values: SimpleNamespace(
+            database_type=values["database_type"],
+            database_url=values["database_url"],
+            sql_dialect=values["sql_dialect"],
+        ),
+    )
+
+    workbook = Workbook()
+    workbook.active.title = "Patients"
+    workbook.active.append(["id", "name"])
+    workbook.active.append([1, "Alice"])
+    workbook_bytes = io.BytesIO()
+    workbook.save(workbook_bytes)
+    workbook_payload = workbook_bytes.getvalue()
+    workbook_bytes.seek(0)
+    response = admin_client.post(
+        "/api/v1/admin/datasources/file-upload?active=false",
+        headers={"Authorization": f"Bearer {token}"},
+        files={
+            "file": (
+                "Patient Cases.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["item"]
+    assert item["connector_key"] == "client_excel_patient_cases"
+    assert item["database_type"] == "duckdb-file"
+    source_directory = upload_dir / "Patient_Cases"
+    assert item["database_url"] == "duckdb-file:///materializations/patient_cases"
+    assert (storage_dir / "materializations" / "patient_cases.duckdb").is_file()
+    assert (source_directory / "Patient_Cases.xlsx").read_bytes() == workbook_payload
+
+    delete_response = admin_client.delete(
+        f"/api/v1/admin/datasources/{item['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete_response.status_code == 200, delete_response.text
+    assert not (storage_dir / "materializations" / "patient_cases.duckdb").exists()
+    assert not (source_directory / "Patient_Cases.xlsx").exists()
+    assert not source_directory.exists()
+
+
+def test_csv_upload_without_duckdb_file_connector_returns_400(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    upload_dir = tmp_path / "csv-uploads"
+    storage_dir = tmp_path / "duckdb-file-storage"
+    monkeypatch.setattr(settings, "gaard_csv_upload_directory", str(upload_dir))
+    monkeypatch.setenv("GAARD_DUCKDB_FILE_STORAGE_ROOT", str(storage_dir.resolve()))
+    monkeypatch.setattr(admin_api, "get_connector_registry", create_builtin_connector_registry)
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/file-upload",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("cases.csv", io.BytesIO(b"id\n1\n"), "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "duckdb-file datasource connector" in response.json()["detail"]
+    assert not upload_dir.exists()
+
+
+def test_csv_upload_creates_private_directory_datasource(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    upload_dir = tmp_path / "csv-uploads"
+    storage_dir = tmp_path / "duckdb-file-storage"
+    monkeypatch.setattr(settings, "gaard_csv_upload_directory", str(upload_dir))
+    monkeypatch.setenv("GAARD_DUCKDB_FILE_STORAGE_ROOT", str(storage_dir.resolve()))
+    monkeypatch.setattr(
+        admin_api, "ensure_file_datasource_type_available", lambda upload_kind: None
+    )
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_datasource_type_allowed",
+        lambda database_type: None,
+    )
+    monkeypatch.setattr(admin_api, "identity_privileges_are_active", lambda: False)
+    monkeypatch.setattr(
+        admin_api,
+        "normalize_datasource_configuration_or_400",
+        lambda **values: SimpleNamespace(
+            database_type=values["database_type"],
+            database_url=values["database_url"],
+            sql_dialect=values["sql_dialect"],
+        ),
+    )
+
+    response = admin_client.post(
+        "/api/v1/admin/datasources/file-upload?active=false",
+        headers={"Authorization": f"Bearer {token}"},
+        files={
+            "file": (
+                "Patient Cases.csv",
+                io.BytesIO(b"id,name\n1,Alice\n"),
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["item"]
+    assert item["connector_key"] == "client_csv_patient_cases"
+    assert item["database_type"] == "duckdb-file"
+    source_directory = upload_dir / "Patient_Cases"
+    assert item["database_url"] == "duckdb-file:///materializations/patient_cases"
+    assert (storage_dir / "materializations" / "patient_cases.duckdb").is_file()
+    assert (source_directory / "Patient_Cases.csv").read_bytes() == b"id,name\n1,Alice\n"
+
+    delete_response = admin_client.delete(
+        f"/api/v1/admin/datasources/{item['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete_response.status_code == 200, delete_response.text
+    assert not (storage_dir / "materializations" / "patient_cases.duckdb").exists()
+    assert not (source_directory / "Patient_Cases.csv").exists()
+    assert not source_directory.exists()
 
 
 def test_unassigned_user_cannot_use_or_upload_excel_datasources(
@@ -3039,7 +3489,7 @@ def test_unassigned_user_cannot_use_or_upload_excel_datasources(
     assert select_response.status_code == 403
 
     upload_response = admin_client.post(
-        "/api/v1/admin/datasources/excel-upload",
+        "/api/v1/admin/datasources/file-upload",
         headers=headers,
         files={
             "file": (
@@ -3051,6 +3501,16 @@ def test_unassigned_user_cannot_use_or_upload_excel_datasources(
     )
     assert upload_response.status_code == 403
     assert upload_response.json()["detail"] == (
+        "This account has dashboard-only access because no Enterprise user license is assigned."
+    )
+
+    csv_upload_response = admin_client.post(
+        "/api/v1/admin/datasources/file-upload",
+        headers=headers,
+        files={"file": ("cases.csv", io.BytesIO(b"id\n1\n"), "text/csv")},
+    )
+    assert csv_upload_response.status_code == 403
+    assert csv_upload_response.json()["detail"] == (
         "This account has dashboard-only access because no Enterprise user license is assigned."
     )
 

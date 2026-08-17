@@ -140,6 +140,12 @@ class Settings:
             "./uploads/excel",
         )
     )
+    gaard_csv_upload_directory: str = field(
+        default_factory=lambda: env_value(
+            "GAARD_CSV_UPLOAD_DIRECTORY",
+            "./uploads/csv",
+        )
+    )
 
 
 settings = Settings()

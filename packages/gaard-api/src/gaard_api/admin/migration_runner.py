@@ -28,6 +28,8 @@ class SqlUpdateCommand:
     sql: str
     dialect: str | None = None
     required_table: str | None = None
+    required_columns: tuple[str, ...] = ()
+    missing_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,8 @@ def parse_sql_updates(contents: str) -> tuple[TaggedSqlUpdate, ...]:
     current_tag: str | None = None
     current_dialect: str | None = None
     current_table: str | None = None
+    required_columns: list[str] = []
+    missing_columns: list[str] = []
     current_commands: list[SqlUpdateCommand] = []
 
     def finish_current_update() -> None:
@@ -94,6 +98,24 @@ def parse_sql_updates(contents: str) -> tuple[TaggedSqlUpdate, ...]:
             current_table = None if table_name.lower() == "all" else table_name
             continue
 
+        column_exists_match = _COLUMN_EXISTS_PATTERN.fullmatch(line)
+        if column_exists_match:
+            if current_tag is None or current_table is None:
+                raise ValueError(
+                    f"Column condition without a tagged table on line {line_number}."
+                )
+            required_columns.append(column_exists_match.group(1))
+            continue
+
+        column_missing_match = _COLUMN_MISSING_PATTERN.fullmatch(line)
+        if column_missing_match:
+            if current_tag is None or current_table is None:
+                raise ValueError(
+                    f"Column condition without a tagged table on line {line_number}."
+                )
+            missing_columns.append(column_missing_match.group(1))
+            continue
+
         if line.startswith("--"):
             continue
         if current_tag is None:
@@ -110,8 +132,12 @@ def parse_sql_updates(contents: str) -> tuple[TaggedSqlUpdate, ...]:
                 sql=sql,
                 dialect=current_dialect,
                 required_table=current_table,
+                required_columns=tuple(required_columns),
+                missing_columns=tuple(missing_columns),
             )
         )
+        required_columns = []
+        missing_columns = []
 
     finish_current_update()
     _validate_unique_tags(updates)
@@ -306,10 +332,18 @@ def _execute_update(connection: Connection, update: TaggedSqlUpdate) -> None:
     for command in update.commands:
         if command.dialect is not None and command.dialect != dialect:
             continue
-        if command.required_table is not None and not inspect(connection).has_table(
-            command.required_table
-        ):
-            continue
+        if command.required_table is not None:
+            inspector = inspect(connection)
+            if not inspector.has_table(command.required_table):
+                continue
+            column_names = {
+                str(column["name"])
+                for column in inspector.get_columns(command.required_table)
+            }
+            if not all(column in column_names for column in command.required_columns):
+                continue
+            if not all(column not in column_names for column in command.missing_columns):
+                continue
         connection.exec_driver_sql(command.sql)
 
 

@@ -96,6 +96,8 @@ def test_repository_update_file_is_valid_and_has_unique_ordered_tags() -> None:
 
     assert [update.tag for update in updates] == [
         "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-12.duckdb-file-connector.initial.v1",
+        "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
     ]
 
 
@@ -242,7 +244,11 @@ def test_repository_update_normalizes_legacy_identity_permission_ids(tmp_path: P
         migration_tags,
     )
 
-    assert applied == ("2026-07-31.identity-ids-use-admin-user-id.v1",)
+    assert applied == (
+        "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-12.duckdb-file-connector.initial.v1",
+        "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+    )
     with engine.connect() as connection:
         datasource_ids = connection.exec_driver_sql(
             "SELECT connector_id, identity_id "
@@ -264,6 +270,18 @@ def test_repository_update_can_be_applied_without_optional_permission_tables(
 ) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}")
     execute_initial_sql(engine, parse_initial_sql(initial_file_contents()))
+    with engine.begin() as connection:
+        connection.exec_driver_sql("""
+            INSERT INTO datasource_connectors
+                (id, connector_key, name, database_type, database_url, sql_dialect,
+                 active, created_at, updated_at, updated_by)
+            VALUES
+                (10, 'legacy-excel', 'Legacy Excel', 'duckdb-excel',
+                 'duckdb-excel:///C:/uploads/cases.xlsx', 'duckdb', 0,
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'test'),
+                (11, 'sqlite-source', 'SQLite', 'sqlite', 'sqlite:///data.db',
+                 'sqlite', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'test')
+        """)
     migration_tags = as_table(DatabaseMigrationTag.__table__)
 
     applied = apply_pending_sql_updates(
@@ -272,7 +290,105 @@ def test_repository_update_can_be_applied_without_optional_permission_tables(
         migration_tags,
     )
 
-    assert applied == ("2026-07-31.identity-ids-use-admin-user-id.v1",)
+    assert applied == (
+        "2026-07-31.identity-ids-use-admin-user-id.v1",
+        "2026-08-12.duckdb-file-connector.initial.v1",
+        "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+    )
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT database_type, database_url FROM datasource_connectors "
+            "WHERE connector_key = 'legacy-excel'"
+        ).one() == (
+            "duckdb-file",
+            "duckdb-file:///C:/uploads/cases.xlsx",
+        )
+        assert connection.exec_driver_sql(
+            "SELECT database_type, database_url FROM datasource_connectors "
+            "WHERE connector_key = 'sqlite-source'"
+        ).one() == ("sqlite", "sqlite:///data.db")
+
+
+def test_initial_schema_normalizes_legacy_duckdb_excel_connectors(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}")
+    commands = parse_initial_sql(initial_file_contents())
+    execute_initial_sql(engine, commands)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("""
+            INSERT INTO datasource_connectors
+                (id, connector_key, name, database_type, database_url, sql_dialect,
+                 active, created_at, updated_at, updated_by)
+            VALUES
+                (10, 'legacy-excel', 'Legacy Excel', 'duckdb-excel',
+                 'duckdb-excel:///C:/uploads/cases.xlsx', 'duckdb', 0,
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'test')
+        """)
+
+    execute_initial_sql(engine, commands)
+
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT database_type, database_url FROM datasource_connectors "
+            "WHERE connector_key = 'legacy-excel'"
+        ).one() == (
+            "duckdb-file",
+            "duckdb-file:///C:/uploads/cases.xlsx",
+        )
+
+
+def test_current_updates_leave_legacy_file_import_metadata_unchanged(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}")
+    migration_tags = as_table(DatabaseMigrationTag.__table__)
+    migration_tags.create(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE duckdb_file_imports ("
+            "id VARCHAR(36) PRIMARY KEY, mode VARCHAR(16) NOT NULL, "
+            "original_filename VARCHAR(1024) NOT NULL, status VARCHAR(16) NOT NULL, "
+            "database_url VARCHAR(2048), storage_key VARCHAR(255) NOT NULL UNIQUE, "
+            "options_json TEXT NOT NULL, created_at DATETIME NOT NULL, "
+            "started_at DATETIME, completed_at DATETIME, error_message TEXT)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO duckdb_file_imports "
+            "(id, mode, original_filename, status, storage_key, options_json, created_at) "
+            "VALUES ('import-1', 'file', 'C:/data/source', 'uploaded', 'source', '{}', "
+            "CURRENT_TIMESTAMP)"
+        )
+        connection.execute(
+            migration_tags.insert(),
+            [
+                {"tag": "2026-07-31.identity-ids-use-admin-user-id.v1"},
+                {"tag": "2026-08-12.duckdb-file-connector.initial.v1"},
+            ],
+        )
+
+    applied = apply_pending_sql_updates(
+        engine,
+        parse_sql_updates(update_file_contents()),
+        migration_tags,
+    )
+
+    assert applied == (
+        "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+    )
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("duckdb_file_imports")
+    }
+    assert columns >= {
+        "mode",
+        "original_filename",
+        "status",
+    }
+    assert "source_directory" not in columns
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT mode, original_filename, status FROM duckdb_file_imports"
+        ).one() == ("file", "C:/data/source", "uploaded")
 
 
 def test_legacy_repair_adds_all_pre_tag_core_schema_changes(tmp_path: Path) -> None:
@@ -434,9 +550,15 @@ def test_startup_repairs_legacy_database_before_app_queries_models(
             assert connection.exec_driver_sql(
                 "SELECT is_system_admin FROM admin_users WHERE id = 1"
             ).scalar_one() == 1
-            assert connection.exec_driver_sql(
-                "SELECT tag FROM database_migration_tags"
-            ).scalar_one() == "2026-07-31.identity-ids-use-admin-user-id.v1"
+            assert set(
+                connection.exec_driver_sql(
+                    "SELECT tag FROM database_migration_tags"
+                ).scalars()
+                ) == {
+                    "2026-07-31.identity-ids-use-admin-user-id.v1",
+                    "2026-08-12.duckdb-file-connector.initial.v1",
+                    "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+                }
     finally:
         reset_metadata_store_for_tests()
 

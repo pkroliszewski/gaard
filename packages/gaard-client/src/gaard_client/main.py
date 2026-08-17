@@ -491,18 +491,30 @@ async def update_datasource_selection(
     )
 
 
-@app.post("/api/datasources/excel")
-async def upload_excel_datasource(
+@app.post("/api/datasources/{source_type}")
+async def upload_file_datasource(
+    source_type: str,
     file: UploadFile = File(...),
     active: bool = True,
     backend_url: str | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    if not file.filename or Path(file.filename).suffix.lower() != ".xlsx":
-        raise HTTPException(status_code=400, detail="Choose an .xlsx file.")
+    source_specs = {
+        "excel": (
+            ".xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        "csv": (".csv", "text/csv"),
+    }
+    spec = source_specs.get(source_type)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Unsupported datasource upload type.")
+    expected_suffix, default_content_type = spec
+    if not file.filename or Path(file.filename).suffix.lower() != expected_suffix:
+        raise HTTPException(status_code=400, detail=f"Choose a {expected_suffix} file.")
 
     backend_url = normalize_backend_url(backend_url or get_default_backend_url())
-    upload_url = f"{backend_url}/api/v1/admin/datasources/excel-upload"
+    upload_url = f"{backend_url}/api/v1/admin/datasources/file-upload"
     content = await file.read()
 
     return await proxy_json_request(
@@ -516,8 +528,7 @@ async def upload_excel_datasource(
                 "file": (
                     file.filename,
                     content,
-                    file.content_type
-                    or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    file.content_type or default_content_type,
                 )
             },
         },

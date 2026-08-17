@@ -38,6 +38,7 @@ var state = {
   datasourceError: "",
   datasourceUploadPending: false,
   excelUploadAllowed: false,
+  csvUploadAllowed: false,
   datasourceSelectionPending: false,
   selectedDatasourceIds: [],
   multipleDatasourceSelectionAllowed: false,
@@ -367,7 +368,7 @@ function renderSourcesPanel() {
   return `
     <div class="sources-panel">
       <div class="source-actions">
-        <button class="source-add" type="button" data-add-source aria-label="Add Excel file" title="Add Excel file" ${state.datasourceUploadPending || !state.token ? "disabled" : ""}>
+        <button class="source-add" type="button" data-view="datasources" aria-label="Manage data sources" title="Manage data sources">
           <span aria-hidden="true">+</span>
         </button>
       </div>
@@ -1127,6 +1128,7 @@ function renderSavedMetricCard(metric) {
 function renderDatasourcesView() {
   const visibleSources = state.datasources.filter((item) => item.connector_key !== "metadata-db");
   const uploadAllowed = Boolean(state.token && state.excelUploadAllowed);
+  const csvUploadAllowed = Boolean(state.token && state.csvUploadAllowed);
   const uploadLabel = state.datasourceUploadPending
     ? "Uploading..."
     : uploadAllowed
@@ -1134,17 +1136,24 @@ function renderDatasourcesView() {
       : state.token
         ? "Enterprise access required"
         : "Log in to upload .xlsx workbook";
+  const csvUploadLabel = state.datasourceUploadPending
+    ? "Uploading..."
+    : csvUploadAllowed
+      ? "Upload .csv file"
+      : state.token
+        ? "Enterprise access required"
+        : "Log in to upload .csv file";
   return `
     <section class="datasources-view placeholder-view">
       <div class="datasource-actions-grid">
-        <button class="placeholder-item datasource-upload-card" type="button" data-add-source ${state.datasourceUploadPending || !uploadAllowed ? "disabled" : ""}>
+        <button class="placeholder-item datasource-upload-card" type="button" data-add-source="excel" ${state.datasourceUploadPending || !uploadAllowed ? "disabled" : ""}>
           ${renderIcon("plus")}
           <span><strong>Excel workbooks</strong><small>${escapeHtml(uploadLabel)}</small></span>
         </button>
-        <div class="placeholder-item muted">
+        <button class="placeholder-item datasource-upload-card" type="button" data-add-source="csv" ${state.datasourceUploadPending || !csvUploadAllowed ? "disabled" : ""}>
           ${renderIcon("plus")}
-          <span><strong>CSV uploads</strong><small>Coming soon</small></span>
-        </div>
+          <span><strong>CSV uploads</strong><small>${escapeHtml(csvUploadLabel)}</small></span>
+        </button>
         <div class="placeholder-item muted">
           ${renderIcon("plus")}
           <span><strong>Connected databases</strong><small>Coming soon</small></span>
@@ -1220,6 +1229,7 @@ function render(options = {}) {
         ${renderActiveView()}
       </section>
       <input id="excel-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+      <input id="csv-source-input" type="file" accept=".csv,text/csv" hidden />
       ${state.loginOpen ? renderLoginDialog() : ""}
       ${state.mustChangePassword ? renderPasswordChangeDialog() : ""}
       ${state.dashboardCreateOpen ? renderDashboardCreateDialog() : ""}
@@ -1242,7 +1252,9 @@ function render(options = {}) {
   document.querySelector("[data-close-login]")?.addEventListener("click", closeLogin);
   document.querySelector("[data-dismiss-api-error]")?.addEventListener("click", dismissApiError);
   document.querySelector("[data-toggle-sources]")?.addEventListener("click", toggleSources);
-  document.querySelector("[data-add-source]")?.addEventListener("click", openSourcePicker);
+  document.querySelectorAll("[data-add-source]").forEach((button) => {
+    button.addEventListener("click", openSourcePicker);
+  });
   document.querySelector("[data-refresh-sources]")?.addEventListener("click", () => loadDatasources());
   document.querySelectorAll("[data-source-selected]").forEach((input2) => {
     input2.addEventListener("change", updateSelectedSources);
@@ -1282,6 +1294,7 @@ function render(options = {}) {
     button.addEventListener("click", deleteDashboardWidget);
   });
   document.querySelector("#excel-source-input")?.addEventListener("change", uploadSelectedSource);
+  document.querySelector("#csv-source-input")?.addEventListener("change", uploadSelectedSource);
   document.querySelector("#login-form")?.addEventListener("submit", login);
   document.querySelector("#password-change-form")?.addEventListener("submit", changePassword);
   document.querySelectorAll('input[name="mode"]').forEach((input2) => {
@@ -2196,14 +2209,16 @@ function collectDashboardLayout() {
 function canPersistDashboardLayout(grid = state.dashboardGrid) {
     return Boolean(grid) && Number(grid.getColumn?.()) === 12;
 }
-function openSourcePicker() {
+function openSourcePicker(event) {
     if (state.datasourceUploadPending) return;
     if (!state.token) {
         openLogin();
         return;
     }
-    if (!state.excelUploadAllowed) return;
-    const input = document.querySelector("#excel-source-input");
+    const sourceType = event?.currentTarget?.dataset?.addSource || "excel";
+    const allowed = sourceType === "csv" ? state.csvUploadAllowed : state.excelUploadAllowed;
+    if (!allowed) return;
+    const input = document.querySelector(`#${sourceType}-source-input`);
     if (!input) return;
     input.value = "";
     input.click();
@@ -2245,6 +2260,7 @@ async function loadDatasources(options = {}) {
         state.selectedDatasourceIds = (payload.selected_datasource_ids || []).filter((id) => availableDatasourceIds.has(id));
         state.multipleDatasourceSelectionAllowed = Boolean(payload.multiple_selection_allowed);
         state.excelUploadAllowed = Boolean(payload.excel_upload_allowed);
+        state.csvUploadAllowed = Boolean(payload.csv_upload_allowed);
         state.datasourcesLoaded = true;
     } catch (error) {
         state.datasourceError = error.message || "Could not load data sources.";
@@ -2259,8 +2275,10 @@ async function uploadSelectedSource(event) {
     const input = event.currentTarget;
     const file = input.files?.[0];
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".xlsx")) {
-        state.datasourceError = "Choose an .xlsx file.";
+    const sourceType = input.id === "csv-source-input" ? "csv" : "excel";
+    const expectedSuffix = sourceType === "csv" ? ".csv" : ".xlsx";
+    if (!file.name.toLowerCase().endsWith(expectedSuffix)) {
+        state.datasourceError = `Choose a ${expectedSuffix} file.`;
         render();
         return;
     }
@@ -2274,7 +2292,7 @@ async function uploadSelectedSource(event) {
             backend_url: state.backendUrl,
             active: "true"
         });
-        const response = await fetch(`/api/datasources/excel?${params.toString()}`, {
+        const response = await fetch(`/api/datasources/${sourceType}?${params.toString()}`, {
             method: "POST",
             headers: authHeaders(),
             body: formData

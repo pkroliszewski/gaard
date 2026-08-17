@@ -35,6 +35,68 @@ class DatabaseMigrationTag(Base):
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class DuckDBFileImport(Base):
+    """One extension-managed directory materialization."""
+
+    __tablename__ = "duckdb_file_imports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_directory: Mapped[str] = mapped_column(String(2048))
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    database_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    storage_key: Mapped[str] = mapped_column(String(255), unique=True)
+    preview_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    options_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DuckDBFileMaterialization(Base):
+    """A saved datasource key mapped to one durable DuckDB file."""
+
+    __tablename__ = "duckdb_file_materializations"
+
+    datasource_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    materialization_name: Mapped[str] = mapped_column(String(255), unique=True)
+    import_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("duckdb_file_imports.id", ondelete="CASCADE"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DuckDBFileRelation(Base):
+    __tablename__ = "duckdb_file_relations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    import_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("duckdb_file_imports.id", ondelete="CASCADE"), index=True
+    )
+    source_file: Mapped[str] = mapped_column(String(1024))
+    source_format: Mapped[str] = mapped_column(String(32))
+    source_member: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    adapter_key: Mapped[str] = mapped_column(String(64))
+    relation_name: Mapped[str] = mapped_column(String(255))
+    row_count: Mapped[int] = mapped_column(Integer)
+    column_count: Mapped[int] = mapped_column(Integer)
+    source_size_bytes: Mapped[int] = mapped_column(Integer)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DuckDBFileWarning(Base):
+    __tablename__ = "duckdb_file_warnings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    import_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("duckdb_file_imports.id", ondelete="CASCADE"), index=True
+    )
+    source_file: Mapped[str] = mapped_column(String(1024))
+    warning_code: Mapped[str] = mapped_column(String(64))
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class AdminUser(Base):
     __tablename__ = "admin_users"
     __table_args__ = (
