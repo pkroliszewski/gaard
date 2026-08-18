@@ -16,7 +16,6 @@ from gaard_api.admin.models import (
     DuckDBFileImport,
     DuckDBFileMaterialization,
     DuckDBFileRelation,
-    DuckDBFileWarning,
 )
 
 MetadataModelBase = Base
@@ -48,7 +47,6 @@ __all__ = [
     "DuckDBFileImport",
     "DuckDBFileMaterialization",
     "DuckDBFileRelation",
-    "DuckDBFileWarning",
     "MetadataModelBase",
     "create_metadata_session",
     "metadata_session",

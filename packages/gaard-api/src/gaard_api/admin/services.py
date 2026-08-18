@@ -2381,6 +2381,14 @@ def get_datasource_schema_context_safe() -> (
         if connector is None:
             return None
 
+        definition = get_connector_registry().get(connector.database_type)
+        if definition.datasource_url_finalizer is not None:
+            connector.database_url = definition.datasource_url_finalizer(
+                session, connector.connector_key, connector.database_url
+            )
+            definition.validate_database_url(connector.database_url)
+            session.commit()
+
         cache = get_datasource_schema_cache(session, connector.id)
 
         if cache is None:
@@ -2422,6 +2430,14 @@ def get_datasource_schema_contexts_safe(
 
         contexts: list[tuple[DatasourceConnector, DatasourceSchemaCache]] = []
         for connector in connectors:
+            definition = get_connector_registry().get(connector.database_type)
+            if definition.datasource_url_finalizer is not None:
+                connector.database_url = definition.datasource_url_finalizer(
+                    session, connector.connector_key, connector.database_url
+                )
+                definition.validate_database_url(connector.database_url)
+                session.commit()
+
             cache = get_datasource_schema_cache(session, connector.id)
 
             if cache is None:

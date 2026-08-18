@@ -763,6 +763,10 @@ def test_admin_web_loads_connector_types_from_the_registry_api(admin_client: Tes
     assert "registerDatasourceExtension" in response.text
     assert "await loadDatasourceExtensions();" in response.text
     assert "await commitDatasourceExtensions(result.item);" in response.text
+    assert "await loadDatasources({ loadSchema: false });" in response.text
+    assert "Datasource saved and schema introspection completed." in response.text
+    assert "datasource-schema-introspection" in response.text
+    assert "scrollIntoView" in response.text
     assert 'api("/api/v1/admin/extensions")' in response.text
     assert "data-menu-group" in response.text
     assert "Dashboards" in response.text
@@ -2796,6 +2800,59 @@ def test_saved_duckdb_file_test_creates_missing_materialization_mapping(
         assert (storage / "materializations" / mapping.materialization_name).is_file()
 
 
+def test_saving_duckdb_file_datasource_creates_missing_materialization_mapping(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    token = login(admin_client)["token"]
+    change_password(admin_client, token)
+    source = (tmp_path / "save-source.csv").resolve()
+    source.write_text("id,name\n1,Alice\n", encoding="utf-8")
+    storage = (tmp_path / "save-storage").resolve()
+    monkeypatch.setenv("GAARD_DUCKDB_FILE_STORAGE_ROOT", str(storage))
+    monkeypatch.setattr(
+        admin_api.license_service,
+        "ensure_datasource_type_allowed",
+        lambda database_type: None,
+    )
+    with create_session() as session:
+        connector = DatasourceConnector(
+            connector_key="save-source",
+            name="Save source",
+            database_type="duckdb-file",
+            database_url=f"duckdb-file:///{source.as_posix()}",
+            sql_dialect="duckdb",
+            active=False,
+            updated_by="migration",
+        )
+        session.add(connector)
+        session.commit()
+        connector_id = connector.id
+
+    response = admin_client.put(
+        f"/api/v1/admin/datasources/{connector_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "Save source",
+            "database_type": "duckdb-file",
+            "database_url": f"duckdb-file:///{source.as_posix()}",
+            "active": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    with create_session() as session:
+        connector = session.get(DatasourceConnector, connector_id)
+        mapping = session.get(DuckDBFileMaterialization, "save-source")
+        assert connector is not None
+        assert connector.database_url.startswith("duckdb-file:///materializations/")
+        assert mapping is not None
+        assert (storage / "materializations" / mapping.materialization_name).is_file()
+
+
 def test_unsaved_duckdb_file_test_rejects_existing_unmapped_connector_key(
     admin_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -4025,6 +4082,56 @@ def test_sql_generation_prompt_uses_active_datasource_dialect(
     body = response.json()
     assert body["metadata"]["dialect"] == "mysql"
     assert "Table: lead" in body["user_prompt"]
+
+
+def test_sql_generation_prompt_materializes_unmapped_duckdb_file_datasource(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = (tmp_path / "prompt-source.csv").resolve()
+    source.write_text("id,name\n1,Alice\n", encoding="utf-8")
+    storage = (tmp_path / "prompt-storage").resolve()
+    monkeypatch.setenv("GAARD_DUCKDB_FILE_STORAGE_ROOT", str(storage))
+
+    with create_session() as session:
+        for connector in session.scalars(select(DatasourceConnector)):
+            connector.active = False
+        connector = DatasourceConnector(
+            connector_key="prompt-source",
+            name="Prompt source",
+            database_type="duckdb-file",
+            database_url=f"duckdb-file:///{source.as_posix()}",
+            sql_dialect="duckdb",
+            active=True,
+        )
+        session.add(connector)
+        session.flush()
+        connector_id = connector.id
+        session.add(
+            DatasourceSchemaCache(
+                connector_id=connector_id,
+                schema_json='{"tables":[]}',
+                table_settings_json="{}",
+                formatted_schema="Table: prompt_source\nColumns:\n- id: BIGINT",
+            )
+        )
+        session.commit()
+
+    response = admin_client.post(
+        "/api/v1/prompts/sql-generation",
+        headers=auth_headers(admin_client),
+        json={"question": "pokaż źródło"},
+    )
+
+    assert response.status_code == 200, response.text
+    with create_session() as session:
+        connector = session.get(DatasourceConnector, connector_id)
+        mapping = session.get(DuckDBFileMaterialization, "prompt-source")
+        assert connector is not None
+        assert connector.database_url.startswith("duckdb-file:///materializations/")
+        assert mapping is not None
+        assert (storage / "materializations" / mapping.materialization_name).is_file()
 
 
 def test_business_logic_suggestions_include_all_active_datasources(

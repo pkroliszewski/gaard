@@ -84,19 +84,6 @@ class DuckDBFileRelation(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class DuckDBFileWarning(Base):
-    __tablename__ = "duckdb_file_warnings"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    import_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("duckdb_file_imports.id", ondelete="CASCADE"), index=True
-    )
-    source_file: Mapped[str] = mapped_column(String(1024))
-    warning_code: Mapped[str] = mapped_column(String(64))
-    message: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-
-
 class AdminUser(Base):
     __tablename__ = "admin_users"
     __table_args__ = (

@@ -1883,7 +1883,7 @@ function renderDatasourceSchema() {
   const extensionPanels = selectedTable ? getDatasourceExtensionPanels("schema", { datasource: getSelectedDatasource(), table: selectedTable }) : [];
   const activeContentTab = getDatasourceExtensionTab("schema", extensionPanels);
   return `
-    <section class="panel">
+    <section class="panel" id="datasource-schema-introspection">
       <div class="panel-header">
         <h2>Schema introspection</h2>
         <div class="panel-header-actions">
@@ -2455,7 +2455,7 @@ function attachSectionHandlers() {
   });
   document.querySelector("#invalidate-schema-cache")?.addEventListener("click", invalidateSchemaCache);
   document.querySelector("#test-datasource")?.addEventListener("click", testDatasource);
-  document.querySelector("#introspect-datasource")?.addEventListener("click", introspectDatasource);
+  document.querySelector("#introspect-datasource")?.addEventListener("click", () => introspectDatasource());
   document.querySelector("#activate-datasource")?.addEventListener("click", activateDatasource);
   document.querySelector("#delete-datasource")?.addEventListener("click", deleteDatasource);
   for (const extension of state.datasourceExtensions) {
@@ -3306,8 +3306,12 @@ async function saveDatasource(event) {
     });
     await commitDatasourceExtensions(result.item);
     state.selectedDatasourceId = result.item.id;
-    setMessage("success", "Datasource saved.");
-    await loadDatasources();
+    await loadDatasources({ loadSchema: false });
+    await introspectDatasource({
+      scrollIntoView: true,
+      successMessage: "Datasource saved and schema introspection completed.",
+      errorPrefix: "Datasource saved, but schema introspection failed: "
+    });
   } catch (error) {
     setMessage("error", error.message);
   }
@@ -3600,9 +3604,13 @@ async function deleteDatasourceView(event) {
     render();
   }
 }
-async function introspectDatasource() {
+async function introspectDatasource({
+  scrollIntoView = false,
+  successMessage = "Schema introspection completed.",
+  errorPrefix = ""
+} = {}) {
   const selected = getSelectedDatasource();
-  if (!selected) return;
+  if (!selected) return false;
   try {
     state.datasourceSchemaLoading = true;
     state.datasourceSchemaError = "";
@@ -3611,12 +3619,12 @@ async function introspectDatasource() {
     state.datasourceSchemaSelectedObjectName = "";
     state.datasourceSchemaDraftTables = null;
     state.datasourceSchemaLoading = false;
-    setMessage("success", "Schema introspection completed.");
+    setMessage("success", successMessage);
     render();
   } catch (error) {
     state.datasourceSchemaLoading = false;
     state.datasourceSchemaError = error.message;
-    setMessage("error", error.message);
+    setMessage("error", `${errorPrefix}${error.message}`);
     render();
   }
 }
@@ -3877,7 +3885,7 @@ async function loadPrompts() {
   state.selectedPromptKey = state.selectedPromptKey || state.prompts[0]?.prompt_key || "";
   render();
 }
-async function loadDatasources() {
+async function loadDatasources({ loadSchema = true } = {}) {
   const [datasources, datasourceTypes] = await Promise.all([
     api("/api/v1/admin/datasources"),
     api("/api/v1/admin/datasource-types")
@@ -3891,7 +3899,7 @@ async function loadDatasources() {
   }
   await loadDatasourceExtensions();
   render();
-  void loadDatasourceSchema();
+  if (loadSchema) void loadDatasourceSchema();
 }
 async function loadDatasourceExtensions() {
   const selected = getSelectedDatasource();

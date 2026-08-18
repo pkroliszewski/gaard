@@ -3008,6 +3008,10 @@ def update_datasource(
     ensure_admin_can_manage_datasource_type(user, normalized_config.database_type)
     license_service.ensure_datasource_type_allowed(normalized_config.database_type)
 
+    normalized_config = finalize_datasource_url_or_400(
+        session, connector.connector_key, normalized_config
+    )
+
     connector.name = request.name
     connector.database_type = normalized_config.database_type
     connector.database_url = normalized_config.database_url
