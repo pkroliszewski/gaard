@@ -3200,6 +3200,18 @@ def test_datasource_from_request(
     user: AdminUser = Depends(get_current_admin),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    if request.connector_key is not None:
+        existing = session.scalar(
+            select(DatasourceConnector.id).where(
+                DatasourceConnector.connector_key == request.connector_key
+            )
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Datasource connector key already exists.",
+            )
+
     normalized_config = normalize_datasource_configuration_or_400(
         database_type=request.database_type,
         connection_config=request.connection_config,

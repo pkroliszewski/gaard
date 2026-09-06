@@ -99,6 +99,8 @@ def test_repository_update_file_is_valid_and_has_unique_ordered_tags() -> None:
         "2026-08-01.dashboard-sharing.v1",
         "2026-08-12.duckdb-file-connector.initial.v1",
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+        "2026-09-06.analysis-findings.v1",
+        "2026-09-06.analysis-finding-decisions.v1",
     ]
 
 
@@ -250,6 +252,8 @@ def test_repository_update_normalizes_legacy_identity_permission_ids(tmp_path: P
         "2026-08-01.dashboard-sharing.v1",
         "2026-08-12.duckdb-file-connector.initial.v1",
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+        "2026-09-06.analysis-findings.v1",
+        "2026-09-06.analysis-finding-decisions.v1",
     )
     with engine.connect() as connection:
         datasource_ids = connection.exec_driver_sql(
@@ -297,6 +301,8 @@ def test_repository_update_can_be_applied_without_optional_permission_tables(
         "2026-08-01.dashboard-sharing.v1",
         "2026-08-12.duckdb-file-connector.initial.v1",
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+        "2026-09-06.analysis-findings.v1",
+        "2026-09-06.analysis-finding-decisions.v1",
     )
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
@@ -366,6 +372,7 @@ def test_current_updates_leave_legacy_file_import_metadata_unchanged(
             migration_tags.insert(),
             [
                 {"tag": "2026-07-31.identity-ids-use-admin-user-id.v1"},
+                {"tag": "2026-08-01.dashboard-sharing.v1"},
                 {"tag": "2026-08-12.duckdb-file-connector.initial.v1"},
             ],
         )
@@ -378,6 +385,8 @@ def test_current_updates_leave_legacy_file_import_metadata_unchanged(
 
     assert applied == (
         "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+        "2026-09-06.analysis-findings.v1",
+        "2026-09-06.analysis-finding-decisions.v1",
     )
     columns = {
         column["name"] for column in inspect(engine).get_columns("duckdb_file_imports")
@@ -562,6 +571,8 @@ def test_startup_repairs_legacy_database_before_app_queries_models(
                 "2026-08-01.dashboard-sharing.v1",
                 "2026-08-12.duckdb-file-connector.initial.v1",
                 "2026-08-14.duckdb-file-connector.migrate-duckdb-excel.v1",
+                "2026-09-06.analysis-findings.v1",
+                "2026-09-06.analysis-finding-decisions.v1",
             }
     finally:
         reset_metadata_store_for_tests()

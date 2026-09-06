@@ -1,3 +1,9 @@
+### v0.2.15 API - Investigation-scoped cognitive findings
+
+- Added Radar Cognitive Runtime decision ingestion with durable, idempotent,
+  session-scoped working knowledge and evidence/usage audit trails.
+- Preserved the separate administrator-controlled persistent Business Logic flow.
+
 ### v0.2.14 API / v0.2.12 Client - Shared dashboards and collapsible client navigation
 - Added API-backed dashboard sharing with `view` and `edit` access levels, owner-only deletion, shared dashboard listing, and metadata migrations for existing installations.
 - Added the client dashboard sharing dialog, permission-aware dashboard editing controls, and view-only handling for shared dashboards.

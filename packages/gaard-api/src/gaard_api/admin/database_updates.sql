@@ -40,3 +40,34 @@ CREATE INDEX IF NOT EXISTS ix_duckdb_file_relations_import_id ON duckdb_file_rel
 UPDATE datasource_connectors SET database_type = 'duckdb-file' WHERE database_type = 'duckdb-excel';
 -- table: datasource_connectors
 UPDATE datasource_connectors SET database_url = REPLACE(database_url, 'duckdb-excel://', 'duckdb-file://') WHERE database_url LIKE 'duckdb-excel://%';
+
+-- tag: 2026-09-06.analysis-findings.v1
+-- dialect: sqlite
+CREATE TABLE IF NOT EXISTS analysis_findings (id INTEGER NOT NULL, finding_id VARCHAR(64) NOT NULL, investigation_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, connector_id INTEGER NOT NULL, business_logic_suggestion_id INTEGER, statement TEXT NOT NULL, finding_type VARCHAR(100) NOT NULL, confidence FLOAT NOT NULL, critique TEXT NOT NULL, scope_json TEXT NOT NULL, evidence_refs_json TEXT NOT NULL, status VARCHAR(50) NOT NULL, evidence_state VARCHAR(50) NOT NULL, decision VARCHAR(50) NOT NULL, decision_confidence FLOAT, verdict TEXT NOT NULL, decision_scope_json TEXT NOT NULL, decision_evidence_refs_json TEXT NOT NULL, decided_by VARCHAR(255) NOT NULL, contract_version VARCHAR(20) NOT NULL, decisions_json TEXT NOT NULL, evidence_updates_json TEXT NOT NULL, used_in_steps_json TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id));
+-- dialect: postgresql
+CREATE TABLE IF NOT EXISTS analysis_findings (id SERIAL NOT NULL, finding_id VARCHAR(64) NOT NULL, investigation_id VARCHAR(64) NOT NULL, owner_user_id VARCHAR(255) NOT NULL, connector_id INTEGER NOT NULL, business_logic_suggestion_id INTEGER, statement TEXT NOT NULL, finding_type VARCHAR(100) NOT NULL, confidence FLOAT NOT NULL, critique TEXT NOT NULL, scope_json TEXT NOT NULL, evidence_refs_json TEXT NOT NULL, status VARCHAR(50) NOT NULL, evidence_state VARCHAR(50) NOT NULL, decision VARCHAR(50) NOT NULL, decision_confidence FLOAT, verdict TEXT NOT NULL, decision_scope_json TEXT NOT NULL, decision_evidence_refs_json TEXT NOT NULL, decided_by VARCHAR(255) NOT NULL, contract_version VARCHAR(20) NOT NULL, decisions_json TEXT NOT NULL, evidence_updates_json TEXT NOT NULL, used_in_steps_json TEXT NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id));
+-- dialect: all
+CREATE UNIQUE INDEX IF NOT EXISTS ix_analysis_findings_finding_id ON analysis_findings (finding_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_connector_id ON analysis_findings (connector_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_decision ON analysis_findings (decision);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_evidence_state ON analysis_findings (evidence_state);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_finding_type ON analysis_findings (finding_type);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_investigation_id ON analysis_findings (investigation_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_owner_user_id ON analysis_findings (owner_user_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_findings_status ON analysis_findings (status);
+
+-- tag: 2026-09-06.analysis-finding-decisions.v1
+-- dialect: sqlite
+CREATE TABLE IF NOT EXISTS analysis_finding_decisions (id INTEGER NOT NULL, decision_id VARCHAR(64) NOT NULL, idempotency_key VARCHAR(64) NOT NULL, investigation_id VARCHAR(64) NOT NULL, finding_id VARCHAR(64) NOT NULL, radar_run_id VARCHAR(255) NOT NULL, decision VARCHAR(50) NOT NULL, confidence FLOAT NOT NULL, verdict TEXT NOT NULL, scope_json TEXT NOT NULL, evidence_refs_json TEXT NOT NULL, is_current BOOLEAN NOT NULL, active BOOLEAN NOT NULL, contract_version VARCHAR(20) NOT NULL, actor_id VARCHAR(255) NOT NULL, actor_type VARCHAR(50) NOT NULL, actor_username VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_analysis_finding_decisions_idempotency_key UNIQUE (idempotency_key));
+-- dialect: postgresql
+CREATE TABLE IF NOT EXISTS analysis_finding_decisions (id SERIAL NOT NULL, decision_id VARCHAR(64) NOT NULL, idempotency_key VARCHAR(64) NOT NULL, investigation_id VARCHAR(64) NOT NULL, finding_id VARCHAR(64) NOT NULL, radar_run_id VARCHAR(255) NOT NULL, decision VARCHAR(50) NOT NULL, confidence FLOAT NOT NULL, verdict TEXT NOT NULL, scope_json TEXT NOT NULL, evidence_refs_json TEXT NOT NULL, is_current BOOLEAN NOT NULL, active BOOLEAN NOT NULL, contract_version VARCHAR(20) NOT NULL, actor_id VARCHAR(255) NOT NULL, actor_type VARCHAR(50) NOT NULL, actor_username VARCHAR(255) NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_analysis_finding_decisions_idempotency_key UNIQUE (idempotency_key));
+-- dialect: all
+CREATE UNIQUE INDEX IF NOT EXISTS ix_analysis_finding_decisions_decision_id ON analysis_finding_decisions (decision_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_active ON analysis_finding_decisions (active);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_actor_id ON analysis_finding_decisions (actor_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_actor_type ON analysis_finding_decisions (actor_type);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_decision ON analysis_finding_decisions (decision);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_finding_id ON analysis_finding_decisions (finding_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_investigation_id ON analysis_finding_decisions (investigation_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_is_current ON analysis_finding_decisions (is_current);
+CREATE INDEX IF NOT EXISTS ix_analysis_finding_decisions_radar_run_id ON analysis_finding_decisions (radar_run_id);

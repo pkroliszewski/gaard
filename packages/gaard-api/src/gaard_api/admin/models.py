@@ -507,6 +507,79 @@ class BusinessKnowledgeClaim(Base):
     updated_by: Mapped[str] = mapped_column(String(255), default="system")
 
 
+class AnalysisFinding(Base):
+    """Investigation-scoped semantic knowledge and its external review audit."""
+
+    __tablename__ = "analysis_findings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    investigation_id: Mapped[str] = mapped_column(String(64), index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True)
+    connector_id: Mapped[int] = mapped_column(Integer, index=True)
+    business_logic_suggestion_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    statement: Mapped[str] = mapped_column(Text)
+    finding_type: Mapped[str] = mapped_column(String(100), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    critique: Mapped[str] = mapped_column(Text, default="")
+    scope_json: Mapped[str] = mapped_column(Text, default="{}")
+    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(50), index=True, default="pending")
+    evidence_state: Mapped[str] = mapped_column(String(50), index=True, default="unreviewed")
+    decision: Mapped[str] = mapped_column(String(50), index=True, default="")
+    decision_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verdict: Mapped[str] = mapped_column(Text, default="")
+    decision_scope_json: Mapped[str] = mapped_column(Text, default="{}")
+    decision_evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    decided_by: Mapped[str] = mapped_column(String(255), default="")
+    contract_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    decisions_json: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_updates_json: Mapped[str] = mapped_column(Text, default="[]")
+    used_in_steps_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class AnalysisFindingDecision(Base):
+    """One durable external decision about an investigation-scoped finding."""
+
+    __tablename__ = "analysis_finding_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_analysis_finding_decisions_idempotency_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    investigation_id: Mapped[str] = mapped_column(String(64), index=True)
+    finding_id: Mapped[str] = mapped_column(String(64), index=True)
+    radar_run_id: Mapped[str] = mapped_column(String(255), index=True)
+    decision: Mapped[str] = mapped_column(String(50), index=True)
+    confidence: Mapped[float] = mapped_column(Float)
+    verdict: Mapped[str] = mapped_column(Text)
+    scope_json: Mapped[str] = mapped_column(Text, default="{}")
+    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    is_current: Mapped[bool] = mapped_column(Boolean, index=True, default=True)
+    active: Mapped[bool] = mapped_column(Boolean, index=True, default=False)
+    contract_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    actor_id: Mapped[str] = mapped_column(String(255), index=True)
+    actor_type: Mapped[str] = mapped_column(String(50), index=True, default="radar")
+    actor_username: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class AnalysisSessionRecord(Base):
     __tablename__ = "analysis_sessions"
 

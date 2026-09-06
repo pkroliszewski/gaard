@@ -32,3 +32,8 @@ The API response remains backward compatible. New investigation details are
 added under `metadata`, including `investigation_audit_trail`,
 `epistemic_claims`, `epistemic_evidence`, `final_answer_readiness`, and
 candidate business knowledge.
+
+Analysis sessions can also expose findings for external evaluation and reuse an
+accepted finding as session-only working knowledge. See
+[`investigation-findings.md`](investigation-findings.md) for the contract,
+lifecycle, audit behavior, and isolation rules.

@@ -1,4 +1,4 @@
-import json as json
+import json
 import logging
 import queue
 import re
@@ -43,6 +43,7 @@ from gaard_llm.providers.models import ChatCompletionRequest, ChatMessage
 from pydantic import BaseModel, Field
 
 from gaard_api.admin.database import create_session
+from gaard_api.admin.models import Conversation
 from gaard_api.admin.prompt_runtime import (
     get_answer_explanation_prompt_compiler,
     get_conversation_context_prompt_compiler,
@@ -69,16 +70,15 @@ from gaard_api.admin.services import (
 )
 from gaard_api.auth_dependencies import AuthenticatedSession, get_current_enterprise_api_user
 from gaard_api.conversations import (
-    Conversation,
     ConversationPrincipal,
     ambiguous_context_response,
     build_compact_conversation_context,
     build_conversation_metadata,
     conversation_exists,
     ensure_conversation,
-    load_conversation_for_owner,
     list_conversation_turns,
     list_conversations_for_owner,
+    load_conversation_for_owner,
     new_topic_classification,
     record_conversation_turn,
     serialize_conversation,
@@ -90,7 +90,7 @@ from gaard_api.query_hooks import (
     DatasourceContexts,
     QueryExecutor,
     SqlDialectPlan,
-    normalize_datasource_contexts
+    normalize_datasource_contexts,
 )
 
 router = APIRouter()
@@ -368,6 +368,7 @@ def create_sql_generator(
     llm_config: LlmRuntimeConfig | None = None,
     runtime_config: QueryRuntimeConfig | None = None,
     dialect_plan: SqlDialectPlan | None = None,
+    investigation_context: str = "",
 ) -> MockSqlGenerator | LlmSqlGenerator:
     runtime_config = runtime_config or get_query_runtime_config_safe()
 
@@ -392,6 +393,8 @@ def create_sql_generator(
                 formatted_schema = get_query_hook_registry().format_datasource_schemas(
                     datasource_contexts
                 )
+                if investigation_context:
+                    formatted_schema = f"{formatted_schema}\n\n{investigation_context}"
                 dialect_plan = dialect_plan or resolve_sql_dialect_plan(datasource_contexts)
                 logger.info(
                     "Creating LLM SQL generator: datasources=%r dialect=%r parser_dialect=%r "
@@ -548,6 +551,7 @@ def create_pipeline(
     datasource_context: DatasourceContext | DatasourceContexts | None = None,
     interpret: bool = True,
     enterprise_access: bool = True,
+    investigation_context: str = "",
 ) -> QueryPipeline:
     if datasource_context is None:
         datasource_context = (
@@ -572,13 +576,19 @@ def create_pipeline(
         llm_modes.add(output_classification_mode)
     llm_config = get_llm_runtime_config_safe() if "llm" in llm_modes else None
 
+    sql_generator_args = (
+        datasource_context,
+        llm_config,
+        runtime_config,
+        dialect_plan,
+    )
+    sql_generator = (
+        create_sql_generator(*sql_generator_args, investigation_context=investigation_context)
+        if investigation_context
+        else create_sql_generator(*sql_generator_args)
+    )
     return QueryPipeline(
-        sql_generator=create_sql_generator(
-            datasource_context,
-            llm_config,
-            runtime_config,
-            dialect_plan,
-        ),
+        sql_generator=sql_generator,
         sql_validator=SelectOnlySqlValidator(dialect=dialect_plan.sqlglot_read_dialect),
         executor=executor,
         interpreter=create_result_interpreter(llm_config, runtime_config)
@@ -813,6 +823,7 @@ def run_sql_request(
     extra_metadata: dict[str, Any] | None = None,
     on_stage: Any | None = None,
     enterprise_access: bool = True,
+    investigation_context: str = "",
 ) -> QueryResponse:
     extra_metadata = extra_metadata or {}
     datasource_contexts = normalize_datasource_contexts(datasource_context)
@@ -878,10 +889,19 @@ def run_sql_request(
         if audit_log is not None:
             response.metadata["data_query_audit_id"] = audit_log.id
         return response
-    pipeline = create_pipeline(
-        datasource_context,
-        interpret=effective_request.interpret,
-        enterprise_access=enterprise_access,
+    pipeline = (
+        create_pipeline(
+            datasource_context,
+            interpret=effective_request.interpret,
+            enterprise_access=enterprise_access,
+            investigation_context=investigation_context,
+        )
+        if investigation_context
+        else create_pipeline(
+            datasource_context,
+            interpret=effective_request.interpret,
+            enterprise_access=enterprise_access,
+        )
     )
     try:
         # Keep the regular endpoint compatible with pipelines that do not
