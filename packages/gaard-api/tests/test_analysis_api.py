@@ -134,6 +134,42 @@ def create_active_default_datasource() -> DatasourceConnector:
         return connector
 
 
+def test_analysis_planner_normalizes_model_generated_text_lists() -> None:
+    decision = analysis_module.parse_analysis_decision(
+        json.dumps(
+            {
+                "action": "answer_from_context",
+                "business_logic": {
+                    "evidence_refs": [156, " 157 ", 156, None, False, {"audit_id": 158}],
+                    "terms": [" cardiology ", 23, "cardiology", None],
+                },
+                "finding_updates": [
+                    {
+                        "finding_id": "finding-1",
+                        "effect": "strengthened",
+                        "confidence": 0.9,
+                        "summary": "Confirmed by another query.",
+                        "evidence_refs": 158,
+                    }
+                ],
+                "finding_usages": [
+                    {
+                        "finding_id": "finding-1",
+                        "usage": "used_for_query",
+                        "statement": "Used to constrain the query.",
+                        "evidence_refs": "query:159",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert decision.business_logic.evidence_refs == ["156", "157"]
+    assert decision.business_logic.terms == ["cardiology", "23"]
+    assert decision.finding_updates[0].evidence_refs == ["158"]
+    assert decision.finding_usages[0].evidence_refs == ["query:159"]
+
+
 def test_analysis_stream_runs_final_query_and_persists_session(
     analysis_client: TestClient,
 ) -> None:

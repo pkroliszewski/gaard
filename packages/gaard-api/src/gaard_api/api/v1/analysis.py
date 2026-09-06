@@ -81,6 +81,27 @@ EVIDENCE_REFERENCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}:[^\s]{1,190}$
 ACTIVE_WORKING_KNOWLEDGE_STATUSES = {"running", "waiting_for_user"}
 
 
+def normalize_planner_text_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    items = value if isinstance(value, list) else [value]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item is None or isinstance(item, bool):
+            continue
+        if not isinstance(item, (str, int, float)):
+            continue
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+
+    return normalized
+
+
 class AnalysisAction(StrEnum):
     ANSWER_FROM_CONTEXT = "answer_from_context"
     ASK_USER = "ask_user"
@@ -101,6 +122,11 @@ class AnalysisBusinessLogicFinding(BaseModel):
     terms: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    @field_validator("evidence_refs", "terms", mode="before")
+    @classmethod
+    def normalize_text_lists(cls, value: Any) -> list[str]:
+        return normalize_planner_text_list(value)
+
 
 class AnalysisFindingEvidenceUpdate(BaseModel):
     finding_id: str = Field(min_length=1, max_length=64)
@@ -108,6 +134,11 @@ class AnalysisFindingEvidenceUpdate(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     summary: str = Field(min_length=1, max_length=4_000)
     evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def normalize_evidence_refs(cls, value: Any) -> list[str]:
+        return normalize_planner_text_list(value)
 
 
 class AnalysisFindingUsage(BaseModel):
@@ -117,6 +148,11 @@ class AnalysisFindingUsage(BaseModel):
     )
     statement: str = Field(min_length=1, max_length=4_000)
     evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def normalize_evidence_refs(cls, value: Any) -> list[str]:
+        return normalize_planner_text_list(value)
 
 
 class AnalysisPlannerDecision(BaseModel):
@@ -1004,7 +1040,7 @@ Business logic learning:
 - If the latest database observation reveals durable knowledge such as dictionary values, terminology meaning, table meaning, column meaning, or stable domain rules, include business_logic.create_suggestion=true.
 - Distinct values, enumerations, statuses, categories, and table/column meaning discovered through ask_database should be saved as business logic findings unless they are clearly one-off metrics for the current answer.
 - Do not create business logic for one-off answer values that are only useful for the current final answer.
-- statement must be a short, self-contained semantic claim. critique must state its main limitation or counterargument. Cite supporting query references in evidence_refs. Never include private chain-of-thought.
+- statement must be a short, self-contained semantic claim. critique must state its main limitation or counterargument. Cite supporting query references as JSON strings in evidence_refs; use the form "query:<audit_id>" for query audit references. Never include private chain-of-thought.
 
 Investigation-scoped working knowledge:
 - session_context.working_knowledge contains externally reviewed semantic evidence for this investigation only.
