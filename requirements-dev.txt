@@ -13,5 +13,6 @@ twine
 psycopg[binary]
 pymysql
 python-multipart
+openpyxl
 types-openpyxl
 types-ldap3

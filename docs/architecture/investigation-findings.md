@@ -3,7 +3,7 @@
 GAARD exposes semantic findings produced by an Analysis session (the current
 implementation of an Investigation) without treating them as globally active
 Business Logic. The contract version implemented here is `1.0`.
-The Radar decision port is available in `gaard-api` 0.2.15 and newer.
+The Radar decision port is available in `gaard-api` 0.2.16 and newer.
 
 ## Lifecycle
 

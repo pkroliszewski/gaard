@@ -1,3 +1,10 @@
+### v0.2.16 API - Investigation findings release
+
+- Added the missing `openpyxl` development dependency required by the clean
+  GitHub Actions test environment.
+- Published the investigation-scoped Cognitive Runtime integration introduced
+  in the unreleased `gaard-api` 0.2.15 build.
+
 ### v0.2.15 API - Investigation-scoped cognitive findings
 
 - Added Radar Cognitive Runtime decision ingestion with durable, idempotent,

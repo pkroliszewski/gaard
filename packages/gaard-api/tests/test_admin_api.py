@@ -9,7 +9,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 from fastapi.testclient import TestClient
-from gaard_connectors import create_builtin_connector_registry
+from gaard_connectors import ConnectorNotFoundError, create_builtin_connector_registry
 from gaard_connectors.odbc.connection_string import parse_odbc_connection_string
 from gaard_core.errors import LlmProviderError, QueryPipelineStepError
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
@@ -92,6 +92,15 @@ def admin_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Te
         yield client
 
     reset_metadata_store_for_tests()
+
+
+def require_duckdb_file_connector() -> None:
+    from gaard_api.api.v1 import admin as admin_api
+
+    try:
+        admin_api.get_connector_registry().get("duckdb-file")
+    except ConnectorNotFoundError:
+        pytest.skip("requires the optional private DuckDB File connector")
 
 
 def login(client: TestClient) -> dict[str, Any]:
@@ -2997,6 +3006,7 @@ def test_saved_duckdb_file_test_creates_missing_materialization_mapping(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    require_duckdb_file_connector()
     from gaard_api.api.v1 import admin as admin_api
 
     token = login(admin_client)["token"]
@@ -3045,6 +3055,7 @@ def test_saving_duckdb_file_datasource_creates_missing_materialization_mapping(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    require_duckdb_file_connector()
     from gaard_api.api.v1 import admin as admin_api
 
     token = login(admin_client)["token"]
@@ -3142,6 +3153,7 @@ def test_directory_materializer_reports_non_sql_license_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    require_duckdb_file_connector()
     from gaard_api.api.v1 import admin as admin_api
 
     license_message = (
@@ -3581,6 +3593,7 @@ def test_excel_upload_creates_private_directory_datasource(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    require_duckdb_file_connector()
     from gaard_api.api.v1 import admin as admin_api
 
     token = login(admin_client)["token"]
@@ -3678,6 +3691,7 @@ def test_csv_upload_creates_private_directory_datasource(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    require_duckdb_file_connector()
     from gaard_api.api.v1 import admin as admin_api
 
     token = login(admin_client)["token"]
@@ -4329,6 +4343,7 @@ def test_sql_generation_prompt_materializes_unmapped_duckdb_file_datasource(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    require_duckdb_file_connector()
     source = (tmp_path / "prompt-source.csv").resolve()
     source.write_text("id,name\n1,Alice\n", encoding="utf-8")
     storage = (tmp_path / "prompt-storage").resolve()
