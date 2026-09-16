@@ -1,3 +1,20 @@
+### v0.2.17 - Coordinated package compatibility and client usability release
+
+- Bumped all public GAARD Python packages to `0.2.17` and aligned their
+  internal dependency constraints so a clean PyPI installation resolves one
+  compatible release set.
+- Published the extended connector contract used by datasource preview,
+  materialization finalization, and datasource cleanup hooks.
+- Fixed chat navigation so opening Home or returning to the active chat scrolls
+  to the latest message, and kept the chat toolbar and query composer visible
+  within the viewport.
+- Moved dashboard sharing, layout editing, and widget creation actions into the
+  Analysis top bar before the account controls.
+- Enabled allowlisted HTML rendering for table dashboard widgets, including
+  safe links, while continuing to escape raw chat result tables.
+- Added a clean-wheel installation smoke test to prevent releases from passing
+  only against editable monorepo dependencies.
+
 ### v0.2.16 API - Investigation findings release
 
 - Added the missing `openpyxl` development dependency required by the clean

@@ -153,6 +153,62 @@ jobs:
             ./scripts/build.sh --python python --package "$RELEASE_PACKAGE"
           fi
 
+      - name: Smoke-test built distributions in a clean environment
+        env:
+          RELEASE_PACKAGE: ${{ steps.release.outputs.package }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python -m venv /tmp/gaard-release-smoke
+          /tmp/gaard-release-smoke/bin/python -m pip install --upgrade pip
+          if [ "$RELEASE_PACKAGE" = "all" ]; then
+            /tmp/gaard-release-smoke/bin/python -m pip install dist/*.whl
+          else
+            wheel_prefix="${RELEASE_PACKAGE//-/_}"
+            wheel_path="$(find dist -maxdepth 1 -name "${wheel_prefix}-*.whl" -print -quit)"
+            if [ -z "$wheel_path" ]; then
+              echo "No wheel found for $RELEASE_PACKAGE." >&2
+              exit 1
+            fi
+            /tmp/gaard-release-smoke/bin/python -m pip install "$wheel_path"
+          fi
+          /tmp/gaard-release-smoke/bin/python -m pip check
+          /tmp/gaard-release-smoke/bin/python - <<'PY'
+          from importlib import import_module
+          from importlib.metadata import version
+          import os
+
+          release_package = os.environ["RELEASE_PACKAGE"]
+          release_version = os.environ["RELEASE_VERSION"]
+          modules = {
+              "gaard-plugin-api": "gaard_plugin_api",
+              "gaard-core": "gaard_core",
+              "gaard-connectors": "gaard_connectors",
+              "gaard-llm": "gaard_llm",
+              "gaard-api": "gaard_api",
+              "gaard-client": "gaard_client",
+          }
+          selected = modules if release_package == "all" else {release_package: modules[release_package]}
+          for package, module in selected.items():
+              installed_version = version(package)
+              if installed_version != release_version:
+                  raise SystemExit(
+                      f"{package} installed as {installed_version}, expected {release_version}."
+                  )
+              import_module(module)
+
+          if release_package in {"all", "gaard-api", "gaard-connectors"}:
+              from gaard_connectors.registry import ConnectorDefinition
+
+              required_fields = {
+                  "preview_connection_tester",
+                  "datasource_url_finalizer",
+                  "datasource_deleter",
+              }
+              missing = required_fields - ConnectorDefinition.__dataclass_fields__.keys()
+              if missing:
+                  raise SystemExit(f"ConnectorDefinition is missing release fields: {sorted(missing)}")
+          PY
+
       - name: Store distributions
         uses: actions/upload-artifact@v5
         with:

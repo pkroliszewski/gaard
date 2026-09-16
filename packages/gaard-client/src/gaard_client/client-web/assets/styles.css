@@ -1604,23 +1604,28 @@ button.primary {
   display: none;
 }
 
-.workspace-shell,
-.chat-shell {
+.workspace-shell {
   min-width: 0;
   height: 100vh;
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--surface);
 }
 
-.workspace-shell {
-  grid-template-rows: auto auto minmax(0, 1fr);
+.workspace-shell.home-workspace {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .chat-shell {
-  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: var(--surface);
 }
 
 .topbar {
@@ -1737,6 +1742,21 @@ button.primary {
   gap: 8px;
 }
 
+.analysis-topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.analysis-topbar-actions:empty {
+  display: none;
+}
+
+.chat-toolbar {
+  flex: 0 0 auto;
+}
+
 .ghost-button,
 .auth-button,
 .user-chip {
@@ -1755,6 +1775,18 @@ button.primary {
   background:
     radial-gradient(circle at 52% 10%, rgba(35, 104, 217, 0.04), transparent 34%),
     #ffffff;
+}
+
+.dashboard-table-widget .data-table a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dashboard-table-widget .data-table a:hover,
+.dashboard-table-widget .data-table a:focus-visible {
+  color: var(--accent-strong);
 }
 
 .empty-state {
@@ -1824,26 +1856,6 @@ button.primary {
   overflow: auto;
   padding: 34px 42px 46px;
   background: #fbfcfd;
-}
-
-.dashboard-toolbar {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-.dashboard-toolbar-compact {
-  justify-content: flex-end;
-  margin-bottom: 18px;
-}
-
-.dashboard-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 .dashboard-edit-mode-button {
@@ -1923,7 +1935,6 @@ button.primary {
   stroke-width: 1.9;
 }
 
-.dashboard-toolbar h1,
 .placeholder-intro h1 {
   margin: 0;
   color: #111a24;
@@ -2483,7 +2494,6 @@ button.primary {
   background: rgba(143, 37, 43, 0.08);
 }
 
-.dashboard-toolbar p,
 .placeholder-intro p {
   margin: 8px 0 0;
   color: #6d7a86;
@@ -3352,12 +3362,15 @@ button.placeholder-item.active {
     font-size: 18px;
   }
 
-  .dashboard-toolbar {
-    display: grid;
+  .analysis-topbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
-  .dashboard-toolbar-actions {
+  .analysis-topbar .header-actions {
+    flex: 1 1 auto;
     flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .widget-type-grid {

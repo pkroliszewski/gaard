@@ -154,6 +154,46 @@ def test_client_dashboard_mobile_styles() -> None:
     assert ".dashboard-widget-chart" in response.text
 
 
+def test_client_chat_navigation_toolbar_and_table_html_rendering() -> None:
+    client = TestClient(app)
+
+    script_response = client.get("/assets/main.js")
+    assert script_response.status_code == 200
+    assert "renderTopbar({ chat: true })" in script_response.text
+    assert 'if (view === "home") scrollToLatest();' in script_response.text
+    assert 'render({ scrollToLatest: view === "home" });' in script_response.text
+    assert "sanitizeTableCellHtml" in script_response.text
+    assert "TABLE_CELL_ALLOWED_LINK_PROTOCOLS" in script_response.text
+    assert 'renderDataTable(getRowsFromResult(result), { allowHtml: true })' in script_response.text
+
+    styles_response = client.get("/assets/styles.css")
+    assert styles_response.status_code == 200
+    assert ".workspace-shell.home-workspace" in styles_response.text
+    assert ".chat-toolbar" in styles_response.text
+    assert ".dashboard-table-widget .data-table a" in styles_response.text
+
+
+def test_analysis_actions_render_in_topbar_before_account_controls() -> None:
+    client = TestClient(app)
+
+    script_response = client.get("/assets/main.js")
+    assert script_response.status_code == 200
+    topbar_renderer = script_response.text.split("function renderTopbar", 1)[1].split(
+        "function renderEmptyState", 1
+    )[0]
+    assert topbar_renderer.index("renderAnalysisTopbarActions()") < topbar_renderer.index(
+        "renderAuthControls()"
+    )
+    assert 'if (state.activeView !== "analysis") return "";' in script_response.text
+    assert 'class="analysis-topbar-actions"' in script_response.text
+    assert 'class="dashboard-toolbar' not in script_response.text
+
+    styles_response = client.get("/assets/styles.css")
+    assert styles_response.status_code == 200
+    assert ".analysis-topbar-actions" in styles_response.text
+    assert ".analysis-topbar .header-actions" in styles_response.text
+
+
 def test_proxy_json_request_returns_json_and_forwards_arguments(
     monkeypatch: Any,
 ) -> None:
