@@ -1,3 +1,14 @@
+### v0.2.18 API - Preserve reviewed business logic findings
+
+- Reuse an existing finding when the same business logic suggestion is observed
+  again in an investigation, preserving its identifier, review decision, and
+  accumulated evidence instead of creating a new pending finding.
+- Keep approved persistent Business Logic active when it is observed again with
+  automatic approval disabled. The fix applies to all datasource connectors,
+  including MSSQL/TSQL.
+- Bumped only `gaard-api` to `0.2.18`; other public packages and private plugins
+  retain their existing versions and compatible dependency requirements.
+
 ### v0.2.17 - Coordinated package compatibility and client usability release
 
 - Bumped all public GAARD Python packages to `0.2.17` and aligned their

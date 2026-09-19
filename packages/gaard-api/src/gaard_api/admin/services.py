@@ -1839,10 +1839,19 @@ def upsert_analysis_business_logic_suggestion(
         session.flush()
         return existing
 
+    should_enable = auto_enable or existing.enabled
     existing.source_audit_id = source_audit_id
-    existing.status = BUSINESS_LOGIC_STATUS_ACTIVE if auto_enable else BUSINESS_LOGIC_STATUS_PENDING
-    existing.safety = BUSINESS_LOGIC_SAFETY_SAFE if auto_enable else BUSINESS_LOGIC_SAFETY_REVIEW
-    existing.enabled = auto_enable
+    existing.status = (
+        BUSINESS_LOGIC_STATUS_ACTIVE
+        if should_enable
+        else BUSINESS_LOGIC_STATUS_PENDING
+    )
+    existing.safety = (
+        BUSINESS_LOGIC_SAFETY_SAFE
+        if should_enable
+        else BUSINESS_LOGIC_SAFETY_REVIEW
+    )
+    existing.enabled = should_enable
     existing.error_category = normalized_type
     existing.title = normalized_title
     existing.rule_text = normalized_rule

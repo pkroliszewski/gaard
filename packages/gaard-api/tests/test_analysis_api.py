@@ -376,6 +376,146 @@ def test_analysis_database_step_can_record_business_logic_suggestion(
         assert suggestions[0].error_category == "analysis.dictionary_value"
 
 
+def test_repeated_analysis_finding_preserves_review_decisions(
+    analysis_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = auth_headers(analysis_client)
+    connector = create_active_default_datasource()
+
+    def repeated_finding() -> analysis_module.AnalysisBusinessLogicFinding:
+        return analysis_module.AnalysisBusinessLogicFinding(
+            create_suggestion=True,
+            knowledge_type="semantic_mapping",
+            title="Cardiology dictionary mapping",
+            rule_text="The dictionary value for cardiology is cardiology.",
+            statement="The dictionary value for cardiology is cardiology.",
+            confidence=0.94,
+            critique="The mapping is confirmed only in the current datasource.",
+            scope={"entity": "specialization", "field": "specialization_name"},
+            evidence_refs=["query:dictionary-check"],
+        )
+
+    class RepeatedFindingPlanner:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.working_knowledge_seen: list[list[dict[str, Any]]] = []
+
+        def decide(
+            self, request: Any, datasource_context: Any, context: dict[str, Any]
+        ) -> analysis_module.AnalysisPlannerDecision:
+            self.calls += 1
+            self.working_knowledge_seen.append(list(context.get("working_knowledge") or []))
+            return analysis_module.AnalysisPlannerDecision(
+                action=analysis_module.AnalysisAction.ASK_USER,
+                visible_question=f"Review mapping attempt {self.calls}.",
+                visible_reasoning="The same semantic mapping was observed again.",
+                user_question="Continue after review.",
+                business_logic=repeated_finding(),
+            )
+
+    planner = RepeatedFindingPlanner()
+    monkeypatch.setattr(analysis_module, "create_analysis_planner", lambda: planner)
+
+    response = analysis_client.post(
+        "/api/v1/analysis/stream",
+        headers=headers,
+        json={"question": "Find the cardiology dictionary value.", "user_id": "spoofed"},
+    )
+    assert response.status_code == 200
+    events = parse_ndjson(response.text)
+    session_id = events[0]["session_id"]
+    first_suggestion = next(
+        item["business_logic_suggestion"]
+        for item in events
+        if item["event"] == "business_logic_suggestion"
+    )
+    finding_id = first_suggestion["finding_id"]
+
+    radar_decision_payload = {
+        "finding_id": finding_id,
+        "decision": "accept_for_investigation",
+        "confidence": 0.93,
+        "verdict": "The observed values explain the terminology lookup.",
+        "scope": {
+            "investigation_id": session_id,
+            "radar_run_id": "radar-repeat-1",
+        },
+        "evidence_refs": ["query:dictionary-check"],
+    }
+    accepted_response = analysis_client.post(
+        f"/api/v1/analysis/{session_id}/finding-decisions",
+        headers=headers,
+        json=radar_decision_payload,
+    )
+    assert accepted_response.status_code == 200
+    assert accepted_response.json()["accepted"] is True
+
+    repeat_response = analysis_client.post(
+        f"/api/v1/analysis/{session_id}/messages/stream",
+        headers=headers,
+        json={"message": "Continue."},
+    )
+    assert repeat_response.status_code == 200
+    repeat_events = parse_ndjson(repeat_response.text)
+    repeated_suggestion = next(
+        item["business_logic_suggestion"]
+        for item in repeat_events
+        if item["event"] == "business_logic_suggestion"
+    )
+    assert repeated_suggestion["finding_id"] == finding_id
+    assert repeated_suggestion["finding"]["status"] == "accepted_for_investigation"
+    assert planner.working_knowledge_seen[-1][0]["finding_id"] == finding_id
+
+    persistent_response = analysis_client.put(
+        f"/api/v1/analysis/{session_id}/findings/{finding_id}/decision",
+        headers=headers,
+        json={
+            "finding_id": finding_id,
+            "decision": "accept_as_persistent_business_logic",
+            "confidence": 0.93,
+            "verdict": "An administrator approved this as durable logic.",
+            "scope": {"investigation_id": session_id},
+            "evidence_refs": ["query:dictionary-check"],
+        },
+    )
+    assert persistent_response.status_code == 200
+
+    repeat_after_persistent_response = analysis_client.post(
+        f"/api/v1/analysis/{session_id}/messages/stream",
+        headers=headers,
+        json={"message": "Continue again."},
+    )
+    assert repeat_after_persistent_response.status_code == 200
+    repeat_after_persistent_events = parse_ndjson(repeat_after_persistent_response.text)
+    repeated_persistent_suggestion = next(
+        item["business_logic_suggestion"]
+        for item in repeat_after_persistent_events
+        if item["event"] == "business_logic_suggestion"
+    )
+    assert repeated_persistent_suggestion["finding_id"] == finding_id
+    assert repeated_persistent_suggestion["finding"]["status"] == (
+        "accepted_as_persistent_business_logic"
+    )
+
+    with create_session() as session:
+        findings = list(
+            session.scalars(
+                select(AnalysisFinding).where(
+                    AnalysisFinding.investigation_id == session_id
+                )
+            )
+        )
+        assert len(findings) == 1
+        assert findings[0].finding_id == finding_id
+        assert findings[0].decision == "accept_as_persistent_business_logic"
+        assert findings[0].status == "accepted_as_persistent_business_logic"
+        suggestions = list_business_logic_suggestions(session, connector.id)
+        assert len(suggestions) == 1
+        assert suggestions[0].enabled is True
+        assert suggestions[0].status == "active"
+
+
 def test_investigation_finding_review_lifecycle_and_scoped_working_knowledge(
     analysis_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

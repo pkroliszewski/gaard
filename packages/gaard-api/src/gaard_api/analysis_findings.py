@@ -186,6 +186,46 @@ def create_analysis_finding(
     return finding
 
 
+def get_analysis_finding_for_business_logic_suggestion(
+    session: Session,
+    *,
+    investigation_id: str,
+    owner_user_id: str,
+    business_logic_suggestion_id: int,
+) -> AnalysisFinding | None:
+    return session.scalar(
+        select(AnalysisFinding)
+        .where(
+            AnalysisFinding.investigation_id == investigation_id,
+            AnalysisFinding.owner_user_id == owner_user_id,
+            AnalysisFinding.business_logic_suggestion_id == business_logic_suggestion_id,
+        )
+        .order_by(AnalysisFinding.id.asc())
+    )
+
+
+def refresh_analysis_finding_observation(
+    finding: AnalysisFinding,
+    *,
+    statement: str,
+    finding_type: str,
+    confidence: float,
+    critique: str,
+    scope: dict[str, Any],
+    evidence_refs: list[str],
+) -> AnalysisFinding:
+    finding.statement = remove_thinking_blocks(statement).strip()[:4_000]
+    finding.finding_type = (finding_type.strip() or "finding")[:100]
+    finding.confidence = max(0.0, min(1.0, float(confidence)))
+    finding.critique = remove_thinking_blocks(critique).strip()[:4_000]
+    finding.scope_json = json_dumps(scope)
+    finding.evidence_refs_json = json_dumps(
+        unique_texts(text_list(finding.evidence_refs_json) + evidence_refs)
+    )
+    finding.contract_version = FINDING_CONTRACT_VERSION
+    return finding
+
+
 def get_owned_analysis_finding(
     session: Session,
     *,

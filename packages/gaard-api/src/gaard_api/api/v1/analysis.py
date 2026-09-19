@@ -45,10 +45,12 @@ from gaard_api.analysis_findings import (
     create_analysis_finding,
     create_radar_finding_decision,
     format_working_knowledge,
+    get_analysis_finding_for_business_logic_suggestion,
     get_owned_analysis_finding,
     list_active_analysis_findings,
     list_owned_analysis_findings,
     record_finding_usage,
+    refresh_analysis_finding_observation,
     serialize_analysis_finding,
     serialize_finding_decision,
     serialize_working_knowledge_item,
@@ -1221,22 +1223,42 @@ def save_business_logic_finding(
             auto_enable=runtime_config.analysis_auto_enable_business_logic,
             actor=f"analysis:{session_id}",
         )
-        finding_record = create_analysis_finding(
+        critique = first_non_empty(
+            finding.critique,
+            "Confirmed only by evidence from this investigation and datasource.",
+        )
+        scope = finding_scope(finding, connector.connector_key, context)
+        evidence_refs = finding_evidence_refs(finding, context)
+        finding_record = get_analysis_finding_for_business_logic_suggestion(
             session,
             investigation_id=session_id,
             owner_user_id=record.user_id,
-            connector_id=connector.id,
             business_logic_suggestion_id=suggestion.id,
-            statement=statement,
-            finding_type=finding.knowledge_type,
-            confidence=finding.confidence,
-            critique=first_non_empty(
-                finding.critique,
-                "Confirmed only by evidence from this investigation and datasource.",
-            ),
-            scope=finding_scope(finding, connector.connector_key, context),
-            evidence_refs=finding_evidence_refs(finding, context),
         )
+        if finding_record is None:
+            finding_record = create_analysis_finding(
+                session,
+                investigation_id=session_id,
+                owner_user_id=record.user_id,
+                connector_id=connector.id,
+                business_logic_suggestion_id=suggestion.id,
+                statement=statement,
+                finding_type=finding.knowledge_type,
+                confidence=finding.confidence,
+                critique=critique,
+                scope=scope,
+                evidence_refs=evidence_refs,
+            )
+        else:
+            refresh_analysis_finding_observation(
+                finding_record,
+                statement=statement,
+                finding_type=finding.knowledge_type,
+                confidence=finding.confidence,
+                critique=critique,
+                scope=scope,
+                evidence_refs=evidence_refs,
+            )
         session.commit()
         finding_payload = serialize_analysis_finding(finding_record)
         return {
