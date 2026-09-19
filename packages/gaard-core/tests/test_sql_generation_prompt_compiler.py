@@ -1,3 +1,5 @@
+import pytest
+
 from gaard_core.prompt_compiler.models import SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.sql_generation_prompt import SqlGenerationPromptCompiler
 from gaard_core.schema.models import ColumnInfo, DatabaseSchema, TableInfo
@@ -41,3 +43,20 @@ def test_sql_generation_prompt_compiler_builds_prompt_with_rules_schema_and_ques
     assert compiled.metadata["dialect"] == "sqlite"
     assert compiled.metadata["max_rows"] == 100
     assert compiled.metadata["tables_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("dialect", "row_limit"),
+    [("tsql", "TOP (100)"), ("oracle", "FETCH FIRST 100 ROWS ONLY"),
+     ("db2", "FETCH FIRST 100 ROWS ONLY"), ("postgres", "LIMIT 100")],
+)
+def test_row_limit_instruction_uses_the_requested_dialect(dialect: str, row_limit: str) -> None:
+    compiled = SqlGenerationPromptCompiler().compile(
+        SqlGenerationPromptRequest(
+            question="What is in abc?", formatted_schema="Table: abc", dialect=dialect,
+            max_rows=100,
+        )
+    )
+    assert row_limit in compiled.system_prompt
+    if dialect in {"tsql", "oracle", "db2"}:
+        assert "LIMIT 100" not in compiled.system_prompt

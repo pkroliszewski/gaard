@@ -28,8 +28,8 @@ Query construction rules:
 3. If the user asks for both a total and a breakdown, prefer one SELECT statement that returns grouped rows or conditional aggregate columns.
 4. Do not solve one user question by generating multiple separate SELECT statements.
 5. Prefer explicit column names over SELECT *.
-6. Add LIMIT {max_rows} when the query may return many rows.
-7. Do not add LIMIT to pure aggregate queries that return a single row, unless it is already useful for the dialect or safety.
+6. {row_limit_instruction}
+7. Do not add a row limit to pure aggregate queries that return a single row.
 8. Use clear aliases for computed expressions.
 9. If the question is ambiguous, choose the most likely interpretation based on the schema, column names, descriptions and data rules.
 

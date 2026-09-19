@@ -252,6 +252,19 @@ def seed_prompts(session: Session) -> None:
             continue
 
         if existing.updated_by != "system":
+            if existing.prompt_key == "sql_generation":
+                # Replace only the shipped LIMIT rules, preserving administrator customizations.
+                updated_prompt = existing.system_prompt.replace(
+                    "Add LIMIT {max_rows} when the query may return many rows.",
+                    "{row_limit_instruction}",
+                ).replace(
+                    "Do not add LIMIT to pure aggregate queries that return a single row, "
+                    "unless it is already useful for the dialect or safety.",
+                    "Do not add a row limit to pure aggregate queries that return a single row.",
+                )
+                if updated_prompt != existing.system_prompt:
+                    existing.system_prompt = updated_prompt
+                    existing.version += 1
             continue
 
         changed = any(

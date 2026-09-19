@@ -3,6 +3,21 @@ from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromp
 from gaard_core.prompt_compiler.schema_formatter import SchemaPromptFormatter
 
 
+def sql_row_limit_instruction(dialect: str, max_rows: int) -> str:
+    normalized = dialect.strip().lower()
+    if normalized in {"tsql", "mssql", "sqlserver"}:
+        syntax = f"SELECT TOP ({max_rows}); never use LIMIT in T-SQL"
+    elif normalized in {"oracle", "db2"}:
+        syntax = f"FETCH FIRST {max_rows} ROWS ONLY; never use LIMIT"
+    elif normalized == "teradata":
+        syntax = f"SELECT TOP {max_rows}"
+    elif normalized in {"sqlite", "postgres", "postgresql", "mysql", "duckdb"}:
+        syntax = f"LIMIT {max_rows}"
+    else:
+        syntax = f"the native row-limiting syntax of the {dialect} dialect"
+    return f"When the query may return many rows, return at most {max_rows} rows using {syntax}."
+
+
 class SqlGenerationPromptCompiler:
     def __init__(self, schema_formatter: SchemaPromptFormatter | None = None) -> None:
         self.schema_formatter = schema_formatter or SchemaPromptFormatter()
@@ -75,8 +90,8 @@ Query construction rules:
 3. If the user asks for both a total and a breakdown, prefer one SELECT statement that returns grouped rows or conditional aggregate columns.
 4. Do not solve one user question by generating multiple separate SELECT statements.
 5. Prefer explicit column names over SELECT *.
-6. Add LIMIT {max_rows} when the query may return many rows.
-7. Do not add LIMIT to pure aggregate queries that return a single row, unless it is already useful for the dialect or safety.
+6. {sql_row_limit_instruction(dialect, max_rows)}
+7. Do not add a row limit to pure aggregate queries that return a single row.
 8. Use clear aliases for computed expressions.
 9. When the query uses more than one table, every table must have a short, stable alias.
 10. When the query uses more than one table, every column reference must be qualified with the correct table alias in SELECT, JOIN, WHERE, GROUP BY, HAVING and ORDER BY.

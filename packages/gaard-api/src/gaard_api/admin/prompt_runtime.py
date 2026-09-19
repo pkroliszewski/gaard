@@ -4,6 +4,7 @@ from gaard_core.errors import ConfigurationError
 from gaard_core.json_utils import json_dumps
 from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.schema_formatter import SchemaPromptFormatter
+from gaard_core.prompt_compiler.sql_generation_prompt import sql_row_limit_instruction
 from gaard_core.query_pipeline.models import (
     ConversationContextDecision,
     QueryRequest,
@@ -29,12 +30,14 @@ class MetadataSqlGenerationPromptCompiler:
         system_prompt = self.prompt_template.system_prompt.format(
             dialect=request.dialect,
             max_rows=request.max_rows,
+            row_limit_instruction=sql_row_limit_instruction(request.dialect, request.max_rows),
         )
         user_prompt = self.prompt_template.user_prompt_template.format(
             schema=formatted_schema,
             question=request.question,
             dialect=request.dialect,
             max_rows=request.max_rows,
+            row_limit_instruction=sql_row_limit_instruction(request.dialect, request.max_rows),
         )
 
         return CompiledPrompt(

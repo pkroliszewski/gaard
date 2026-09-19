@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from gaard_connectors import ConnectorNotFoundError, create_builtin_connector_registry
 from gaard_connectors.odbc.connection_string import parse_odbc_connection_string
-from gaard_core.errors import LlmProviderError, QueryPipelineStepError
+from gaard_core.errors import LlmProviderError, QueryExecutionError, QueryPipelineStepError
 from gaard_core.query_pipeline.mock_sql_generator import MockSqlGenerator
 from gaard_core.query_pipeline.models import (
     GeneratedSql,
@@ -19,6 +19,7 @@ from gaard_core.query_pipeline.models import (
     QueryIntentClassification,
     QueryIntentDecision,
     QueryRequest,
+    QueryResult,
 )
 from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
 from openpyxl import Workbook
@@ -1516,6 +1517,49 @@ def test_system_seeded_mock_runtime_modes_are_migrated_to_current_defaults(
         assert sql_generation_mode.updated_by == "system"
 
     reset_metadata_store_for_tests()
+
+
+@pytest.mark.parametrize("updated_by", ["system", "admin"])
+def test_legacy_limit_prompt_is_upgraded_without_losing_customizations(
+    admin_client: TestClient,
+    updated_by: str,
+) -> None:
+    from gaard_core.prompt_compiler.models import SqlGenerationPromptRequest
+
+    from gaard_api.admin.prompt_runtime import MetadataSqlGenerationPromptCompiler
+
+    with create_session() as session:
+        prompt = session.scalar(
+            select(PromptTemplate).where(PromptTemplate.prompt_key == "sql_generation")
+        )
+        assert prompt is not None
+        prompt.system_prompt = (
+            "You must generate SQL for the {dialect} dialect.\n"
+            "6. Add LIMIT {max_rows} when the query may return many rows.\n"
+            "7. Do not add LIMIT to pure aggregate queries that return a single row, "
+            "unless it is already useful for the dialect or safety.\n"
+            "Custom rule: use the reporting schema."
+        )
+        prompt.updated_by = updated_by
+        prompt.version = 7
+        session.commit()
+        seed_prompts(session)
+        session.commit()
+        assert prompt.version == 8
+        if updated_by == "admin":
+            assert "Custom rule: use the reporting schema." in prompt.system_prompt
+            assert prompt.updated_by == "admin"
+        compiled = MetadataSqlGenerationPromptCompiler(prompt).compile(
+            SqlGenerationPromptRequest(
+                question="What is in abc?", formatted_schema="Table: abc",
+                dialect="tsql", max_rows=100,
+            )
+        )
+        assert "TOP (100)" in compiled.system_prompt
+        assert "LIMIT 100" not in compiled.system_prompt
+        seed_prompts(session)
+        session.commit()
+        assert prompt.version == 8
 
 
 def test_investigation_prompts_are_not_seeded(
@@ -5481,6 +5525,21 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
     assert edited["enabled"] is True
     assert "customer project orders" in get_active_business_logic_prompt_safe(connector_id)
 
+    repeated_response = admin_client.post(
+        "/api/v1/query", headers=headers,
+        json={"question": "Ktory pracownik zrealizowal najwiecej projektow", "user_id": "alice"},
+    )
+    assert repeated_response.status_code == 400
+    repeated_items = admin_client.get(
+        "/api/v1/admin/business-logic-suggestions", headers=headers,
+    ).json()["items"]
+    assert len(repeated_items) == 1
+    assert repeated_items[0]["id"] == edited["id"]
+    assert repeated_items[0]["enabled"] is True
+    assert repeated_items[0]["status"] == "active"
+    assert repeated_items[0]["title"] == edited["title"]
+    assert repeated_items[0]["rule_text"] == edited["rule_text"]
+
     empty_edit_response = admin_client.put(
         f"/api/v1/admin/business-logic-suggestions/{suggestions[0]['id']}",
         headers=headers,
@@ -5496,6 +5555,103 @@ def test_sql_error_creates_datasource_scoped_business_logic_suggestion(
 
     assert delete_response.status_code == 200
     assert delete_response.json()["status"] == "deleted"
+
+
+@pytest.mark.parametrize("with_identifiers", [True, False])
+def test_mssql_sql_error_learning_preserves_manual_approval(
+    admin_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    with_identifiers: bool,
+) -> None:
+    from gaard_api.api.v1 import query as query_api
+
+    headers = auth_headers(admin_client)
+    rule = "Use SELECT TOP (100) for row limits on this datasource; never use LIMIT."
+    stub_business_logic_learning_llm(monkeypatch, {
+        "create_suggestion": True, "error_category": "sql.dialect",
+        "title": "Use TOP instead of LIMIT", "rule_text": rule,
+        "failed_identifier": "LIMIT" if with_identifiers else "",
+        "repaired_identifier": "TOP" if with_identifiers else "",
+        "confidence": 0.95,
+    })
+    with create_session() as session:
+        for connector in session.scalars(select(DatasourceConnector)):
+            connector.active = False
+        connector = DatasourceConnector(
+            connector_key="mssql_abc", name="MSSQL ABC", database_type="mssql",
+            database_url="mssql+pyodbc://example.test/abc", sql_dialect="tsql", active=True,
+        )
+        session.add(connector)
+        session.flush()
+        session.add(DatasourceSchemaCache(
+            connector_id=connector.id, schema_json='{"tables":[]}',
+            table_settings_json="{}", formatted_schema="Table: abc\nColumns:\n- id: INTEGER",
+        ))
+        set_setting(session, "gaard_sql_generation_mode", "llm", "test")
+        set_setting(session, "gaard_intent_classification_mode", "mock", "test")
+        session.commit()
+
+    requests: list[ChatCompletionRequest] = []
+
+    class SqlClient:
+        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+            requests.append(request)
+            sql = (
+                "SELECT * FROM abc LIMIT 100" if len(requests) <= 2
+                else "SELECT TOP (100) * FROM abc"
+            )
+            return ChatCompletionResponse(content=sql)
+
+    class MssqlExecutor:
+        def execute(self, sql: str) -> QueryResult:
+            if "LIMIT" in sql:
+                raise QueryExecutionError(
+                    "Incorrect syntax near LIMIT.", sql=sql,
+                    error_detail="[SQL Server] Incorrect syntax near 'LIMIT'.",
+                )
+            return QueryResult(columns=["id"], rows=[{"id": 1}])
+
+    monkeypatch.setattr(query_api, "create_llm_client", lambda config: SqlClient())
+    monkeypatch.setattr(
+        query_api, "create_datasource_executor", lambda *args, **kwargs: MssqlExecutor(),
+    )
+    payload = {"question": "What is in table abc?", "interpret": False}
+    assert admin_client.post("/api/v1/query", headers=headers, json=payload).status_code == 400
+    first = admin_client.get(
+        "/api/v1/admin/business-logic-suggestions", headers=headers,
+    ).json()["items"]
+    assert len(first) == 1 and first[0]["status"] == "pending"
+    suggestion_id = first[0]["id"]
+    approved = admin_client.put(
+        f"/api/v1/admin/business-logic-suggestions/{suggestion_id}",
+        headers=headers, json={"enabled": True},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["item"]["status"] == "active"
+
+    # Force the model to repeat its error, even with the approved rule in its prompt.
+    assert admin_client.post("/api/v1/query", headers=headers, json=payload).status_code == 400
+    repeated = admin_client.get(
+        "/api/v1/admin/business-logic-suggestions", headers=headers,
+    ).json()["items"]
+    assert len(repeated) == 1
+    assert repeated[0]["id"] == suggestion_id
+    assert repeated[0]["enabled"] is True
+    assert repeated[0]["status"] == "active"
+    assert repeated[0]["updated_by"] == "admin"
+    assert rule in requests[1].messages[1].content
+    assert "tsql" in requests[1].messages[0].content
+    assert "TOP (100)" in requests[1].messages[0].content
+    assert "Add LIMIT" not in requests[1].messages[0].content
+    audit = admin_client.get(
+        "/api/v1/admin/audit/data-queries?audit_type=sql_error", headers=headers,
+    ).json()["items"][0]
+    assert audit["metadata"]["business_logic_learning"]["status"] == "active"
+
+    success = admin_client.post("/api/v1/query", headers=headers, json=payload)
+    assert success.status_code == 200
+    assert success.json()["sql"] == "SELECT TOP (100) * FROM abc"
+    assert rule in requests[2].messages[1].content
 
 
 def test_missing_column_sql_error_creates_business_logic_suggestion(

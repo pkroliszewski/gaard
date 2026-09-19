@@ -1748,6 +1748,14 @@ def upsert_llm_business_logic_suggestion(
         )
 
     if existing is None:
+        existing = session.scalar(
+            select(BusinessLogicSuggestion).where(
+                BusinessLogicSuggestion.connector_id == connector.id,
+                BusinessLogicSuggestion.rule_text == lesson.rule_text,
+            )
+        )
+
+    if existing is None:
         existing = BusinessLogicSuggestion(
             connector_id=connector.id,
             source_audit_id=audit_log.id,
@@ -1769,6 +1777,10 @@ def upsert_llm_business_logic_suggestion(
         return existing
 
     existing.source_audit_id = audit_log.id
+    # Re-observing an error must not revoke approval or overwrite reviewed content.
+    if existing.enabled:
+        return existing
+
     existing.status = BUSINESS_LOGIC_STATUS_PENDING
     existing.safety = BUSINESS_LOGIC_SAFETY_REVIEW
     existing.enabled = False
@@ -1872,9 +1884,12 @@ def record_business_logic_learning_suggestion(
     metadata["failed_identifier"] = lesson.failed_identifier
     metadata["repaired_identifier"] = lesson.repaired_identifier
     metadata["business_logic_learning"] = {
-        "status": "pending_approval",
+        "status": BUSINESS_LOGIC_STATUS_ACTIVE if suggestion.enabled else "pending_approval",
         "suggestion_id": suggestion.id,
         "message": (
+            "This error matches an already approved business logic rule. "
+            "The rule remains active."
+            if suggestion.enabled else
             "Nauczyłem się propozycji rozwiązania tego błędu, ale musisz ją "
             "zatwierdzić w Sugestiach logiki biznesowej."
         ),

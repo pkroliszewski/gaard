@@ -1,3 +1,20 @@
+### v0.2.19 API / Core / Connectors / LLM - SQL error learning and native row limits
+
+- Preserve manual approval and reviewed content when a repeated SQL error matches
+  an existing Business Logic rule. Identical rules also deduplicate when the LLM
+  omits failed/repaired identifiers, and the audit reports an already active rule.
+- Generate row-limit instructions for the configured SQL dialect, including
+  `TOP` for MSSQL/TSQL. Upgrade legacy default LIMIT instructions in metadata
+  while preserving other administrator prompt customizations.
+- Apply row limits with dialect-aware SQL parsing instead of appending `LIMIT`
+  to every query. MSSQL queries use `TOP` or `OFFSET/FETCH`, and result fetching
+  remains bounded even for vendor-specific SQL that cannot be rewritten.
+- Add regression coverage reproducing SQL error, manual approval, and repeated
+  error through the query/admin APIs, plus prompt-upgrade and executor coverage.
+- Publish `gaard-api`, `gaard-core`, `gaard-connectors`, and `gaard-llm` as
+  `0.2.19` with aligned dependencies. Client, plugin API, and private plugins
+  retain their existing versions.
+
 ### v0.2.18 API - Preserve reviewed business logic findings
 
 - Reuse an existing finding when the same business logic suggestion is observed
