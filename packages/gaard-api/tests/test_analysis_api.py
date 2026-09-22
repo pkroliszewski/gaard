@@ -6,7 +6,12 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient
 from gaard_core.errors import SqlValidationError
-from gaard_core.query_pipeline.models import QueryRequest, QueryResponse
+from gaard_core.query_pipeline.models import (
+    ConversationContextClassification,
+    ConversationContextDecision,
+    QueryRequest,
+    QueryResponse,
+)
 from sqlalchemy import select
 
 from gaard_api.admin.database import create_session, reset_metadata_store_for_tests
@@ -41,6 +46,34 @@ def analysis_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     monkeypatch.setattr(settings, "gaard_sql_generation_mode", "mock")
     monkeypatch.setattr(settings, "gaard_result_interpretation_mode", "mock")
     monkeypatch.setattr(settings, "gaard_llm_api_key", "change-me")
+
+    class ContinuationClassifier:
+        def classify(
+            self, request: QueryRequest, context: dict[str, Any]
+        ) -> ConversationContextClassification:
+            return ConversationContextClassification(
+                decision=ConversationContextDecision.FOLLOW_UP,
+                standalone_question=request.question,
+                source="test",
+            )
+
+        def summarize(
+            self,
+            request: QueryRequest,
+            context: dict[str, Any],
+            classification: ConversationContextClassification,
+        ) -> ConversationContextClassification:
+            return classification.model_copy(
+                update={
+                    "standalone_question": context["turns"][-1]["standalone_question"]
+                    + "; "
+                    + request.question
+                }
+            )
+
+    monkeypatch.setattr(
+        query_module, "create_conversation_context_classifier", ContinuationClassifier
+    )
     reset_metadata_store_for_tests()
     install_medical_poc_example_database(demo_db)
 
@@ -51,7 +84,9 @@ def analysis_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
 
 
 def parse_ndjson(text: str) -> list[dict[str, Any]]:
-    return [cast(dict[str, Any], json.loads(line)) for line in text.strip().splitlines() if line.strip()]
+    return [
+        cast(dict[str, Any], json.loads(line)) for line in text.strip().splitlines() if line.strip()
+    ]
 
 
 def login(client: TestClient) -> dict[str, Any]:
@@ -323,9 +358,14 @@ def test_analysis_resume_records_final_turn_in_same_conversation(
 
     with create_session() as session:
         turns = list(session.scalars(select(ConversationTurn)))
-    assert len(turns) == 1
+    assert len(turns) == 2
     assert turns[0].conversation_id == conversation_id
     assert turns[0].mode == "analysis"
+    assert turns[0].status == "waiting_for_user"
+    assert turns[1].original_question == "ostatni miesiąc"
+    assert turns[1].context_decision == "follow_up"
+    assert "ostatni miesiąc" in turns[1].standalone_question
+    assert turns[0].standalone_question == "dopytaj o zakres"
 
 
 def test_analysis_database_step_can_record_business_logic_suggestion(

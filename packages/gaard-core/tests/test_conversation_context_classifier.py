@@ -1,5 +1,7 @@
+import json
 from typing import cast
 
+import pytest
 from gaard_llm.openai_compatible.client import OpenAICompatibleClient
 from gaard_llm.providers.models import ChatCompletionRequest, ChatCompletionResponse
 
@@ -8,122 +10,115 @@ from gaard_core.conversation_context.llm_classifier import (
     parse_conversation_context_classification,
 )
 from gaard_core.conversation_context.mock_classifier import MockConversationContextClassifier
+from gaard_core.errors import LlmProviderError
 from gaard_core.query_pipeline.models import ConversationContextDecision, QueryRequest
 
 
-def test_parse_conversation_context_classification_handles_aliases_and_invalid_values() -> None:
-    assert (
-        parse_conversation_context_classification(
-            '<think>hidden</think>{"decision":"followup","confidence":0.8,'
-            '"standalone_question":"How many patients in May?"}'
-        ).decision
-        == ConversationContextDecision.FOLLOW_UP
-    )
-    assert (
-        parse_conversation_context_classification('{"decision":"surprising"}').decision
-        == ConversationContextDecision.AMBIGUOUS
-    )
-    assert (
-        parse_conversation_context_classification('{"is_continuation":false}').decision
-        == ConversationContextDecision.NEW_TOPIC
-    )
-    assert (
-        parse_conversation_context_classification('{"is_continuation":true}').decision
-        == ConversationContextDecision.FOLLOW_UP
-    )
+class FakeClient:
+    def __init__(self, *responses: str) -> None:
+        self.responses = iter(responses)
+        self.requests: list[ChatCompletionRequest] = []
+
+    def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+        self.requests.append(request)
+        return ChatCompletionResponse(content=next(self.responses))
 
 
-def test_llm_conversation_context_classifier_exposes_prompt_and_standalone_follow_up() -> None:
-    class FakeClient:
-        def __init__(self) -> None:
-            self.request: ChatCompletionRequest | None = None
+@pytest.mark.parametrize(
+    ("response", "decision"),
+    [
+        ('<think>hidden</think>{"decision":"followup"}', "follow_up"),
+        ('{"is_continuation":true}', "follow_up"),
+        ('{"is_continuation":false}', "new_topic"),
+        ('```json\n{"decision":"new_topic"}\n```', "new_topic"),
+        ("true", "follow_up"),
+        ("no", "new_topic"),
+    ],
+)
+def test_parse_binary_decision(response: str, decision: str) -> None:
+    result = parse_conversation_context_classification(response)
+    assert result is not None
+    assert result.decision.value == decision
 
-        def create_chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
-            self.request = request
-            return ChatCompletionResponse(
-                content=(
-                    '{"is_continuation":true,"decision":"follow_up",'
-                    '"current_question_is_standalone":true,"confidence":0.91,'
-                    '"standalone_question":"","reason":"Same metric, new period."}'
-                )
-            )
 
-    client = FakeClient()
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"decision":"ambiguous"}',
+        "This continues the previous question.",
+        "[]",
+        "{}",
+        "null",
+    ],
+)
+def test_free_form_response_requires_llm_interpretation(response: str) -> None:
+    assert parse_conversation_context_classification(response) is None
+
+
+def test_classify_then_summarize_full_context_in_separate_deterministic_calls() -> None:
+    summary = "How many active patients were admitted in May in Warsaw?"
+    client = FakeClient('{"decision":"follow_up","reason":"Same population."}', summary)
     classifier = LlmConversationContextClassifier(
-        client=cast(OpenAICompatibleClient, client),
-        model="test-model",
+        cast(OpenAICompatibleClient, client), "test", extra_body={"temperature": 0.9}
     )
-
-    classification = classifier.classify(
-        QueryRequest(question="ilu pacjentów przyjęto w tym tygodniu"),
-        {
-            "turns": [
-                {
-                    "question": "ilu pacjentów było przyjętych tydzień temu",
-                    "answer": "12",
-                },
-                {
-                    "question": "a dwa tygodnie temu?",
-                    "standalone_question": "ilu pacjentów było przyjętych dwa tygodnie temu",
-                    "answer": "9",
-                },
-            ]
-        },
-    )
-
+    request = QueryRequest(question="And in May?")
+    context = {
+        "turns": [
+            {"question": f"question-{index}", "context_decision": "follow_up"} for index in range(8)
+        ]
+    }
+    classification = classifier.classify(request, context)
+    assert len(client.requests) == 1
+    classification = classifier.summarize(request, context, classification)
     assert classification.decision == ConversationContextDecision.FOLLOW_UP
-    assert classification.standalone_question == "ilu pacjentów przyjęto w tym tygodniu"
-    assert classification.source == "llm"
-    assert "turn_t_minus_1" in classification.prompt["user_prompt"]
-    assert "logical continuation" in classification.prompt["system_prompt"]
+    assert classification.standalone_question == summary
+    assert classification.model_response["summary"] == summary
+    assert "summary" in classification.prompt
+    for call in client.requests:
+        assert call.temperature == 0
+        assert call.extra_body["temperature"] == 0
+        for index in range(8):
+            assert f"question-{index}" in call.messages[1].content
+        assert request.question in call.messages[1].content
 
 
-def test_mock_conversation_context_classifier_rewrites_simple_follow_up() -> None:
-    classifier = MockConversationContextClassifier()
-
-    classification = classifier.classify(
-        QueryRequest(question="a w maju?"),
-        {
-            "turns": [
-                {
-                    "question": "Jaka była sprzedaż w czerwcu według regionów?",
-                    "standalone_question": "Jaka była sprzedaż w czerwcu według regionów?",
-                }
-            ]
-        },
+def test_free_form_answer_is_reinterpreted_by_llm_without_ambiguous_block() -> None:
+    client = FakeClient(
+        "Yes, this is the same topic, but no rewrite is needed.",
+        '{"decision":"follow_up"}',
+        "How many patients are there?",
     )
+    classifier = LlmConversationContextClassifier(cast(OpenAICompatibleClient, client), "test")
+    request = QueryRequest(question="How many patients are there?")
+    context = {"turns": [{"question": "How many patients were there yesterday?"}]}
+    result = classifier.classify(request, context)
+    result = classifier.summarize(request, context, result)
+    assert result.standalone_question == request.question
+    assert len(client.requests) == 3
+    assert "no rewrite is needed" in client.requests[1].messages[1].content
 
-    assert classification.decision == ConversationContextDecision.FOLLOW_UP
-    assert "czerwcu" in classification.standalone_question
-    assert "maju" in classification.standalone_question
+
+def test_invalid_llm_output_is_provider_error_not_user_clarification() -> None:
+    client = FakeClient("nonsense", '{"decision":"ambiguous"}')
+    classifier = LlmConversationContextClassifier(cast(OpenAICompatibleClient, client), "test")
+    with pytest.raises(LlmProviderError, match="follow_up/new_topic"):
+        classifier.classify(QueryRequest(question="Next?"), {"turns": []})
+    assert len(client.requests) == 2
 
 
-def test_mock_conversation_context_classifier_rewrites_projection_follow_up() -> None:
+def test_new_topic_does_not_use_legacy_rewritten_question() -> None:
+    client = FakeClient(json.dumps({"decision": "new_topic", "standalone_question": "old rewrite"}))
+    classifier = LlmConversationContextClassifier(cast(OpenAICompatibleClient, client), "test")
+    result = classifier.classify(QueryRequest(question="New question"), {"turns": []})
+    assert result.standalone_question == "New question"
+    assert len(client.requests) == 1
+
+
+def test_mock_mode_does_not_apply_keyword_rules() -> None:
     classifier = MockConversationContextClassifier()
-
-    classification = classifier.classify(
-        QueryRequest(question="show their names"),
-        {
-            "turns": [
-                {
-                    "question": "How many active patients are there?",
-                    "standalone_question": "How many active patients are there?",
-                }
-            ]
-        },
-    )
-
-    assert classification.decision == ConversationContextDecision.FOLLOW_UP
-    assert "active patients" in classification.standalone_question
-    assert "show their names" in classification.standalone_question
-
-
-def test_mock_conversation_context_classifier_marks_short_reference_ambiguous() -> None:
-    classifier = MockConversationContextClassifier()
-
-    classification = classifier.classify(
-        QueryRequest(question="to"),
-        {"turns": [{"question": "How many active patients are there?"}]},
-    )
-
-    assert classification.decision == ConversationContextDecision.AMBIGUOUS
+    for question in ("to", "show their names", "a w maju?"):
+        result = classifier.classify(
+            QueryRequest(question=question), {"turns": [{"question": "Old"}]}
+        )
+        assert result.decision == ConversationContextDecision.NEW_TOPIC
+        assert result.source == "mock"

@@ -12,7 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from gaard_core.llm_output import remove_thinking_blocks
 from gaard_core.query_pipeline.models import (
+    ContextMode,
     ConversationContextClassification,
+    ConversationContextDecision,
     OutputClassification,
     QueryRequest,
     QueryResponse,
@@ -69,7 +71,7 @@ from gaard_api.auth_dependencies import (
     get_current_enterprise_api_user,
     identity_id_for_principal,
 )
-from gaard_api.conversations import load_conversation_for_owner
+from gaard_api.conversations import fail_conversation_turn, record_conversation_turn
 from gaard_api.query_hooks import (
     DatasourceContext,
     DatasourceContexts,
@@ -1542,6 +1544,23 @@ def run_analysis_loop(
                     decision.visible_question,
                 )
                 save_analysis_context(session_id, context, "waiting_for_user")
+                if conversation is not None and context_classification is not None:
+                    record_conversation_turn(
+                        conversation,
+                        mode="analysis",
+                        original_question=visible_request.question,
+                        standalone_question=request.question,
+                        answer=user_question,
+                        sql="",
+                        metadata={
+                            "datasource_id": request.datasource_id,
+                            "datasource_ids": request.datasource_ids,
+                            "output_classification": OutputClassification.TECHNICAL_DATA.value,
+                        },
+                        context_classification=context_classification,
+                        status="waiting_for_user",
+                        analysis_session_id=session_id,
+                    )
                 yield stream_event(
                     session_id,
                     "user_question",
@@ -1729,6 +1748,7 @@ def run_analysis_loop(
         )
         yield stream_event(session_id, "final", response.model_dump(mode="json"))
     except Exception as exc:
+        fail_conversation_turn(conversation, context_classification, exc)
         save_analysis_context(session_id, context, "failed")
         yield stream_event(
             session_id,
@@ -1778,13 +1798,14 @@ def analysis_stream(
     conversation, context_classification, analysis_request = resolve_request_conversation(
         effective_request,
         conversation_principal(_user),
+        mode="analysis",
     )
     record = create_analysis_session_record(
         effective_request,
         owner_user_id=identity_id_for_principal(_user),
     )
     if conversation is not None:
-        standalone_question = analysis_request.question if analysis_request is not None else ""
+        standalone_question = analysis_request.question
         attach_conversation_to_analysis_context(
             record.session_id,
             conversation.conversation_id,
@@ -1793,55 +1814,10 @@ def analysis_stream(
         )
         record = load_analysis_session_record(record.session_id) or record
 
-    if conversation is not None and analysis_request is None:
-        response = QueryResponse(
-            question=effective_request.question,
-            answer=(
-                "Potrzebuję doprecyzowania, czy to pytanie jest kontynuacją poprzedniego "
-                "wątku i jak mam je rozumieć."
-            ),
-            sql="",
-            rows=[],
-            metadata={
-                **final_metadata(record.session_id, "waiting_for_user", 0),
-                "output_classification": OutputClassification.UNKNOWN.value,
-                "blocked": True,
-                "blocked_reason": "conversation.ambiguous_context",
-            },
-        )
-        response = finalize_analysis_response(
-            response,
-            conversation=conversation,
-            context_classification=context_classification,
-            original_request=effective_request,
-            effective_request=effective_request,
-        )
-
-        def ambiguous_stream() -> Iterator[str]:
-            yield stream_event(
-                record.session_id,
-                "session_started",
-                {
-                    **serialize_analysis_session(record),
-                    "conversation_id": conversation.conversation_id,
-                },
-            )
-            save_analysis_context(
-                record.session_id,
-                json_object(record.context_json),
-                "waiting_for_user",
-            )
-            yield stream_event(record.session_id, "final", response.model_dump(mode="json"))
-
-        return StreamingResponse(
-            ambiguous_stream(),
-            media_type="application/x-ndjson",
-        )
-
     return StreamingResponse(
         start_stream_for_record(
             record,
-            analysis_request or effective_request,
+            analysis_request,
             datasource_context,
             conversation=conversation,
             context_classification=context_classification if conversation is not None else None,
@@ -1869,51 +1845,55 @@ def analysis_message_stream(
         )
 
     context = json_object(record.context_json)
-    conversation = None
-    context_classification = None
     conversation_id = str(context.get("conversation_id") or "")
-    if conversation_id:
-        conversation = load_conversation_for_owner(
-            conversation_id,
-            conversation_principal(_user),
-        )
-        if conversation is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Conversation belongs to another user.",
-            )
-        raw_classification = context.get("conversation_context") or {}
-        if isinstance(raw_classification, dict):
-            context_classification = ConversationContextClassification.model_validate(
-                raw_classification
-            )
-
-    context.setdefault("messages", []).append(
-        {
-            "role": "user",
-            "content": request.message,
-            "occurred_at": utc_iso(),
-        }
-    )
-    save_analysis_context(session_id, context, "running")
     query_request = QueryRequest(
-        question=str(context.get("conversation_standalone_question") or record.question),
+        question=request.message,
         datasource_id=record.datasource_id,
         user_id=record.user_id,
         conversation_id=conversation_id or None,
+        context_mode=ContextMode.AUTO if conversation_id else ContextMode.OFF,
     )
     effective_request, datasource_context = effective_query_request(query_request, _user)
-    refreshed_record = load_analysis_session_record(session_id) or record
+    conversation, classification, analysis_request = resolve_request_conversation(
+        effective_request, conversation_principal(_user), mode="analysis"
+    )
+    resumed = True
+    if (
+        conversation is not None
+        and classification.decision == ConversationContextDecision.NEW_TOPIC
+    ):
+        # A new topic must not inherit the old analysis observations or working findings.
+        record = create_analysis_session_record(
+            effective_request, owner_user_id=identity_id_for_principal(_user)
+        )
+        session_id = record.session_id
+        context = json_object(record.context_json)
+        resumed = False
 
+    if resumed:
+        context.setdefault("messages", []).append(
+            {
+                "role": "user",
+                "content": request.message,
+                "occurred_at": utc_iso(),
+            }
+        )
+    context["original_question"] = request.message
+    save_analysis_context(session_id, context, "running")
+    if conversation is not None:
+        attach_conversation_to_analysis_context(
+            session_id, conversation.conversation_id, classification, analysis_request.question
+        )
+    refreshed_record = load_analysis_session_record(session_id) or record
     return StreamingResponse(
         start_stream_for_record(
             refreshed_record,
-            effective_request,
+            analysis_request,
             datasource_context,
-            resumed=True,
+            resumed=resumed,
             conversation=conversation,
-            context_classification=context_classification,
-            original_request=query_request.model_copy(update={"question": record.question}),
+            context_classification=classification if conversation is not None else None,
+            original_request=effective_request,
             enterprise_access=_user.user.enterprise_access,
         ),
         media_type="application/x-ndjson",

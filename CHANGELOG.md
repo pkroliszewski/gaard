@@ -1,3 +1,23 @@
+### v0.2.20 - Conversation context and query context snapshots
+
+- Replace restrictive follow-up validation and keyword rewrites with a binary
+  LLM decision: follow-up or new topic. Use every turn since the last new topic,
+  without the previous two/four-turn history limits.
+- Summarize a follow-up's full context, including the current question, into one
+  natural-language sentence before execution. Run classification and summary
+  calls with temperature zero and let the LLM interpret free-form classifier
+  responses instead of returning the legacy ambiguous-context refusal.
+- Persist each question's context decision and execution-time context before
+  running SQL or Analysis, including failed requests and resumed analyses.
+  A new topic starts a new context without inheriting old analysis state.
+- Add an authenticated, owner-scoped API endpoint for each query's saved context
+  and a client context dialog next to query execution metadata. Opening the
+  dialog does not regenerate the context or move the chat scroll position.
+- Add regression tests for context boundaries, long conversations, execution
+  snapshots, access control, analysis resumption, and desktop/mobile dialog use.
+- Publish all six public packages as `0.2.20` with aligned dependencies.
+  Private plugin versions and their compatible dependency constraints are unchanged.
+
 ### v0.2.19 API / Core / Connectors / LLM - SQL error learning and native row limits
 
 - Preserve manual approval and reviewed content when a repeated SQL error matches

@@ -35,10 +35,10 @@ class ContextMode(StrEnum):
 class ConversationContextDecision(StrEnum):
     NEW_TOPIC = "new_topic"
     FOLLOW_UP = "follow_up"
-    AMBIGUOUS = "ambiguous"
 
 
 class ConversationContextClassification(BaseModel):
+    turn_id: str = ""
     decision: ConversationContextDecision = ConversationContextDecision.NEW_TOPIC
     confidence: float = 0.0
     standalone_question: str = ""

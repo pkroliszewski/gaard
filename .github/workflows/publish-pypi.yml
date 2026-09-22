@@ -196,6 +196,18 @@ jobs:
                   )
               import_module(module)
 
+          if release_package in {"all", "gaard-api"}:
+              from gaard_api.main import app as api_app
+
+              if api_app.version != release_version:
+                  raise SystemExit("The API application version does not match the release.")
+
+          if release_package in {"all", "gaard-client"}:
+              from gaard_client.main import app as client_app
+
+              if client_app.version != release_version:
+                  raise SystemExit("The client application version does not match the release.")
+
           if release_package in {"all", "gaard-api", "gaard-connectors"}:
               from gaard_connectors.registry import ConnectorDefinition
 

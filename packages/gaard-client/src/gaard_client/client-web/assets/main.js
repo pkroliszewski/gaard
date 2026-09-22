@@ -28,6 +28,7 @@ var state = {
   conversationsLoaded: false,
   conversationsLoading: false,
   conversationsError: "",
+  queryContextDialog: null,
   pending: false,
   error: "",
   apiError: null,
@@ -1385,6 +1386,9 @@ function render(options = {}) {
     button.addEventListener("click", changeView);
   });
   document.querySelector("[data-toggle-sidebar]")?.addEventListener("click", toggleSidebarCollapsed);
+  document.querySelectorAll("[data-query-context]").forEach((button) => {
+    button.addEventListener("click", openQueryContext);
+  });
   document.querySelectorAll("[data-open-conversation]").forEach((button) => {
     button.addEventListener("click", openConversation);
   });
@@ -3239,11 +3243,102 @@ function renderMeta(message, rows) {
         <div><dt>Datasource</dt><dd>${escapeHtml(metadata.datasource_id || "-")}</dd></div>
         <div><dt>Mode</dt><dd>${escapeHtml(formatMode(mode))}</dd></div>
         <div><dt>Output</dt><dd>${escapeHtml(metadata.output_classification || "unknown")}</dd></div>
+        ${metadata.conversation?.id && metadata.conversation?.turn_id ? `
+          <div><dd><button class="query-context-link" type="button" data-query-context="${message.id}" aria-haspopup="dialog">kontekst</button></dd></div>
+        ` : ""}
       </dl>
       <button class="data-toggle" type="button" data-toggle-data="${message.id}" aria-expanded="${message.dataOpen ? "true" : "false"}">
         ${escapeHtml(buttonText)}
       </button>
     </div>`;
+}
+function renderQueryContextDialog() {
+  const dialog = state.queryContextDialog;
+  return `
+    <dialog id="query-context-dialog" class="query-context-dialog" aria-labelledby="query-context-title">
+      <h2 id="query-context-title">Query context</h2>
+      <p class="query-context-question">${escapeHtml(dialog.question)}</p>
+      ${dialog.loading ? '<p role="status">Loading...</p>' : ""}
+      ${dialog.error ? `<p class="source-error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
+      ${!dialog.loading && !dialog.error ? `
+        <textarea readonly aria-label="Context at query execution" rows="7">${escapeHtml(dialog.context)}</textarea>
+      ` : ""}
+      <div class="dashboard-create-actions">
+        ${dialog.error ? '<button type="button" data-retry-query-context>Retry</button>' : ""}
+        <button type="button" data-close-query-context autofocus>Close</button>
+      </div>
+    </dialog>`;
+}
+
+function updateQueryContextDialog() {
+  // The dialog is independent of the chat render, so loading it cannot reset the scroll.
+  const template = document.createElement("template");
+  template.innerHTML = renderQueryContextDialog();
+  let element = document.querySelector("#query-context-dialog");
+  if (element) {
+    element.innerHTML = template.content.firstElementChild.innerHTML;
+  } else {
+    element = template.content.firstElementChild;
+    document.body.appendChild(element);
+  }
+  element.querySelector("[data-close-query-context]").addEventListener("click", closeQueryContext);
+  element.querySelector("[data-retry-query-context]")?.addEventListener("click", () => {
+    const dialog = state.queryContextDialog;
+    if (dialog) void loadQueryContext(dialog, dialog.conversation);
+  });
+  element.oncancel = (event) => {
+    event.preventDefault();
+    closeQueryContext();
+  };
+  if (!element.open) element.showModal();
+}
+
+async function openQueryContext(event) {
+  const messageId = Number(event.currentTarget.dataset.queryContext);
+  const message = state.messages.find((item) => item.id === messageId);
+  const conversation = message?.response?.metadata?.conversation;
+  if (!conversation?.id || !conversation?.turn_id) return;
+  const dialog = {
+    messageId,
+    conversation,
+    question: message.question,
+    context: "",
+    error: "",
+    loading: true
+  };
+  state.queryContextDialog = dialog;
+  await loadQueryContext(dialog, conversation);
+}
+
+async function loadQueryContext(dialog, conversation) {
+  dialog.loading = true;
+  dialog.error = "";
+  updateQueryContextDialog();
+  try {
+    const response = await fetch(
+      `/api/conversations/${encodeURIComponent(conversation.id)}/turns/${encodeURIComponent(conversation.turn_id)}/context?backend_url=${encodeURIComponent(state.backendUrl)}`,
+      { headers: authHeaders() }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(formatApiResponseError(response, extractErrorMessage(payload)));
+    dialog.context = String(payload.context || "");
+  } catch (error) {
+    dialog.error = error.message || "Could not load query context.";
+  } finally {
+    dialog.loading = false;
+    if (state.queryContextDialog === dialog) {
+      updateQueryContextDialog();
+    }
+  }
+}
+
+function closeQueryContext() {
+  const messageId = state.queryContextDialog?.messageId;
+  state.queryContextDialog = null;
+  const dialog = document.querySelector("#query-context-dialog");
+  dialog?.close();
+  dialog?.remove();
+  document.querySelector(`[data-query-context="${messageId}"]`)?.focus({ preventScroll: true });
 }
 function formatDuration(value) {
   const numeric = Number(value);
@@ -3702,6 +3797,7 @@ async function refreshPasswordChangeRequirement() {
   }
 }
 async function logout() {
+  closeQueryContext();
   if (state.dashboardEditMode) {
     await flushPendingDashboardLayoutSave();
   }

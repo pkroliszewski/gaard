@@ -90,13 +90,14 @@ def test_metadata_conversation_context_prompt_compiler_serializes_recent_turns()
         },
     )
 
-    assert '"turn_t_minus_2"' in compiled.user_prompt
-    assert '"turn_t_minus_1"' in compiled.user_prompt
-    assert '"turn_t"' in compiled.user_prompt
+    assert '"context"' in compiled.user_prompt
+    assert '"current_question"' in compiled.user_prompt
+    assert "a dwa tygodnie temu?" in compiled.user_prompt
     assert "ilu pacjentów przyjęto w tym tygodniu" in compiled.user_prompt
     assert compiled.metadata["prompt_key"] == "conversation_context_classification"
     assert compiled.metadata["prompt_version"] == 3
-    assert compiled.metadata["decision_task"] == "logical_continuation_yes_no"
+    assert compiled.metadata["task"] == "conversation_context_decision"
+    assert "Choose exactly one decision: follow_up or new_topic" in compiled.system_prompt
 
 
 def test_metadata_result_classification_prompt_compiler_serializes_answer() -> None:

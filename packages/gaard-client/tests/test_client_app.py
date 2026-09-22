@@ -703,6 +703,41 @@ def test_client_app_proxies_conversation_history(monkeypatch: Any) -> None:
     ]
 
 
+def test_client_app_proxies_query_context_snapshot(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            pass
+
+        async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            captured.update(method=method, url=url, headers=kwargs["headers"])
+            return httpx.Response(
+                200,
+                request=httpx.Request(method, url),
+                json={"context": "How many active patients in May?", "turn_id": "turn-2"},
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    response = TestClient(app).get(
+        "/api/conversations/chat-1/turns/turn-2/context?backend_url=http://backend.example/",
+        headers={"Authorization": "Bearer token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["context"] == "How many active patients in May?"
+    assert captured == {
+        "method": "GET",
+        "url": "http://backend.example/api/v1/conversations/chat-1/turns/turn-2/context",
+        "headers": {"Authorization": "Bearer token"},
+    }
+
+
 def test_client_app_proxies_query_conversation_id(monkeypatch: Any) -> None:
     captured: dict[str, Any] = {}
 

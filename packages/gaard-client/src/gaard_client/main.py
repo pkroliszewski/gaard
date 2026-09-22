@@ -20,7 +20,7 @@ DEFAULT_BACKEND_URL = "http://localhost:8000"
 
 app = FastAPI(
     title="GAARD Client",
-    version="0.2.17",
+    version="0.2.20",
     description="Community client for asking governed natural-language questions.",
 )
 
@@ -320,6 +320,22 @@ async def get_conversation_backend(
     return await proxy_json_request(
         "GET",
         conversation_url,
+        timeout=30.0,
+        request_kwargs={"headers": backend_auth_headers(authorization)},
+    )
+
+
+@app.get("/api/conversations/{conversation_id}/turns/{turn_id}/context")
+async def get_query_context_backend(
+    conversation_id: str,
+    turn_id: str,
+    backend_url: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    resolved_backend_url = normalize_backend_url(backend_url or get_default_backend_url())
+    return await proxy_json_request(
+        "GET",
+        f"{resolved_backend_url}/api/v1/conversations/{conversation_id}/turns/{turn_id}/context",
         timeout=30.0,
         request_kwargs={"headers": backend_auth_headers(authorization)},
     )

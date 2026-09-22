@@ -2,11 +2,15 @@ from typing import Any
 
 from gaard_core.errors import ConfigurationError
 from gaard_core.json_utils import json_dumps
+from gaard_core.prompt_compiler.conversation_context_prompt import (
+    CONTEXT_DECISION_SYSTEM_PROMPT,
+    CONTEXT_SUMMARY_SYSTEM_PROMPT,
+    conversation_context_payload,
+)
 from gaard_core.prompt_compiler.models import CompiledPrompt, SqlGenerationPromptRequest
 from gaard_core.prompt_compiler.schema_formatter import SchemaPromptFormatter
 from gaard_core.prompt_compiler.sql_generation_prompt import sql_row_limit_instruction
 from gaard_core.query_pipeline.models import (
-    ConversationContextDecision,
     QueryRequest,
     QueryResult,
 )
@@ -103,51 +107,35 @@ class MetadataConversationContextPromptCompiler:
         request: QueryRequest,
         conversation_context: dict[str, Any],
     ) -> CompiledPrompt:
-        recent_turns = self._recent_turns(conversation_context)
-        payload = {
-            "turn_t_minus_2": recent_turns[0] if len(recent_turns) == 2 else {},
-            "turn_t_minus_1": recent_turns[-1] if recent_turns else {},
-            "turn_t": {
-                "question": request.question,
-                "datasource_id": request.datasource_id,
-                "datasource_ids": request.datasource_ids,
-            },
-        }
-        payload_json = json_dumps(payload, ensure_ascii=False, indent=2)
-
+        payload_json = json_dumps(
+            conversation_context_payload(request, conversation_context),
+            ensure_ascii=False,
+            indent=2,
+        )
+        is_summary = self.prompt_template.prompt_key == "conversation_context_summary"
+        contract = CONTEXT_SUMMARY_SYSTEM_PROMPT if is_summary else CONTEXT_DECISION_SYSTEM_PROMPT
+        user_prompt = self.prompt_template.user_prompt_template.format(
+            payload=payload_json,
+            question=request.question,
+            datasource_id=request.datasource_id,
+            datasource_ids=json_dumps(request.datasource_ids, ensure_ascii=False),
+        )
+        if payload_json not in user_prompt:
+            user_prompt += "\n\nComplete current input:\n" + payload_json
         return CompiledPrompt(
-            system_prompt=self.prompt_template.system_prompt,
-            user_prompt=self.prompt_template.user_prompt_template.format(
-                payload=payload_json,
-                question=request.question,
-                datasource_id=request.datasource_id,
-                datasource_ids=json_dumps(request.datasource_ids, ensure_ascii=False),
+            # The current contract also applies to customized prompts stored before this upgrade.
+            system_prompt=(
+                self.prompt_template.system_prompt
+                if self.prompt_template.system_prompt == contract
+                else self.prompt_template.system_prompt + "\n\nCurrent task contract:\n" + contract
             ),
+            user_prompt=user_prompt,
             metadata={
-                "allowed_decisions": [item.value for item in ConversationContextDecision],
-                "decision_task": "logical_continuation_yes_no",
+                "task": "conversation_context_summary" if is_summary else "conversation_context_decision",
                 "prompt_key": self.prompt_template.prompt_key,
                 "prompt_version": self.prompt_template.version,
             },
         )
-
-    def _recent_turns(self, conversation_context: dict[str, Any]) -> list[dict[str, Any]]:
-        turns = [
-            turn for turn in conversation_context.get("turns", []) if isinstance(turn, dict)
-        ][-2:]
-        labels = ["t-2", "t-1"] if len(turns) == 2 else ["t-1"]
-        return [
-            {
-                "label": label,
-                "question": str(turn.get("question") or ""),
-                "standalone_question": str(turn.get("standalone_question") or ""),
-                "answer": str(turn.get("answer") or ""),
-                "sql": str(turn.get("sql") or ""),
-                "context_decision": str(turn.get("context_decision") or ""),
-                "context_reason": str(turn.get("context_reason") or ""),
-            }
-            for label, turn in zip(labels, turns, strict=False)
-        ]
 
 
 class MetadataResultInterpretationPromptCompiler:
@@ -281,6 +269,15 @@ def get_conversation_context_prompt_compiler() -> (
     if prompt_template is None:
         return None
 
+    return MetadataConversationContextPromptCompiler(prompt_template=prompt_template)
+
+
+def get_conversation_context_summary_prompt_compiler() -> (
+    MetadataConversationContextPromptCompiler | None
+):
+    prompt_template = get_active_prompt_template_safe("conversation_context_summary")
+    if prompt_template is None:
+        return None
     return MetadataConversationContextPromptCompiler(prompt_template=prompt_template)
 
 
